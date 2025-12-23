@@ -12,13 +12,14 @@ type TempPayload = {
 };
 
 type GpsPayload = {
-  ts: string | number | null;
+  ts: number | null;
   lat: number | null;
   lon: number | null;
-  speed_m_s: number | null;
-  mode: number | null;
-  connected?: boolean;
-  age_s?: number;
+  speed_kmh: number | null;
+  course: number | null;
+  altitude_m: number | null;
+  ok: boolean;
+  error: string | null;
 };
 
 type TrackPoint = { ts: string; lat: number; lon: number; speed_m_s?: number | null; mode?: number | null };
@@ -149,8 +150,28 @@ export default function OverviewDashboard() {
       try {
         const r = await apiFetch("/api/temperature/latest", { cache: "no-store" });
         if (!r.ok) return;
-        const j = (await r.json()) as TempPayload;
-        if (alive) setTemps(j);
+
+        const raw = (await r.json()) as {
+          ts: number;
+          sensors: { sensor_index: number; temperature_c: number | null; humidity: number | null }[];
+        };
+
+        const s0 = raw.sensors.find((s) => s.sensor_index === 0) ?? raw.sensors[0];
+        const s1 = raw.sensors.find((s) => s.sensor_index === 1) ?? raw.sensors[1];
+
+        const mapped: TempPayload = {
+          ts: raw.ts ?? null,
+          kombi: {
+            temp_c: s0?.temperature_c ?? null,
+            hum_pct: s0?.humidity ?? null,
+          },
+          garaza: {
+            temp_c: s1?.temperature_c ?? null,
+            hum_pct: s1?.humidity ?? null,
+          },
+        };
+
+        if (alive) setTemps(mapped);
       } catch {}
     };
     tick();
@@ -168,8 +189,30 @@ export default function OverviewDashboard() {
       try {
         const r = await apiFetch("/api/gps/current", { cache: "no-store" });
         if (!r.ok) return;
-        const j = (await r.json()) as GpsPayload;
-        if (alive) setGps(j);
+
+        const raw = (await r.json()) as {
+          ts: number | null;
+          lat: number | null;
+          lon: number | null;
+          speed_kmh: number | null;
+          course: number | null;
+          altitude_m: number | null;
+          ok: boolean;
+          error: string | null;
+        };
+
+        if (alive) {
+          setGps({
+            ts: raw.ts ?? null,
+            lat: raw.lat ?? null,
+            lon: raw.lon ?? null,
+            speed_kmh: raw.speed_kmh ?? null,
+            course: raw.course ?? null,
+            altitude_m: raw.altitude_m ?? null,
+            ok: raw.ok,
+            error: raw.error,
+          });
+        }
       } catch {}
     };
     tick();
@@ -200,12 +243,11 @@ export default function OverviewDashboard() {
   }, []);
 
   const gpsHasFix = gps?.lat != null && gps?.lon != null;
-  const speedKmh = useMemo(() => (gps?.speed_m_s == null ? null : gps.speed_m_s * 3.6), [gps?.speed_m_s]);
+  const speedKmh = useMemo(() => gps?.speed_kmh ?? null, [gps?.speed_kmh]);
 
   const kombiT = temps?.kombi?.temp_c ?? null;
 
-  const gpsStatus =
-    gps?.connected === false ? "Disconnected" : gpsHasFix ? "Fix" : "No fix";
+  const gpsStatus = gps?.ok === false ? "Disconnected" : gpsHasFix ? "Fix" : "No fix";
 
   return (
     <div className="space-y-4">

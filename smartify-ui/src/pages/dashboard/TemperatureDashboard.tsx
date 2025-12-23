@@ -15,11 +15,17 @@ import {
 
 type Range = "day" | "week" | "month" | "year";
 
-type Payload = {
-  range: Range;
-  bucket_s: number;
-  count: number;
-  series: Array<{ ts: number; kombi: number | null; garaza: number | null }>;
+type BackendRow = {
+  ts: number;
+  sensor_index: number;
+  temperature_c: number | null;
+  humidity: number | null;
+};
+
+type BackendPayload = {
+  since: number;
+  now: number;
+  rows: BackendRow[];
 };
 
 function formatTs(ts: number, range: Range) {
@@ -32,7 +38,7 @@ function formatTs(ts: number, range: Range) {
 
 export default function TemperatureDashboard() {
   const [range, setRange] = useState<Range>("day");
-  const [data, setData] = useState<Payload | null>(null);
+  const [data, setData] = useState<BackendPayload | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -40,7 +46,7 @@ export default function TemperatureDashboard() {
     const load = async () => {
       const r = await apiFetch(`/api/temperature/history?range=${range}`, { cache: "no-store" });
       if (!r.ok) return;
-      const j = (await r.json()) as Payload;
+      const j = (await r.json()) as BackendPayload;
       if (alive) setData(j);
     };
 
@@ -51,7 +57,23 @@ export default function TemperatureDashboard() {
   }, [range]);
 
   const chartData = useMemo(() => {
-    const series = data?.series ?? [];
+    const rows = data?.rows ?? [];
+    const byTs = new Map<number, { ts: number; kombi: number | null; garaza: number | null }>();
+
+    for (const r of rows) {
+      if (!byTs.has(r.ts)) {
+        byTs.set(r.ts, { ts: r.ts, kombi: null, garaza: null });
+      }
+      const entry = byTs.get(r.ts)!;
+      if (r.sensor_index === 0) {
+        entry.kombi = r.temperature_c;
+      } else if (r.sensor_index === 1) {
+        entry.garaza = r.temperature_c;
+      }
+    }
+
+    const series = Array.from(byTs.values()).sort((a, b) => a.ts - b.ts);
+
     return series.map((p) => ({
       ...p,
       label: formatTs(p.ts, range),
@@ -100,7 +122,7 @@ export default function TemperatureDashboard() {
           </div>
 
           <div className="mt-3 text-xs opacity-70">
-            {data?.count ?? 0} points • bucket {data?.bucket_s ?? 0}s
+            {data?.rows?.length ?? 0} points
           </div>
         </CardContent>
       </Card>
