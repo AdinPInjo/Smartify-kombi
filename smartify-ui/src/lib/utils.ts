@@ -18,10 +18,11 @@ const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
  */
 export function apiFetch(input: string, init: RequestInit = {}) {
   // If URL is already absolute (starts with http:// or https://), use it as-is
-  // Otherwise, prefix with API_BASE if set
+  // Otherwise, prefix with API_BASE if set (empty string = use relative URL)
+  // When frontend and backend are on same origin, API_BASE should be empty
   const url = input.startsWith("http://") || input.startsWith("https://") 
     ? input 
-    : `${API_BASE}${input}`;
+    : (API_BASE ? `${API_BASE}${input}` : input);
 
   const headers = new Headers(init.headers || {});
   
@@ -45,9 +46,26 @@ export function apiFetch(input: string, init: RequestInit = {}) {
     });
   }
 
-  return fetch(url, finalInit).catch((err) => {
-    console.error(`[apiFetch] Failed to fetch ${url}:`, err);
-    throw err;
-  });
+  return fetch(url, finalInit)
+    .then((response) => {
+      // Log response status for debugging
+      if (import.meta.env.DEV && !response.ok) {
+        console.warn(`[apiFetch] ${url} returned status ${response.status}`);
+      }
+      return response;
+    })
+    .catch((err) => {
+      // More detailed error logging
+      console.error(`[apiFetch] Failed to fetch ${url}:`, {
+        error: err,
+        message: err.message,
+        name: err.name,
+        stack: err.stack,
+        url,
+        apiBase: API_BASE,
+        hasApiKey: !!API_KEY,
+      });
+      throw err;
+    });
 }
 
