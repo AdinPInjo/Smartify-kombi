@@ -22,3 +22,28 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# backend runtime files
+smartify/static/*
+!smartify/static/.gitkeep
+
+smartify/data/
+smartify/.env
+
+# frontend
+smartify-ui/node_modules/
+smartify-ui/dist/
+smartify-ui/.env.local
+
+# ===== Smartify runtime =====
+smartify/.env
+smartify/data/
+
+# ===== Frontend build output =====
+smartify/static/*
+!smartify/static/.gitkeep
+
+# ===== Frontend dev =====
+smartify-ui/node_modules/
+smartify-ui/dist/
+smartify-ui/.env.local
