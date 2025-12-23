@@ -28,6 +28,14 @@ export function apiFetch(input: string, init: RequestInit = {}) {
     credentials: init.credentials ?? "include",
   };
 
-  return fetch(url, finalInit);
+  // Log in dev mode to help debug
+  if (import.meta.env.DEV) {
+    console.log(`[apiFetch] ${init.method || 'GET'} ${url}`, { hasApiKey: !!API_KEY, credentials: finalInit.credentials });
+  }
+
+  return fetch(url, finalInit).catch((err) => {
+    console.error(`[apiFetch] Failed to fetch ${url}:`, err);
+    throw err;
+  });
 }
 

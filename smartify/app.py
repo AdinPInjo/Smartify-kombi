@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, Request, Form, Header
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 # =========================
@@ -53,6 +54,15 @@ SMARTIFY_TRUST_LOCALHOST = os.environ.get("SMARTIFY_TRUST_LOCALHOST", "0").lower
 # =========================
 
 app = FastAPI(title="Smartify Dashboard API")
+
+# CORS middleware - allow all origins for local network access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for local network
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.add_middleware(
     SessionMiddleware,
