@@ -1,0 +1,19 @@
+# Node
+smartify-ui/node_modules
+smartify-ui/dist
+smartify-ui/.vite
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Local data
+*.db
+*.log
