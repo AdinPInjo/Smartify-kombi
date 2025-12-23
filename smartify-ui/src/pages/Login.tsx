@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Truck, AlertCircle, Loader2 } from "lucide-react";
+import { apiFetch } from "@/lib/utils";
 
 const Login = () => {
   const [username, setUsername] = useState("");
@@ -24,13 +25,12 @@ const Login = () => {
       formData.append("username", username);
       formData.append("password", password);
 
-      const response = await fetch("/login", {
+      const response = await apiFetch("/login", {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: formData.toString(),
-        credentials: "include",
         redirect: "manual",
       });
 
