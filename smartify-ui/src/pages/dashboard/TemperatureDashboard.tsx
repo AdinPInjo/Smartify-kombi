@@ -44,10 +44,20 @@ export default function TemperatureDashboard() {
     let alive = true;
 
     const load = async () => {
-      const r = await apiFetch(`/api/temperature/history?range=${range}`, { cache: "no-store" });
-      if (!r.ok) return;
-      const j = (await r.json()) as BackendPayload;
-      if (alive) setData(j);
+      try {
+        const r = await apiFetch(`/api/temperature/history?range=${range}`, { cache: "no-store" });
+        if (!r.ok) {
+          console.warn(`[TemperatureDashboard] API returned status ${r.status} for range ${range}`);
+          return;
+        }
+        const j = (await r.json()) as BackendPayload;
+        if (alive) {
+          setData(j);
+          console.log(`[TemperatureDashboard] Loaded ${j.rows?.length ?? 0} rows for range ${range}`);
+        }
+      } catch (err) {
+        console.error(`[TemperatureDashboard] Failed to load data for range ${range}:`, err);
+      }
     };
 
     load();
@@ -115,8 +125,22 @@ export default function TemperatureDashboard() {
                 <YAxis domain={["auto", "auto"]} />
                 <Tooltip />
                 <Legend />
-                <Line type="monotone" dataKey="kombi" name="Kombi (°C)" dot={false} />
-                <Line type="monotone" dataKey="garaza" name="Garaža (°C)" dot={false} />
+                <Line 
+                  type="monotone" 
+                  dataKey="kombi" 
+                  name="Kombi (°C)" 
+                  dot={false} 
+                  stroke="#3b82f6" 
+                  strokeWidth={2}
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="garaza" 
+                  name="Garaža (°C)" 
+                  dot={false} 
+                  stroke="#f59e0b" 
+                  strokeWidth={2}
+                />
               </LineChart>
             </ResponsiveContainer>
           </div>

@@ -379,15 +379,15 @@ export default function OverviewDashboard() {
               Temperatures
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="flex flex-col h-full space-y-3">
             {/* Debug: Always show in dev to help diagnose */}
             {import.meta.env.DEV && (
-              <div className="text-xs text-blue-600 dark:text-blue-400 p-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800 mb-2">
+              <div className="text-xs text-blue-600 dark:text-blue-400 p-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800">
                 <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : 'null'}
               </div>
             )}
             
-            <div className="flex items-center justify-between rounded-xl bg-black/20 px-3 py-2 text-sm">
+            <div className="flex items-center justify-between rounded-xl bg-black/20 px-3 py-4 text-sm flex-1">
               <span className="flex items-center gap-2 opacity-90">
                 <Car className="h-4 w-4" />
                 Kombi
@@ -398,7 +398,7 @@ export default function OverviewDashboard() {
               </span>
             </div>
 
-            <div className="flex items-center justify-between rounded-xl bg-black/20 px-3 py-2 text-sm">
+            <div className="flex items-center justify-between rounded-xl bg-black/20 px-3 py-4 text-sm flex-1">
               <span className="flex items-center gap-2 opacity-90">
                 <Warehouse className="h-4 w-4" />
                 Garaža
