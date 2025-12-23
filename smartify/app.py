@@ -275,6 +275,7 @@ _gps_latest: Dict[str, Any] = {
     "speed_kmh": None,
     "course": None,
     "altitude_m": None,
+    "satellites": None,
     "source": "nmea",
     "device": GPS_DEVICE,
     "ok": False,
@@ -392,11 +393,20 @@ def _gps_reader_thread() -> None:
                         except Exception:
                             alt = None
 
+                        # Extract satellite count (field 7 in GGA sentence)
+                        satellites = None
+                        try:
+                            if len(parts) > 7 and parts[7]:
+                                satellites = int(parts[7])
+                        except Exception:
+                            satellites = None
+
                         _gps_latest.update({
                             "ts": now,
                             "lat": lat if lat is not None else _gps_latest.get("lat"),
                             "lon": lon if lon is not None else _gps_latest.get("lon"),
                             "altitude_m": alt,
+                            "satellites": satellites,
                             "ok": True,
                             "error": None,
                         })
@@ -482,8 +492,12 @@ def api_temperature_history(
         since = now - 86400
     elif range == "week":
         since = now - 7 * 86400
+    elif range == "month":
+        since = now - 30 * 86400
+    elif range == "year":
+        since = now - 365 * 86400
     else:
-        return JSONResponse({"error": "invalid_range", "allowed": ["hour", "day", "week"]}, status_code=400)
+        return JSONResponse({"error": "invalid_range", "allowed": ["hour", "day", "week", "month", "year"]}, status_code=400)
 
     rows = db_query_temp_since(since, sensor_index=sensor)
     return JSONResponse({"since": since, "now": now, "rows": rows})

@@ -5,18 +5,36 @@ import { apiFetch } from "@/lib/utils";
 
 type MeResp = { user?: string };
 type GpsCurrent = {
-  ts?: string | null;
-  mode?: number;
+  ts?: number | null;
   lat?: number | null;
   lon?: number | null;
-  speed_m_s?: number | null;
+  speed_kmh?: number | null;
+  course?: number | null;
+  altitude_m?: number | null;
+  satellites?: number | null;
+  ok?: boolean;
+  error?: string | null;
+  source?: string;
+  device?: string;
 };
 
-function gpsLabel(mode?: number) {
-  if (!mode) return { text: "NO GPS", cls: "bg-red-500/15 text-red-400 border-red-500/30" };
-  if (mode >= 3) return { text: "3D FIX", cls: "bg-green-500/15 text-green-400 border-green-500/30" };
-  if (mode >= 2) return { text: "2D FIX", cls: "bg-yellow-500/15 text-yellow-400 border-yellow-500/30" };
-  return { text: "NO FIX", cls: "bg-red-500/15 text-red-400 border-red-500/30" };
+function gpsLabel(gps: GpsCurrent): { text: string; cls: string; satellites?: number } {
+  // If GPS is not ok or has error, show disconnected
+  if (!gps.ok || gps.error) {
+    return { text: "NO GPS", cls: "bg-red-500/15 text-red-400 border-red-500/30" };
+  }
+  
+  // If we have valid coordinates, we have a fix
+  if (gps.lat != null && gps.lon != null) {
+    return { 
+      text: "FIX OK", 
+      cls: "bg-green-500/15 text-green-400 border-green-500/30",
+      satellites: gps.satellites ?? undefined
+    };
+  }
+  
+  // GPS is ok but no coordinates yet
+  return { text: "NO FIX", cls: "bg-yellow-500/15 text-yellow-400 border-yellow-500/30" };
 }
 
 const BrandMark = ({ className = "" }: { className?: string }) => (
@@ -73,8 +91,8 @@ const TopBar = () => {
     }
   };
 
-  const badge = gpsLabel(gps.mode);
-  const ts = gps.ts ? String(gps.ts).replace("T", " ").replace("Z", " UTC") : null;
+  const badge = gpsLabel(gps);
+  const hasFix = gps.ok && gps.lat != null && gps.lon != null;
 
   return (
     <header className="h-14 border-b flex items-center justify-between px-4 bg-background">
@@ -88,16 +106,13 @@ const TopBar = () => {
           Smartify
         </div>
 
-        <div className={`text-xs px-2 py-1 rounded-md border ${badge.cls} flex items-center gap-1`}>
+        <div className={`text-xs px-2 py-1 rounded-md border ${badge.cls} flex items-center gap-1.5`}>
           <MapPin className="h-3.5 w-3.5" />
-          {badge.text}
+          <span>{badge.text}</span>
+          {hasFix && badge.satellites !== undefined && (
+            <span className="opacity-70">({badge.satellites} sat)</span>
+          )}
         </div>
-
-        {ts && (
-          <div className="text-xs opacity-70 hidden lg:block truncate">
-            Last GPS: {ts}
-          </div>
-        )}
       </div>
 
       <div className="flex items-center gap-3">
