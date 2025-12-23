@@ -1,0 +1,144 @@
+import { useEffect, useMemo, useRef } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+import type { GpsCurrentData, GpsTrackPoint } from "@/hooks/useGpsData";
+
+type Props = {
+  currentData: GpsCurrentData | null;
+  trackData: GpsTrackPoint[];
+  isLoading: boolean;
+  fitKey: string;
+};
+
+function isValidLatLon(lat?: number, lon?: number) {
+  return typeof lat === "number" && typeof lon === "number" && !Number.isNaN(lat) && !Number.isNaN(lon);
+}
+
+const GpsMap = ({ currentData, trackData, isLoading, fitKey }: Props) => {
+  const mapDivRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.Marker | null>(null);
+  const polyRef = useRef<L.Polyline | null>(null);
+
+  // Fit control refs:
+  const lastFitKeyRef = useRef<string>("");
+  const didFitForKeyRef = useRef<boolean>(false);
+
+  const trackLatLngs = useMemo(() => {
+    return trackData
+      .filter((p) => isValidLatLon(p.lat, p.lon))
+      .map((p) => L.latLng(p.lat, p.lon));
+  }, [trackData]);
+
+  const currentPos = useMemo(() => {
+    if (currentData && currentData.mode >= 2 && isValidLatLon(currentData.lat, currentData.lon)) {
+      return L.latLng(currentData.lat, currentData.lon);
+    }
+    return null;
+  }, [currentData]);
+
+  // Marker that does NOT depend on external PNG assets
+  const dotIcon = useMemo(
+    () =>
+      L.divIcon({
+        className: "",
+        html: `<div style="
+          width:14px;height:14px;border-radius:9999px;
+          background:#3b82f6;
+          box-shadow:0 0 0 4px rgba(59,130,246,0.25);
+          border:2px solid rgba(255,255,255,0.9);
+        "></div>`,
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      }),
+    []
+  );
+
+  // Create map once
+  useEffect(() => {
+    if (!mapDivRef.current) return;
+    if (mapRef.current) return;
+
+    const fallback = L.latLng(43.8563, 18.4131);
+
+    const map = L.map(mapDivRef.current, {
+      center: fallback,
+      zoom: 12,
+      zoomControl: true,
+    });
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors",
+    }).addTo(map);
+
+    polyRef.current = L.polyline([], {}).addTo(map);
+    markerRef.current = L.marker(currentPos ?? fallback, { icon: dotIcon }).addTo(map);
+
+    mapRef.current = map;
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      markerRef.current = null;
+      polyRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Update polyline points on every track refresh (no zoom change)
+  useEffect(() => {
+    if (!polyRef.current) return;
+    polyRef.current.setLatLngs(trackLatLngs);
+  }, [trackLatLngs]);
+
+  // Update marker position on every current refresh (no zoom change)
+  useEffect(() => {
+    if (!markerRef.current) return;
+    if (!currentPos) return;
+    markerRef.current.setLatLng(currentPos);
+  }, [currentPos]);
+
+  // Fit logic:
+  // - When fitKey changes (slider/preset), allow one fit again
+  // - Also: do an initial fit once data actually arrives
+  useEffect(() => {
+    if (fitKey !== lastFitKeyRef.current) {
+      lastFitKeyRef.current = fitKey;
+      didFitForKeyRef.current = false;
+    }
+
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (didFitForKeyRef.current) return;
+
+    if (trackLatLngs.length >= 2) {
+      const bounds = L.latLngBounds(trackLatLngs);
+      map.fitBounds(bounds, { padding: [20, 20] });
+      didFitForKeyRef.current = true;
+      return;
+    }
+
+    if (currentPos) {
+      map.setView(currentPos, 16);
+      didFitForKeyRef.current = true;
+    }
+  }, [fitKey, trackLatLngs, currentPos]);
+
+  return (
+    <div className="relative h-[70vh] w-full overflow-hidden rounded-xl border bg-background">
+      <div ref={mapDivRef} className="h-full w-full" />
+      {isLoading && (
+        <div className="pointer-events-none absolute left-0 top-0 flex h-full w-full items-center justify-center">
+          <div className="rounded-md border bg-background/80 px-3 py-2 text-sm">
+            Loading map…
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default GpsMap;

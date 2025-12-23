@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Smartify Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    body { font-family: system-ui, sans-serif; background:#0f0f10; color:#eee; margin:0; padding:16px; }
+    .top { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+    .grid { display:grid; grid-template-columns: 380px 1fr; gap:12px; }
+    @media(max-width: 900px){ .grid{ grid-template-columns:1fr; } }
+    .card { background:#17181a; border:1px solid #26272a; border-radius:16px; padding:14px; }
+    .k { opacity:.7; font-size:12px; }
+    .v { font-size:18px; margin-top:6px; }
+    button { padding:10px 12px; border-radius:10px; border:1px solid #333; background:#111; color:#eee; cursor:pointer; }
+    #map { height: 70vh; border-radius:16px; overflow:hidden; border:1px solid #26272a; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    input[type="range"] { width:100%; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div>
+      <div class="k">Smartify</div>
+      <div class="v">GPS Dashboard</div>
+    </div>
+    <form method="post" action="/logout">
+      <button type="submit">Logout</button>
+    </form>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="k">Current location</div>
+      <div class="v mono" id="pos">—</div>
+
+      <div class="k" style="margin-top:12px;">Status</div>
+      <div class="v" id="status">—</div>
+
+      <div class="k" style="margin-top:12px;">Speed</div>
+      <div class="v mono" id="speed">—</div>
+
+      <div class="k" style="margin-top:12px;">Last update</div>
+      <div class="v mono" id="ts">—</div>
+
+      <div class="k" style="margin-top:12px;">Time window</div>
+      <input id="window" type="range" min="5" max="1440" step="5" value="60">
+      <div class="v mono" id="window_label">Last 60 min</div>
+
+      <div class="k" style="margin-top:12px;">Track points on map</div>
+      <div class="v mono" id="count">—</div>
+    </div>
+
+    <div id="map"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([43.8563, 18.4131], 10); // Sarajevo fallback
+
+    // Online tiles (if internet). If offline, the route still draws, background may be blank.
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+    const marker = L.marker([43.8563, 18.4131]).addTo(map);
+    let poly = L.polyline([], {}).addTo(map);
+
+    const windowEl = document.getElementById("window");
+    const windowLabel = document.getElementById("window_label");
+
+    function updateLabel(){
+      const m = Number(windowEl.value);
+      if (m < 60) windowLabel.textContent = `Last ${m} min`;
+      else windowLabel.textContent = `Last ${(m/60).toFixed(1)} h`;
+    }
+
+    async function refreshCurrent(){
+      try {
+        const r = await fetch("/api/gps/current");
+        const j = await r.json();
+        if(j.error){ document.getElementById("status").textContent = j.error; return; }
+
+        if(!j.ts){
+          document.getElementById("status").textContent = "No data yet (is gps_logger running?)";
+          return;
+        }
+
+        document.getElementById("ts").textContent = j.ts;
+        document.getElementById("status").textContent = (j.mode >= 2) ? "Fix OK" : "No fix yet";
+        document.getElementById("speed").textContent = (j.speed_m_s != null) ? (j.speed_m_s*3.6).toFixed(1)+" km/h" : "—";
+
+        if(j.lat != null && j.lon != null){
+          document.getElementById("pos").textContent = j.lat.toFixed(6)+", "+j.lon.toFixed(6);
+          marker.setLatLng([j.lat, j.lon]);
+        }
+      } catch (e) {
+        document.getElementById("status").textContent = "Error";
+      }
+    }
+
+    async function refreshTrack(){
+      updateLabel();
+      const minutes = Number(windowEl.value);
+
+      try {
+        const r = await fetch(`/api/gps/track?minutes=${minutes}&limit=50000`);
+        const pts = await r.json();
+        if(!Array.isArray(pts)) return;
+
+        document.getElementById("count").textContent = String(pts.length);
+
+        const latlngs = pts.map(p => [p.lat, p.lon]);
+        poly.setLatLngs(latlngs);
+
+        if(latlngs.length > 2){
+          map.fitBounds(poly.getBounds(), {padding:[20,20]});
+        }
+      } catch(e) {}
+    }
+
+    windowEl.addEventListener("input", refreshTrack);
+
+    updateLabel();
+    refreshCurrent();
+    refreshTrack();
+
+    setInterval(refreshCurrent, 1000);
+    setInterval(refreshTrack, 10000);
+  </script>
+</body>
+</html>
