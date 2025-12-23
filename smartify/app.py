@@ -1,329 +1,575 @@
 import os
+import time
 import sqlite3
+import threading
 import subprocess
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Optional, Dict, Any, List
 
-import httpx
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import RedirectResponse, JSONResponse, FileResponse
+from fastapi import FastAPI, Request, Form, Header
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-DB_PATH = "/home/adinpinjo/smartify/smartify.db"
+# =========================
+# Config (no hardcoded IPs)
+# =========================
 
-DIST_DIR = Path("/home/adinpinjo/smartify-ui/dist")
-INDEX_HTML = DIST_DIR / "index.html"
-ASSETS_DIR = DIST_DIR / "assets"
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = Path(os.environ.get("SMARTIFY_STATIC_DIR", str(BASE_DIR / "static")))
+# normalize & resolve path (works with absolute or relative)
+STATIC_DIR = STATIC_DIR.expanduser().resolve()
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DATA_DIR / "smartify.db"
 
-APP_SECRET = os.environ.get("SMARTIFY_SECRET", "change-this-secret")
-ADMIN_USER = os.environ.get("SMARTIFY_USER", "adinpinjo")
-ADMIN_PASS = os.environ.get("SMARTIFY_PASS", "set-in-env")
+SMARTIFY_REQUIRE_AUTH = os.environ.get("SMARTIFY_REQUIRE_AUTH", "1").lower() not in ("0", "false", "no")
+SMARTIFY_API_KEY = os.environ.get("SMARTIFY_API_KEY", "").strip()
 
-# Sensor API (local, self-signed)
-SENSOR_API = os.environ.get("SMARTIFY_SENSOR_API", "https://localhost:8443/api/temperature")
+SMARTIFY_USERNAME = os.environ.get("SMARTIFY_USERNAME", "adinpinjo")
+SMARTIFY_PASSWORD = os.environ.get("SMARTIFY_PASSWORD", "changeme")
 
-app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key=APP_SECRET)
+SMARTIFY_SESSION_SECRET = os.environ.get("SMARTIFY_SESSION_SECRET", "").strip() or "change-me-in-env"
 
-# Serve built assets
-if ASSETS_DIR.exists():
-    app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
+GPS_DEVICE = os.environ.get("SMARTIFY_GPS_DEVICE", "/dev/ttyACM0").strip()
+GPS_BAUD = int(os.environ.get("SMARTIFY_GPS_BAUD", "9600"))
+
+DHT22_PINS_RAW = os.environ.get("SMARTIFY_DHT22_PINS", "4").strip()
+DHT22_PINS: List[int] = []
+for part in [p.strip() for p in DHT22_PINS_RAW.split(",") if p.strip()]:
+    try:
+        DHT22_PINS.append(int(part))
+    except ValueError:
+        pass
+if not DHT22_PINS:
+    DHT22_PINS = [4]
+
+SENSOR_LOG_INTERVAL = int(os.environ.get("SMARTIFY_SENSOR_LOG_INTERVAL", "30"))
+SMARTIFY_TRUST_LOCALHOST = os.environ.get("SMARTIFY_TRUST_LOCALHOST", "0").lower() in ("1", "true", "yes")
 
 
-def db():
-    return sqlite3.connect(DB_PATH)
+# =========================
+# App + Middleware
+# =========================
+
+app = FastAPI(title="Smartify Dashboard API")
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SMARTIFY_SESSION_SECRET,
+    same_site="lax",
+    https_only=False,
+)
+
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-def authed(request: Request) -> bool:
-    return bool(request.session.get("user"))
+# =========================
+# DB helpers
+# =========================
+
+def db_init() -> None:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS temperature_readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            sensor_index INTEGER NOT NULL,
+            temperature_c REAL,
+            humidity REAL
+        );
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS gps_fixes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            lat REAL,
+            lon REAL,
+            speed_kmh REAL,
+            course REAL,
+            altitude_m REAL
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
 
 
-# -----------------------------
-# AUTH
-# -----------------------------
+def db_insert_temp(ts: int, sensor_index: int, t: Optional[float], h: Optional[float]) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO temperature_readings (ts, sensor_index, temperature_c, humidity) VALUES (?, ?, ?, ?)",
+        (ts, sensor_index, t, h),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_insert_gps(ts: int, lat: Optional[float], lon: Optional[float], speed_kmh: Optional[float],
+                  course: Optional[float], altitude_m: Optional[float]) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO gps_fixes (ts, lat, lon, speed_kmh, course, altitude_m) VALUES (?, ?, ?, ?, ?, ?)",
+        (ts, lat, lon, speed_kmh, course, altitude_m),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_query_temp_since(since_ts: int, sensor_index: Optional[int] = None) -> List[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    if sensor_index is None:
+        cur.execute(
+            "SELECT ts, sensor_index, temperature_c, humidity FROM temperature_readings WHERE ts >= ? ORDER BY ts ASC",
+            (since_ts,),
+        )
+    else:
+        cur.execute(
+            "SELECT ts, sensor_index, temperature_c, humidity FROM temperature_readings WHERE ts >= ? AND sensor_index = ? ORDER BY ts ASC",
+            (since_ts, sensor_index),
+        )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def db_query_gps_since(since_ts: int, limit: int = 1000) -> List[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT ts, lat, lon, speed_kmh, course, altitude_m FROM gps_fixes WHERE ts >= ? ORDER BY ts ASC LIMIT ?",
+        (since_ts, limit),
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+# =========================
+# Auth helpers
+# =========================
+
+def is_localhost(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+def is_authenticated(request: Request, x_api_key: Optional[str]) -> bool:
+    if not SMARTIFY_REQUIRE_AUTH:
+        return True
+
+    if SMARTIFY_TRUST_LOCALHOST and is_localhost(request):
+        return True
+
+    if request.session.get("logged_in") is True:
+        return True
+
+    if SMARTIFY_API_KEY and x_api_key and x_api_key.strip() == SMARTIFY_API_KEY:
+        return True
+
+    return False
+
+
+def require_auth(request: Request, x_api_key: Optional[str]) -> Optional[JSONResponse]:
+    if is_authenticated(request, x_api_key):
+        return None
+    return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+
+# =========================
+# Sensor: DHT22
+# =========================
+
+_dht_lock = threading.Lock()
+
+def read_dht22_all() -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    try:
+        import adafruit_dht
+        import board
+    except Exception as e:
+        for idx, pin in enumerate(DHT22_PINS):
+            results.append({
+                "sensor_index": idx,
+                "pin": pin,
+                "temperature_c": None,
+                "humidity": None,
+                "ok": False,
+                "error": f"DHT libs not installed: {e}"
+            })
+        return results
+
+    board_attr_map = {i: f"D{i}" for i in range(0, 28)}
+    now = int(time.time())
+
+    with _dht_lock:
+        for idx, pin in enumerate(DHT22_PINS):
+            t = None
+            h = None
+            ok = False
+            err = None
+
+            try:
+                attr = board_attr_map.get(pin)
+                if not attr or not hasattr(board, attr):
+                    raise RuntimeError(f"Unsupported pin mapping for BCM {pin} (board.{attr} not found)")
+
+                gpio_obj = getattr(board, attr)
+                sensor = adafruit_dht.DHT22(gpio_obj, use_pulseio=False)
+
+                try:
+                    t = float(sensor.temperature) if sensor.temperature is not None else None
+                    h = float(sensor.humidity) if sensor.humidity is not None else None
+                    ok = (t is not None and h is not None)
+                finally:
+                    try:
+                        sensor.exit()
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                err = str(e)
+
+            results.append({
+                "sensor_index": idx,
+                "pin": pin,
+                "temperature_c": t,
+                "humidity": h,
+                "ok": ok,
+                "error": err
+            })
+
+            db_insert_temp(now, idx, t, h)
+
+    return results
+
+
+# =========================
+# Sensor: GPS (USB NMEA)
+# =========================
+
+_gps_latest: Dict[str, Any] = {
+    "ts": None,
+    "lat": None,
+    "lon": None,
+    "speed_kmh": None,
+    "course": None,
+    "altitude_m": None,
+    "source": "nmea",
+    "device": GPS_DEVICE,
+    "ok": False,
+    "error": None,
+}
+
+
+def _nmea_to_decimal(coord: str, hemi: str) -> Optional[float]:
+    if not coord or not hemi:
+        return None
+    try:
+        if "." not in coord:
+            return None
+        deg_len = 2 if len(coord.split(".")[0]) in (4, 5) else 3
+        deg = float(coord[:deg_len])
+        minutes = float(coord[deg_len:])
+        dec = deg + minutes / 60.0
+        if hemi in ("S", "W"):
+            dec *= -1.0
+        return dec
+    except Exception:
+        return None
+
+
+def _gps_reader_thread() -> None:
+    global _gps_latest
+    try:
+        import serial
+    except Exception as e:
+        _gps_latest["ok"] = False
+        _gps_latest["error"] = f"pyserial not available: {e}"
+        return
+
+    while True:
+        try:
+            if not Path(GPS_DEVICE).exists():
+                _gps_latest["ok"] = False
+                _gps_latest["error"] = f"GPS device not found: {GPS_DEVICE}"
+                time.sleep(2)
+                continue
+
+            with serial.Serial(GPS_DEVICE, GPS_BAUD, timeout=1) as ser:
+                _gps_latest["error"] = None
+                while True:
+                    line = ser.readline().decode(errors="ignore").strip()
+                    if not line.startswith("$"):
+                        continue
+
+                    parts = line.split(",")
+                    sentence = parts[0]
+                    now = int(time.time())
+
+                    if sentence.endswith("RMC") and len(parts) >= 12:
+                        status = parts[2] if len(parts) > 2 else ""
+                        if status != "A":
+                            continue
+
+                        lat = _nmea_to_decimal(parts[3], parts[4])
+                        lon = _nmea_to_decimal(parts[5], parts[6])
+
+                        speed_kn = None
+                        course = None
+                        try:
+                            speed_kn = float(parts[7]) if parts[7] else None
+                        except Exception:
+                            speed_kn = None
+                        try:
+                            course = float(parts[8]) if parts[8] else None
+                        except Exception:
+                            course = None
+
+                        speed_kmh = speed_kn * 1.852 if speed_kn is not None else None
+
+                        _gps_latest.update({
+                            "ts": now,
+                            "lat": lat,
+                            "lon": lon,
+                            "speed_kmh": speed_kmh,
+                            "course": course,
+                            "ok": True,
+                            "error": None,
+                        })
+                        db_insert_gps(now, lat, lon, speed_kmh, course, _gps_latest.get("altitude_m"))
+
+                    if sentence.endswith("GGA") and len(parts) >= 10:
+                        fix = parts[6] if len(parts) > 6 else "0"
+                        if fix == "0":
+                            continue
+
+                        lat = _nmea_to_decimal(parts[2], parts[3])
+                        lon = _nmea_to_decimal(parts[4], parts[5])
+
+                        alt = None
+                        try:
+                            alt = float(parts[9]) if parts[9] else None
+                        except Exception:
+                            alt = None
+
+                        _gps_latest.update({
+                            "ts": now,
+                            "lat": lat if lat is not None else _gps_latest.get("lat"),
+                            "lon": lon if lon is not None else _gps_latest.get("lon"),
+                            "altitude_m": alt,
+                            "ok": True,
+                            "error": None,
+                        })
+                        db_insert_gps(now, _gps_latest.get("lat"), _gps_latest.get("lon"),
+                                      _gps_latest.get("speed_kmh"), _gps_latest.get("course"), alt)
+
+        except Exception as e:
+            _gps_latest["ok"] = False
+            _gps_latest["error"] = f"GPS read error: {e}"
+            time.sleep(2)
+
+
+# =========================
+# Startup
+# =========================
+
+@app.on_event("startup")
+def on_startup() -> None:
+    db_init()
+    t = threading.Thread(target=_gps_reader_thread, daemon=True)
+    t.start()
+
+
+# =========================
+# Auth routes
+# =========================
+
 @app.post("/login")
 def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    if username == ADMIN_USER and password == ADMIN_PASS:
+    if username == SMARTIFY_USERNAME and password == SMARTIFY_PASSWORD:
+        request.session["logged_in"] = True
         request.session["user"] = username
-        return RedirectResponse("/dashboard", status_code=302)
-    return RedirectResponse("/login", status_code=302)
+        return JSONResponse({"ok": True})
+    return JSONResponse({"ok": False, "error": "invalid_credentials"}, status_code=401)
 
 
 @app.post("/logout")
 def logout(request: Request):
     request.session.clear()
-    return RedirectResponse("/login", status_code=302)
+    return JSONResponse({"ok": True})
 
 
-@app.get("/login")
-def spa_login():
-    if INDEX_HTML.exists():
-        return FileResponse(str(INDEX_HTML))
-    return JSONResponse({"error": "frontend_not_built"}, status_code=500)
+@app.get("/api/me")
+def api_me(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    authed = is_authenticated(request, x_api_key)
+    return JSONResponse({
+        "authenticated": authed,
+        "user": request.session.get("user") if authed else None,
+        "require_auth": SMARTIFY_REQUIRE_AUTH,
+        "api_key_enabled": bool(SMARTIFY_API_KEY),
+        "trusted_localhost": SMARTIFY_TRUST_LOCALHOST,
+    })
 
 
-# -----------------------------
-# TEMPERATURE (current)
-# -----------------------------
-@app.get("/api/pi/temperature")
-async def pi_temperature(request: Request):
-    if not authed(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+# =========================
+# API: Temperature
+# =========================
 
-    try:
-        async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
-            r = await client.get(SENSOR_API)
-            r.raise_for_status()
-            return r.json()
-    except httpx.RequestError:
-        return JSONResponse({"error": "sensor_unreachable"}, status_code=502)
-    except Exception as e:
-        return JSONResponse({"error": "sensor_error", "detail": str(e)}, status_code=502)
+@app.get("/api/temperature/latest")
+def api_temperature_latest(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    sensors = read_dht22_all()
+    return JSONResponse({"ts": int(time.time()), "sensors": sensors})
 
 
-# -----------------------------
-# TEMPERATURE HISTORY (chart)
-# -----------------------------
 @app.get("/api/temperature/history")
-def temperature_history(
+def api_temperature_history(
     request: Request,
-    range: Literal["day", "week", "month", "year"] = "day",
+    range: str = "day",
+    sensor: Optional[int] = None,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    if not authed(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
 
-    bucket_s = {
-        "day": 300,        # 5 min
-        "week": 1800,      # 30 min
-        "month": 7200,     # 2 h
-        "year": 86400,     # 1 day
-    }[range]
+    now = int(time.time())
+    if range == "hour":
+        since = now - 3600
+    elif range == "day":
+        since = now - 86400
+    elif range == "week":
+        since = now - 7 * 86400
+    else:
+        return JSONResponse({"error": "invalid_range", "allowed": ["hour", "day", "week"]}, status_code=400)
 
-    lookback_s = {
-        "day": 86400,
-        "week": 86400 * 7,
-        "month": 86400 * 30,
-        "year": 86400 * 365,
-    }[range]
-
-    now = datetime.now(timezone.utc)
-    since = now - timedelta(seconds=lookback_s)
-
-    con = db()
-    cur = con.cursor()
-    cur.execute(
-        """
-        SELECT ts, sensor, temp_c
-        FROM temp_readings
-        WHERE ts >= ?
-          AND sensor IN ('kombi','garaza')
-        ORDER BY ts ASC
-        """,
-        (since.isoformat(),),
-    )
-    rows = cur.fetchall()
-    con.close()
-
-    buckets: dict[int, dict[str, list[float]]] = {}
-
-    for ts, sensor, temp_c in rows:
-        if temp_c is None:
-            continue
-        try:
-            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).astimezone(timezone.utc)
-        except Exception:
-            continue
-
-        epoch = int(dt.timestamp())
-        b = epoch - (epoch % bucket_s)
-
-        if b not in buckets:
-            buckets[b] = {"kombi": [], "garaza": []}
-
-        if sensor in ("kombi", "garaza"):
-            buckets[b][sensor].append(float(temp_c))
-
-    def avg(xs: list[float]):
-        return sum(xs) / len(xs) if xs else None
-
-    series = [{"ts": b, "kombi": avg(v["kombi"]), "garaza": avg(v["garaza"])} for b, v in sorted(buckets.items())]
-
-    return {"range": range, "bucket_s": bucket_s, "count": len(series), "series": series}
+    rows = db_query_temp_since(since, sensor_index=sensor)
+    return JSONResponse({"since": since, "now": now, "rows": rows})
 
 
-# -----------------------------
-# GPS (current + track)
-# -----------------------------
+# =========================
+# API: GPS
+# =========================
+
 @app.get("/api/gps/current")
-def gps_current(request: Request):
-    if not authed(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-
-    con = db()
-    cur = con.cursor()
-    cur.execute(
-        """
-        SELECT ts, lat, lon
-        FROM track_points
-        WHERE lat IS NOT NULL AND lon IS NOT NULL
-        ORDER BY id DESC
-        LIMIT 1
-        """
-    )
-    row = cur.fetchone()
-    con.close()
-
-    if not row:
-        return {"ts": None, "lat": None, "lon": None, "connected": False}
-
-    return {"ts": row[0], "lat": row[1], "lon": row[2], "connected": True}
+def api_gps_current(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    return JSONResponse(_gps_latest)
 
 
 @app.get("/api/gps/track")
-def gps_track(
+def api_gps_track(
     request: Request,
-    hours: int = 24,
+    hours: Optional[int] = None,
+    minutes: Optional[int] = None,
     limit: int = 2000,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    if not authed(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
 
-    hours = max(1, min(hours, 24 * 14))
-    limit = max(10, min(limit, 20000))
+    now = int(time.time())
+    if minutes is not None:
+        since = now - int(minutes) * 60
+    elif hours is not None:
+        since = now - int(hours) * 3600
+    else:
+        since = now - 24 * 3600
 
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
-    since_iso = since.isoformat()
-
-    con = db()
-    cur = con.cursor()
-    cur.execute(
-        """
-        SELECT ts, lat, lon
-        FROM track_points
-        WHERE lat IS NOT NULL AND lon IS NOT NULL
-          AND ts >= ?
-        ORDER BY id DESC
-        LIMIT ?
-        """,
-        (since_iso, limit),
-    )
-    rows = cur.fetchall()
-    con.close()
-
-    rows.reverse()
-    return {"hours": hours, "count": len(rows), "points": [{"ts": r[0], "lat": r[1], "lon": r[2]} for r in rows]}
+    limit = max(1, min(int(limit), 50000))
+    rows = db_query_gps_since(since, limit=limit)
+    return JSONResponse({"since": since, "now": now, "rows": rows})
 
 
-# -----------------------------
-# NETWORK (nmcli)
-# -----------------------------
-def run_nmcli(args: list[str]) -> str:
-    cmd = ["sudo", "-n", "nmcli"] + args
-    out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
-    return out
+# =========================
+# API: Network (nmcli)
+# =========================
+
+def run_nmcli(args: List[str]) -> subprocess.CompletedProcess:
+    cmd = ["nmcli"] + args
+    return subprocess.run(cmd, capture_output=True, text=True)
 
 
 @app.get("/api/network/status")
-def network_status(request: Request):
-    if not authed(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def api_network_status(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
 
-    active_ssid = None
-    ip4 = None
+    proc = run_nmcli(["-t", "-f", "ACTIVE,SSID,DEVICE", "dev", "wifi"])
+    if proc.returncode != 0:
+        return JSONResponse({"error": "nmcli_failed", "stderr": proc.stderr.strip()}, status_code=500)
 
-    try:
-        out = run_nmcli(["-t", "-f", "ACTIVE,SSID,DEVICE", "dev", "wifi"])
-        for line in out.splitlines():
-            parts = line.split(":")
-            if len(parts) >= 3 and parts[0] == "yes":
-                active_ssid = parts[1] or None
-                break
-    except Exception:
-        pass
-
-    try:
-        out = run_nmcli(["-t", "-f", "IP4.ADDRESS", "dev", "show"])
-        for line in out.splitlines():
-            if line.startswith("IP4.ADDRESS:"):
-                ip4 = line.split(":", 1)[1].split("/")[0].strip()
-                if ip4:
-                    break
-    except Exception:
-        pass
-
-    return {"ssid": active_ssid, "ip": ip4}
+    lines = [l.strip() for l in proc.stdout.splitlines() if l.strip()]
+    return JSONResponse({"rows": lines})
 
 
 @app.get("/api/network/scan")
-def network_scan(request: Request):
-    if not authed(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def api_network_scan(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
 
-    try:
-        out = run_nmcli(["-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"])
-    except subprocess.CalledProcessError as e:
-        return JSONResponse({"error": "nmcli_failed", "detail": e.output[-400:]}, status_code=400)
+    proc = run_nmcli(["-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"])
+    if proc.returncode != 0:
+        return JSONResponse({"error": "nmcli_failed", "stderr": proc.stderr.strip()}, status_code=500)
 
-    networks = []
-    for line in out.splitlines():
+    rows = []
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
         parts = line.split(":")
-        if len(parts) < 3:
-            continue
-        ssid, signal, security = parts[0], parts[1], ":".join(parts[2:])
-        ssid = (ssid or "").strip()
-        if not ssid:
-            continue
-        networks.append(
-            {
-                "ssid": ssid,
-                "signal": int(signal) if signal.isdigit() else None,
-                "security": security.strip(),
-            }
-        )
+        ssid = parts[0] if len(parts) > 0 else ""
+        signal = parts[1] if len(parts) > 1 else ""
+        security = parts[2] if len(parts) > 2 else ""
+        rows.append({"ssid": ssid, "signal": signal, "security": security})
 
-    networks.sort(key=lambda x: (x["signal"] is not None, x["signal"]), reverse=True)
-    return {"networks": networks}
+    return JSONResponse({"networks": rows})
 
 
-@app.post("/api/network/connect")
-async def network_connect(request: Request):
-    if not authed(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+# =========================
+# Frontend routes
+# =========================
 
-    body = await request.json()
-    ssid = (body.get("ssid") or "").strip()
-    password = body.get("password")
-
-    if not ssid:
-        return JSONResponse({"error": "missing_ssid"}, status_code=400)
-
-    try:
-        if password:
-            run_nmcli(["dev", "wifi", "connect", ssid, "password", password])
-        else:
-            run_nmcli(["dev", "wifi", "connect", ssid])
-
-        return {"ok": True}
-    except subprocess.CalledProcessError as e:
-        return JSONResponse({"error": "nmcli_failed", "detail": e.output[-400:]}, status_code=400)
-    except Exception as e:
-        return JSONResponse({"error": "connect_failed", "detail": str(e)}, status_code=400)
+def frontend_ready() -> bool:
+    return (STATIC_DIR / "index.html").exists()
 
 
-# -----------------------------
-# SPA fallback
-# -----------------------------
+@app.get("/")
+def root():
+    if not frontend_ready():
+        return JSONResponse({"error": "frontend_not_built"}, status_code=500)
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/dashboard")
+def dashboard():
+    if not frontend_ready():
+        return JSONResponse({"error": "frontend_not_built"}, status_code=500)
+    return FileResponse(STATIC_DIR / "index.html")
+
+
 @app.get("/{full_path:path}")
 def spa_fallback(full_path: str):
-    if full_path.startswith("api/") or full_path.startswith("assets/"):
-        return JSONResponse({"error": "not_found"}, status_code=404)
-
-    if INDEX_HTML.exists():
-        return FileResponse(str(INDEX_HTML))
-    return JSONResponse({"error": "frontend_not_built"}, status_code=500)
-
-# -----------------------------
-# Temperature: latest reading (for Overview)
-# -----------------------------
+    if not frontend_ready():
+        return JSONResponse({"error": "frontend_not_built"}, status_code=500)
+    target = STATIC_DIR / full_path
+    if target.exists() and target.is_file():
+        return FileResponse(target)
+    return FileResponse(STATIC_DIR / "index.html")
