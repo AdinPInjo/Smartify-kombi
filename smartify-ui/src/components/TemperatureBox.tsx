@@ -32,10 +32,30 @@ export default function TemperatureBox() {
 
     const tick = async () => {
       try {
-        const r = await apiFetch("/api/pi/temperature", { cache: "no-store" });
+        const r = await apiFetch("/api/temperature/latest", { cache: "no-store" });
         if (!r.ok) return;
-        const j = (await r.json()) as TempPayload;
-        if (alive) setData(j);
+
+        const raw = (await r.json()) as {
+          ts: number;
+          sensors: { sensor_index: number; temperature_c: number | null; humidity: number | null }[];
+        };
+
+        const s0 = raw.sensors.find((s) => s.sensor_index === 0) ?? raw.sensors[0];
+        const s1 = raw.sensors.find((s) => s.sensor_index === 1) ?? raw.sensors[1];
+
+        const mapped: TempPayload = {
+          ts: raw.ts ?? null,
+          kombi: {
+            temp_c: s0?.temperature_c ?? null,
+            hum_pct: s0?.humidity ?? null,
+          },
+          garaza: {
+            temp_c: s1?.temperature_c ?? null,
+            hum_pct: s1?.humidity ?? null,
+          },
+        };
+
+        if (alive) setData(mapped);
       } catch {
         // ignore
       }

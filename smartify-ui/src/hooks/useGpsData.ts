@@ -49,16 +49,32 @@ export const useGpsData = (trackMinutes: number) => {
         throw new Error("Failed to fetch GPS data");
       }
 
-      const data: GpsCurrentData = await response.json();
-      setCurrentData(data);
+      const raw = (await response.json()) as {
+        ts: number | null;
+        lat: number | null;
+        lon: number | null;
+        speed_kmh: number | null;
+        ok: boolean;
+      };
+
+      const mode = raw.ok && raw.lat != null && raw.lon != null ? 2 : 0;
+      const mapped: GpsCurrentData = {
+        ts: raw.ts != null ? new Date(raw.ts * 1000).toISOString() : new Date().toISOString(),
+        lat: raw.lat ?? 0,
+        lon: raw.lon ?? 0,
+        speed_m_s: raw.speed_kmh != null ? raw.speed_kmh / 3.6 : 0,
+        mode,
+      };
+
+      setCurrentData(mapped);
 
       // If we have a valid fix & coordinates, compute smoothed UI coords
-      if (data && typeof data.lat === "number" && typeof data.lon === "number" && data.mode >= 2) {
-        const smoothed = computeSmoothed(data.lat, data.lon);
-        setUiCurrentData({ ...data, lat: smoothed.lat, lon: smoothed.lon });
+      if (mode >= 2 && typeof mapped.lat === "number" && typeof mapped.lon === "number") {
+        const smoothed = computeSmoothed(mapped.lat, mapped.lon);
+        setUiCurrentData({ ...mapped, lat: smoothed.lat, lon: smoothed.lon });
       } else {
         // No fix: don't update smoothing buffer; show raw as-is
-        setUiCurrentData(data);
+        setUiCurrentData(mapped);
       }
 
       setError(null);
@@ -79,8 +95,18 @@ export const useGpsData = (trackMinutes: number) => {
         throw new Error("Failed to fetch track data");
       }
 
-      const data: GpsTrackPoint[] = await response.json();
-      setTrackData(data);
+      const raw = (await response.json()) as {
+        rows: { ts: number; lat: number | null; lon: number | null }[];
+      };
+
+      const mapped: GpsTrackPoint[] =
+        raw.rows?.map((r) => ({
+          ts: new Date(r.ts * 1000).toISOString(),
+          lat: r.lat ?? 0,
+          lon: r.lon ?? 0,
+        })) ?? [];
+
+      setTrackData(mapped);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch track data");
