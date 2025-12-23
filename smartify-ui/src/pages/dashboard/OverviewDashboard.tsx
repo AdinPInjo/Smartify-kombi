@@ -76,14 +76,18 @@ function GpsMiniMap({ lat, lon }: { lat: number | null; lon: number | null }) {
 
     if (lat == null || lon == null) return;
 
-    map.setView([lat, lon], 14);
+    // Small delay to ensure container is rendered
+    setTimeout(() => {
+      map.setView([lat, lon], 14);
+      map.invalidateSize();
 
-    if (!markerRef.current) {
-      markerRef.current = L.circleMarker([lat, lon], { radius: 6 });
-      markerRef.current.addTo(map);
-    } else {
-      markerRef.current.setLatLng([lat, lon]);
-    }
+      if (!markerRef.current) {
+        markerRef.current = L.circleMarker([lat, lon], { radius: 6 });
+        markerRef.current.addTo(map);
+      } else {
+        markerRef.current.setLatLng([lat, lon]);
+      }
+    }, 100);
   }, [lat, lon]);
 
   return <div ref={elRef} className="h-28 w-full rounded-xl overflow-hidden" />;
@@ -149,15 +153,39 @@ export default function OverviewDashboard() {
     const tick = async () => {
       try {
         const r = await apiFetch("/api/temperature/latest", { cache: "no-store" });
-        if (!r.ok) return;
+        if (!r.ok) {
+          console.warn("Temperature API not ok:", r.status);
+          return;
+        }
 
         const raw = (await r.json()) as {
           ts: number;
-          sensors: { sensor_index: number; temperature_c: number | null; humidity: number | null }[];
+          sensors: Array<{
+            sensor_index: number;
+            pin: number;
+            temperature_c: number | null;
+            humidity: number | null;
+            ok: boolean;
+            error: string | null;
+          }>;
         };
 
-        const s0 = raw.sensors.find((s) => s.sensor_index === 0) ?? raw.sensors[0];
-        const s1 = raw.sensors.find((s) => s.sensor_index === 1) ?? raw.sensors[1];
+        // Find sensors by index, fallback to array position
+        // Handle empty sensors array
+        if (!raw.sensors || raw.sensors.length === 0) {
+          console.warn("No sensors in response");
+          if (alive) {
+            setTemps({
+              ts: raw.ts ?? null,
+              kombi: { temp_c: null, hum_pct: null },
+              garaza: { temp_c: null, hum_pct: null },
+            });
+          }
+          return;
+        }
+
+        const s0 = raw.sensors.find((s) => s.sensor_index === 0) ?? raw.sensors[0] ?? null;
+        const s1 = raw.sensors.find((s) => s.sensor_index === 1) ?? (raw.sensors.length > 1 ? raw.sensors[1] : null) ?? null;
 
         const mapped: TempPayload = {
           ts: raw.ts ?? null,
@@ -171,8 +199,12 @@ export default function OverviewDashboard() {
           },
         };
 
+        console.log("Temperature data mapped:", mapped);
+
         if (alive) setTemps(mapped);
-      } catch {}
+      } catch (err) {
+        console.error("Temperature fetch error:", err);
+      }
     };
     tick();
     const id = setInterval(tick, 5000);
@@ -230,8 +262,28 @@ export default function OverviewDashboard() {
       try {
         const r = await apiFetch("/api/gps/track?hours=24", { cache: "no-store" });
         if (!r.ok) return;
-        const j = (await r.json()) as TrackPayload;
-        if (alive) setTrack(j);
+
+        const raw = (await r.json()) as {
+          since: number;
+          now: number;
+          rows: Array<{ ts: number; lat: number | null; lon: number | null; speed_kmh: number | null; course: number | null; altitude_m: number | null }>;
+        };
+
+        // Transform backend format to component format
+        const transformed: TrackPayload = {
+          hours: 24,
+          count: raw.rows.length,
+          points: raw.rows
+            .filter((p) => p.lat != null && p.lon != null)
+            .map((p) => ({
+              ts: new Date(p.ts * 1000).toISOString(),
+              lat: p.lat!,
+              lon: p.lon!,
+              speed_m_s: p.speed_kmh != null ? p.speed_kmh / 3.6 : null,
+            })),
+        };
+
+        if (alive) setTrack(transformed);
       } catch {}
     };
     tick();
