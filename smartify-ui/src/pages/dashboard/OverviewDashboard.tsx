@@ -199,9 +199,15 @@ export default function OverviewDashboard() {
           },
         };
 
-        console.log("Temperature data mapped:", mapped);
+        // Log for debugging (visible in Safari console)
+        console.log("[Smartify] Temperature data mapped:", mapped);
+        console.log("[Smartify] Sensor 0 (Kombi):", s0);
+        console.log("[Smartify] Sensor 1 (Garaza):", s1);
 
-        if (alive) setTemps(mapped);
+        if (alive) {
+          setTemps(mapped);
+          console.log("[Smartify] State updated with temps");
+        }
       } catch (err) {
         console.error("Temperature fetch error:", err);
       }
@@ -349,10 +355,10 @@ export default function OverviewDashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {/* Debug: Remove this after verifying */}
-            {process.env.NODE_ENV === 'development' && (
-              <div className="text-xs text-muted-foreground p-2 bg-muted rounded">
-                Debug: temps={temps ? JSON.stringify(temps) : 'null'}
+            {/* Debug: Always show in dev to help diagnose */}
+            {import.meta.env.DEV && (
+              <div className="text-xs text-blue-600 dark:text-blue-400 p-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800 mb-2">
+                <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : 'null'}
               </div>
             )}
             
