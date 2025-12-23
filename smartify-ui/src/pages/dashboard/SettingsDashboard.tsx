@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { apiFetch } from "@/lib/utils";
 
 type NetItem = { ssid: string; signal: number | null; security: string };
 type NetStatus = { ssid: string | null; ip: string | null };
@@ -17,7 +18,7 @@ const SettingsDashboard = () => {
   const canConnect = useMemo(() => selectedSsid.trim().length > 0, [selectedSsid]);
 
   const loadStatus = async () => {
-    const r = await fetch("/api/network/status", { credentials: "include" });
+    const r = await apiFetch("/api/network/status");
     if (r.ok) setStatus(await r.json());
   };
 
@@ -25,7 +26,7 @@ const SettingsDashboard = () => {
     setBusy(true);
     setMsg("");
     try {
-      const r = await fetch("/api/network/scan", { credentials: "include" });
+      const r = await apiFetch("/api/network/scan");
       if (!r.ok) throw new Error("Scan failed");
       const data = await r.json();
       setNetworks(data.networks || []);
@@ -42,10 +43,9 @@ const SettingsDashboard = () => {
     setMsg("");
 
     try {
-      const r = await fetch("/api/network/connect", {
+      const r = await apiFetch("/api/network/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ ssid: selectedSsid, password: password || "" }),
       });
 

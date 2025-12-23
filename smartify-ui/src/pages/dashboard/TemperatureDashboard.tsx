@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { apiFetch } from "@/lib/utils";
 import {
   LineChart,
   Line,
@@ -37,7 +38,7 @@ export default function TemperatureDashboard() {
     let alive = true;
 
     const load = async () => {
-      const r = await fetch(`/api/temperature/history?range=${range}`, { cache: "no-store" });
+      const r = await apiFetch(`/api/temperature/history?range=${range}`, { cache: "no-store" });
       if (!r.ok) return;
       const j = (await r.json()) as Payload;
       if (alive) setData(j);

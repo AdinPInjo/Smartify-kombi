@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Thermometer, Warehouse, Camper } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { apiFetch } from "@/lib/utils";
 
 type TempPayload = {
   ts: number | null;
@@ -31,7 +32,7 @@ export default function TemperatureBox() {
 
     const tick = async () => {
       try {
-        const r = await fetch("/api/pi/temperature", { cache: "no-store" });
+        const r = await apiFetch("/api/pi/temperature", { cache: "no-store" });
         if (!r.ok) return;
         const j = (await r.json()) as TempPayload;
         if (alive) setData(j);

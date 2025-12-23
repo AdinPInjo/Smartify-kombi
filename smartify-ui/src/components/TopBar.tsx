@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { MapPin } from "lucide-react";
+import { apiFetch } from "@/lib/utils";
 
 type MeResp = { user?: string };
 type GpsCurrent = {
@@ -48,10 +49,10 @@ const TopBar = () => {
 
   const load = async () => {
     try {
-      const rMe = await fetch("/api/me", { credentials: "include" });
+      const rMe = await apiFetch("/api/me");
       if (rMe.ok) setMe(await rMe.json());
 
-      const rGps = await fetch("/api/gps/current", { credentials: "include" });
+      const rGps = await apiFetch("/api/gps/current");
       if (rGps.ok) setGps(await rGps.json());
     } catch {
       // ignore (wifi switching etc.)
@@ -66,7 +67,7 @@ const TopBar = () => {
 
   const doLogout = async () => {
     try {
-      await fetch("/logout", { method: "POST", credentials: "include" });
+      await apiFetch("/logout", { method: "POST" });
     } finally {
       window.location.href = "/login";
     }
