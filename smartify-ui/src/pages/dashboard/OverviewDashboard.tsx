@@ -349,6 +349,13 @@ export default function OverviewDashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            {/* Debug: Remove this after verifying */}
+            {process.env.NODE_ENV === 'development' && (
+              <div className="text-xs text-muted-foreground p-2 bg-muted rounded">
+                Debug: temps={temps ? JSON.stringify(temps) : 'null'}
+              </div>
+            )}
+            
             <div className="flex items-center justify-between rounded-xl bg-black/20 px-3 py-2 text-sm">
               <span className="flex items-center gap-2 opacity-90">
                 <Car className="h-4 w-4" />
