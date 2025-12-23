@@ -60,7 +60,21 @@ function GpsMiniMap({ lat, lon }: { lat: number | null; lon: number | null }) {
       touchZoom: false,
     }).setView([43.8563, 18.4131], 10);
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
+    const tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors",
+    });
+
+    // Add error logging for tile loading failures
+    tileLayer.on("tileerror", (error, tile) => {
+      console.error("[GpsMiniMap] Tile load error:", {
+        error,
+        url: tile.src,
+        tile: tile,
+      });
+    });
+
+    tileLayer.addTo(map);
 
     mapRef.current = map;
     return () => {
@@ -104,10 +118,21 @@ function GpsTrackMap({ data }: { data: TrackPayload | null }) {
 
     const map = L.map(elRef.current, { zoomControl: true, attributionControl: true }).setView([43.8563, 18.4131], 9);
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    const tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
-      attribution: "&copy; OpenStreetMap contributors",
-    }).addTo(map);
+      attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors",
+    });
+
+    // Add error logging for tile loading failures
+    tileLayer.on("tileerror", (error, tile) => {
+      console.error("[GpsTrackMap] Tile load error:", {
+        error,
+        url: tile.src,
+        tile: tile,
+      });
+    });
+
+    tileLayer.addTo(map);
 
     mapRef.current = map;
     layerRef.current = L.layerGroup().addTo(map);
