@@ -68,10 +68,21 @@ const GpsMap = ({ currentData, trackData, isLoading, fitKey }: Props) => {
       zoomControl: true,
     });
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    const tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
-      attribution: "&copy; OpenStreetMap contributors",
-    }).addTo(map);
+      attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors",
+    });
+
+    // Add error logging for tile loading failures
+    tileLayer.on("tileerror", (error, tile) => {
+      console.error("[GpsMap] Tile load error:", {
+        error,
+        url: tile.src,
+        tile: tile,
+      });
+    });
+
+    tileLayer.addTo(map);
 
     polyRef.current = L.polyline([], {}).addTo(map);
     markerRef.current = L.marker(currentPos ?? fallback, { icon: dotIcon }).addTo(map);

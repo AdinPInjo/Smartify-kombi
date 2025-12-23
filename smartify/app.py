@@ -283,17 +283,36 @@ _gps_latest: Dict[str, Any] = {
 
 
 def _nmea_to_decimal(coord: str, hemi: str) -> Optional[float]:
+    """
+    Convert NMEA coordinate format (ddmm.mmmm or dddmm.mmmm) to decimal degrees.
+    
+    - Latitude (N/S): uses 2 digits for degrees (ddmm.mmmm)
+    - Longitude (E/W): uses 3 digits for degrees (dddmm.mmmm)
+    """
     if not coord or not hemi:
         return None
     try:
         if "." not in coord:
             return None
-        deg_len = 2 if len(coord.split(".")[0]) in (4, 5) else 3
+        
+        # Determine degrees length based on hemisphere:
+        # N/S (latitude) = 2 digits, E/W (longitude) = 3 digits
+        hemi_upper = hemi.upper()
+        if hemi_upper in ("N", "S"):
+            deg_len = 2  # Latitude: ddmm.mmmm
+        elif hemi_upper in ("E", "W"):
+            deg_len = 3  # Longitude: dddmm.mmmm
+        else:
+            return None  # Invalid hemisphere
+        
         deg = float(coord[:deg_len])
         minutes = float(coord[deg_len:])
         dec = deg + minutes / 60.0
-        if hemi in ("S", "W"):
+        
+        # Apply sign based on hemisphere
+        if hemi_upper in ("S", "W"):
             dec *= -1.0
+        
         return dec
     except Exception:
         return None
