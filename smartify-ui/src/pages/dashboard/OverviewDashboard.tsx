@@ -3,6 +3,7 @@ import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { MapPin, Navigation, Car, Warehouse, Thermometer, Battery, Power } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { apiFetch } from "@/lib/utils";
 
 type TempPayload = {
   ts: number | null;
@@ -146,7 +147,7 @@ export default function OverviewDashboard() {
     let alive = true;
     const tick = async () => {
       try {
-        const r = await fetch("/api/temperature/latest", { cache: "no-store" });
+        const r = await apiFetch("/api/temperature/latest", { cache: "no-store" });
         if (!r.ok) return;
         const j = (await r.json()) as TempPayload;
         if (alive) setTemps(j);
@@ -165,7 +166,7 @@ export default function OverviewDashboard() {
     let alive = true;
     const tick = async () => {
       try {
-        const r = await fetch("/api/gps/current", { cache: "no-store" });
+        const r = await apiFetch("/api/gps/current", { cache: "no-store" });
         if (!r.ok) return;
         const j = (await r.json()) as GpsPayload;
         if (alive) setGps(j);
@@ -184,7 +185,7 @@ export default function OverviewDashboard() {
     let alive = true;
     const tick = async () => {
       try {
-        const r = await fetch("/api/gps/track?hours=24", { cache: "no-store" });
+        const r = await apiFetch("/api/gps/track?hours=24", { cache: "no-store" });
         if (!r.ok) return;
         const j = (await r.json()) as TrackPayload;
         if (alive) setTrack(j);

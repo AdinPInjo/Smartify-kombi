@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { apiFetch } from "@/lib/utils";
 
 export interface GpsCurrentData {
   ts: string;
@@ -42,9 +43,7 @@ export const useGpsData = (trackMinutes: number) => {
   // Fetch current GPS data
   const fetchCurrentData = useCallback(async () => {
     try {
-      const response = await fetch("/api/gps/current", {
-        credentials: "include",
-      });
+      const response = await apiFetch("/api/gps/current");
 
       if (!response.ok) {
         throw new Error("Failed to fetch GPS data");
@@ -74,10 +73,7 @@ export const useGpsData = (trackMinutes: number) => {
   const fetchTrackData = useCallback(async () => {
     try {
       setIsLoadingTrack(true);
-      const response = await fetch(
-        `/api/gps/track?minutes=${trackMinutes}&limit=50000`,
-        { credentials: "include" }
-      );
+      const response = await apiFetch(`/api/gps/track?minutes=${trackMinutes}&limit=50000`);
 
       if (!response.ok) {
         throw new Error("Failed to fetch track data");
