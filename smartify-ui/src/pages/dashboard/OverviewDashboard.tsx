@@ -4,6 +4,7 @@ import L from "leaflet";
 import { MapPin, Navigation, Car, Warehouse, Thermometer, Battery, Power } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/utils";
+import { useQuery } from "@tanstack/react-query";
 
 type TempPayload = {
   ts: number | null;
@@ -18,6 +19,7 @@ type GpsPayload = {
   speed_kmh: number | null;
   course: number | null;
   altitude_m: number | null;
+  satellites?: number | null;
   ok: boolean;
   error: string | null;
 };
@@ -168,123 +170,75 @@ function GpsTrackMap({ data }: { data: TrackPayload | null }) {
 }
 
 export default function OverviewDashboard() {
-  const [temps, setTemps] = useState<TempPayload | null>(null);
-  const [gps, setGps] = useState<GpsPayload | null>(null);
   const [track, setTrack] = useState<TrackPayload | null>(null);
 
-  // Temps
-  useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      try {
-        const r = await apiFetch("/api/temperature/latest", { cache: "no-store" });
-        if (!r.ok) {
-          console.warn("Temperature API not ok:", r.status);
-          return;
-        }
+  // GPS current data with React Query (polls every 2s, keeps previous data)
+  const { data: gpsData } = useQuery({
+    queryKey: ["gps", "current"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/gps/current", { cache: "no-store" });
+      if (!r.ok) throw new Error(`GPS API returned ${r.status}`);
+      return r.json() as GpsPayload;
+    },
+    refetchInterval: 2000, // Poll every 2 seconds
+    placeholderData: (previousData) => previousData, // keepPreviousData equivalent
+    retry: 1,
+  });
 
-        const raw = (await r.json()) as {
-          ts: number;
-          sensors: Array<{
-            sensor_index: number;
-            pin: number;
-            temperature_c: number | null;
-            humidity: number | null;
-            ok: boolean;
-            error: string | null;
-          }>;
-        };
+  const gps = gpsData ?? null;
 
-        // Find sensors by index, fallback to array position
-        // Handle empty sensors array
-        if (!raw.sensors || raw.sensors.length === 0) {
-          console.warn("No sensors in response");
-          if (alive) {
-            setTemps({
-              ts: raw.ts ?? null,
-              kombi: { temp_c: null, hum_pct: null },
-              garaza: { temp_c: null, hum_pct: null },
-            });
-          }
-          return;
-        }
-
-        const s0 = raw.sensors.find((s) => s.sensor_index === 0) ?? raw.sensors[0] ?? null;
-        const s1 = raw.sensors.find((s) => s.sensor_index === 1) ?? (raw.sensors.length > 1 ? raw.sensors[1] : null) ?? null;
-
-        const mapped: TempPayload = {
-          ts: raw.ts ?? null,
-          kombi: {
-            temp_c: s0?.temperature_c ?? null,
-            hum_pct: s0?.humidity ?? null,
-          },
-          garaza: {
-            temp_c: s1?.temperature_c ?? null,
-            hum_pct: s1?.humidity ?? null,
-          },
-        };
-
-        // Log for debugging (visible in Safari console)
-        console.log("[Smartify] Temperature data mapped:", mapped);
-        console.log("[Smartify] Sensor 0 (Kombi):", s0);
-        console.log("[Smartify] Sensor 1 (Garaza):", s1);
-
-        if (alive) {
-          setTemps(mapped);
-          console.log("[Smartify] State updated with temps");
-        }
-      } catch (err) {
-        console.error("Temperature fetch error:", err);
-      }
-    };
-    tick();
-    const id = setInterval(tick, 5000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, []);
-
-  // GPS current
-  useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      try {
-        const r = await apiFetch("/api/gps/current", { cache: "no-store" });
-        if (!r.ok) return;
-
-        const raw = (await r.json()) as {
-          ts: number | null;
-          lat: number | null;
-          lon: number | null;
-          speed_kmh: number | null;
-          course: number | null;
-          altitude_m: number | null;
+  // Temperature data with React Query (polls every 2s, keeps previous data)
+  const { data: tempData } = useQuery({
+    queryKey: ["temperature", "latest"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/temperature/latest", { cache: "no-store" });
+      if (!r.ok) throw new Error(`Temperature API returned ${r.status}`);
+      return r.json() as {
+        ts: number;
+        sensors: Array<{
+          sensor_index: number;
+          pin: number;
+          temperature_c: number | null;
+          humidity: number | null;
           ok: boolean;
           error: string | null;
-        };
+        }>;
+      };
+    },
+    refetchInterval: 2000, // Poll every 2 seconds
+    placeholderData: (previousData) => previousData, // keepPreviousData equivalent
+    retry: 1,
+  });
 
-        if (alive) {
-          setGps({
-            ts: raw.ts ?? null,
-            lat: raw.lat ?? null,
-            lon: raw.lon ?? null,
-            speed_kmh: raw.speed_kmh ?? null,
-            course: raw.course ?? null,
-            altitude_m: raw.altitude_m ?? null,
-            ok: raw.ok,
-            error: raw.error,
-          });
-        }
-      } catch {}
+  // Transform temperature data
+  const temps = useMemo<TempPayload | null>(() => {
+    if (!tempData) return null;
+
+    const raw = tempData;
+    if (!raw.sensors || raw.sensors.length === 0) {
+      return {
+        ts: raw.ts ?? null,
+        kombi: { temp_c: null, hum_pct: null },
+        garaza: { temp_c: null, hum_pct: null },
+      };
+    }
+
+    const s0 = raw.sensors.find((s) => s.sensor_index === 0) ?? raw.sensors[0] ?? null;
+    const s1 = raw.sensors.find((s) => s.sensor_index === 1) ?? (raw.sensors.length > 1 ? raw.sensors[1] : null) ?? null;
+
+    return {
+      ts: raw.ts ?? null,
+      kombi: {
+        temp_c: s0?.temperature_c ?? null,
+        hum_pct: s0?.humidity ?? null,
+      },
+      garaza: {
+        temp_c: s1?.temperature_c ?? null,
+        hum_pct: s1?.humidity ?? null,
+      },
     };
-    tick();
-    const id = setInterval(tick, 3000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, []);
+  }, [tempData]);
+
 
   // GPS track (24h)
   useEffect(() => {
