@@ -19,22 +19,19 @@ type GpsCurrent = {
 };
 
 function gpsLabel(gps: GpsCurrent): { text: string; cls: string; satellites?: number } {
-  // If GPS is not ok or has error, show disconnected
   if (!gps.ok || gps.error) {
-    return { text: "NO GPS", cls: "bg-red-500/15 text-red-400 border-red-500/30" };
+    return { text: "NO GPS", cls: "bg-red-500/10 text-red-400 border-red-500/30" };
   }
   
-  // If we have valid coordinates, we have a fix
   if (gps.lat != null && gps.lon != null) {
     return { 
       text: "FIX OK", 
-      cls: "bg-green-500/15 text-green-400 border-green-500/30",
+      cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
       satellites: gps.satellites ?? undefined
     };
   }
   
-  // GPS is ok but no coordinates yet
-  return { text: "NO FIX", cls: "bg-yellow-500/15 text-yellow-400 border-yellow-500/30" };
+  return { text: "NO FIX", cls: "bg-amber-500/10 text-amber-400 border-amber-500/30" };
 }
 
 const BrandMark = ({ className = "" }: { className?: string }) => (
@@ -95,31 +92,36 @@ const TopBar = () => {
   const hasFix = gps.ok && gps.lat != null && gps.lon != null;
 
   return (
-    <header className="h-14 border-b flex items-center justify-between px-4 bg-background">
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="md:hidden h-8 w-8 rounded-lg border flex items-center justify-center bg-muted">
-          <BrandMark className="h-5 w-5" />
+    <header className="h-16 border-b border-zinc-800/50 flex items-center justify-between px-6 bg-zinc-950/50 backdrop-blur-xl">
+      <div className="flex items-center gap-4 min-w-0">
+        <div className="md:hidden h-9 w-9 rounded-lg border border-zinc-800/50 flex items-center justify-center bg-zinc-900/50">
+          <BrandMark className="h-5 w-5 text-zinc-300" />
         </div>
 
-        <div className="font-semibold tracking-tight flex items-center gap-2">
-          <BrandMark className="h-5 w-5 hidden md:block" />
-          Smartify
+        <div className="font-semibold tracking-tight flex items-center gap-2.5 text-zinc-200">
+          <BrandMark className="h-5 w-5 hidden md:block text-zinc-300" />
+          <span className="text-lg">Smartify</span>
         </div>
 
-        <div className={`text-xs px-2 py-1 rounded-md border ${badge.cls} flex items-center gap-1.5`}>
+        <div className={`text-xs px-3 py-1.5 rounded-lg border backdrop-blur-sm font-medium flex items-center gap-2 transition-all ${badge.cls}`}>
           <MapPin className="h-3.5 w-3.5" />
           <span>{badge.text}</span>
           {hasFix && badge.satellites !== undefined && (
-            <span className="opacity-70">({badge.satellites} sat)</span>
+            <span className="opacity-70 text-xs">({badge.satellites} sat)</span>
           )}
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="text-sm opacity-80 hidden sm:block">
+      <div className="flex items-center gap-4">
+        <div className="text-sm text-zinc-400 hidden sm:block font-medium">
           {me.user ? me.user : ""}
         </div>
-        <Button variant="secondary" size="sm" onClick={doLogout}>
+        <Button 
+          variant="secondary" 
+          size="sm" 
+          onClick={doLogout}
+          className="bg-zinc-800/50 hover:bg-zinc-700/50 border-zinc-700/50 text-zinc-200"
+        >
           Logout
         </Button>
       </div>

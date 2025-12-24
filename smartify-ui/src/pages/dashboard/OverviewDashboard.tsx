@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { MapPin, Navigation, Car, Warehouse, Thermometer, Battery, Power, Droplet } from "lucide-react";
+import { MapPin, Navigation, Car, Warehouse, Thermometer, Battery, Power, Droplet, Activity, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
@@ -34,11 +34,11 @@ function formatHum(h: number | null) {
   return h == null ? "" : `${h.toFixed(0)}%`;
 }
 function tempClass(t: number | null) {
-  if (t == null) return "border-zinc-700 bg-zinc-900/40";
-  if (t < 8) return "border-sky-500/40 bg-sky-500/10";
-  if (t < 16) return "border-emerald-500/40 bg-emerald-500/10";
-  if (t < 24) return "border-amber-500/40 bg-amber-500/10";
-  return "border-red-500/40 bg-red-500/10";
+  if (t == null) return "border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50";
+  if (t < 8) return "border-sky-500/30 bg-gradient-to-br from-sky-950/30 to-sky-900/20";
+  if (t < 16) return "border-emerald-500/30 bg-gradient-to-br from-emerald-950/30 to-emerald-900/20";
+  if (t < 24) return "border-amber-500/30 bg-gradient-to-br from-amber-950/30 to-amber-900/20";
+  return "border-red-500/30 bg-gradient-to-br from-red-950/30 to-red-900/20";
 }
 
 function GpsMiniMap({ lat, lon }: { lat: number | null; lon: number | null }) {
@@ -67,7 +67,6 @@ function GpsMiniMap({ lat, lon }: { lat: number | null; lon: number | null }) {
       attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors",
     });
 
-    // Add error logging for tile loading failures
     tileLayer.on("tileerror", (error, tile) => {
       console.error("[GpsMiniMap] Tile load error:", {
         error,
@@ -92,13 +91,12 @@ function GpsMiniMap({ lat, lon }: { lat: number | null; lon: number | null }) {
 
     if (lat == null || lon == null) return;
 
-    // Small delay to ensure container is rendered
     setTimeout(() => {
       map.setView([lat, lon], 14);
       map.invalidateSize();
 
       if (!markerRef.current) {
-        markerRef.current = L.circleMarker([lat, lon], { radius: 6 });
+        markerRef.current = L.circleMarker([lat, lon], { radius: 6, color: "#3b82f6", fillColor: "#3b82f6", fillOpacity: 0.8 });
         markerRef.current.addTo(map);
       } else {
         markerRef.current.setLatLng([lat, lon]);
@@ -106,7 +104,7 @@ function GpsMiniMap({ lat, lon }: { lat: number | null; lon: number | null }) {
     }, 100);
   }, [lat, lon]);
 
-  return <div ref={elRef} className="h-28 w-full rounded-xl overflow-hidden" />;
+  return <div ref={elRef} className="h-32 w-full rounded-xl overflow-hidden border border-zinc-800/50" />;
 }
 
 function GpsTrackMap({ data }: { data: TrackPayload | null }) {
@@ -125,7 +123,6 @@ function GpsTrackMap({ data }: { data: TrackPayload | null }) {
       attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors",
     });
 
-    // Add error logging for tile loading failures
     tileLayer.on("tileerror", (error, tile) => {
       console.error("[GpsTrackMap] Tile load error:", {
         error,
@@ -157,22 +154,22 @@ function GpsTrackMap({ data }: { data: TrackPayload | null }) {
     if (pts.length === 0) return;
 
     const latlngs: L.LatLngExpression[] = pts.map((p) => [p.lat, p.lon]);
-    const poly = L.polyline(latlngs, { weight: 4 });
+    const poly = L.polyline(latlngs, { weight: 4, color: "#3b82f6" });
     poly.addTo(layer);
 
     const last = pts[pts.length - 1];
-    L.circleMarker([last.lat, last.lon], { radius: 7 }).addTo(layer);
+    L.circleMarker([last.lat, last.lon], { radius: 7, color: "#3b82f6", fillColor: "#3b82f6", fillOpacity: 0.8 }).addTo(layer);
 
     map.fitBounds(poly.getBounds(), { padding: [20, 20] });
   }, [data]);
 
-  return <div ref={elRef} className="h-[420px] w-full rounded-2xl overflow-hidden" />;
+  return <div ref={elRef} className="h-[420px] w-full rounded-xl overflow-hidden border border-zinc-800/50" />;
 }
 
 export default function OverviewDashboard() {
   const [track, setTrack] = useState<TrackPayload | null>(null);
 
-  // GPS current data with React Query (polls every 2s, keeps previous data)
+  // GPS current data with React Query (polls every 60s, keeps previous data)
   const { data: gpsData } = useQuery({
     queryKey: ["gps", "current"],
     queryFn: async () => {
@@ -180,7 +177,7 @@ export default function OverviewDashboard() {
       if (!r.ok) throw new Error(`GPS API returned ${r.status}`);
       return (await r.json()) as GpsPayload;
     },
-    refetchInterval: 2000, // Poll every 2 seconds
+    refetchInterval: 60000, // Poll every 60 seconds (1 minute)
     placeholderData: (previousData) => previousData, // keepPreviousData equivalent
     retry: 1,
   });
@@ -292,22 +289,19 @@ export default function OverviewDashboard() {
     queryFn: async () => {
       if (!gpsHasFix || !gps?.lat || !gps?.lon) return null;
       try {
-        // Use OpenStreetMap Nominatim for reverse geocoding (free, no API key needed)
         const response = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${gps.lat}&lon=${gps.lon}&zoom=16&addressdetails=1`,
           {
             headers: {
-              "User-Agent": "Smartify-Dashboard/1.0", // Required by Nominatim
+              "User-Agent": "Smartify-Dashboard/1.0",
             },
           }
         );
         if (!response.ok) return null;
         const data = await response.json();
-        // Extract readable address
         const addr = data.address;
         if (!addr) return null;
         
-        // Build address string (prefer road, then village/town, then city)
         const parts = [];
         if (addr.road) parts.push(addr.road);
         if (addr.house_number) parts.push(addr.house_number);
@@ -327,170 +321,220 @@ export default function OverviewDashboard() {
   });
 
   return (
-    <div className="space-y-4">
-      {/* TOP: 4 columns (Temperature + Water stacked in one column) */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {/* 1) GPS mini */}
-        <Card className="rounded-2xl border shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <MapPin className="h-5 w-5" />
-              Van location
-            </CardTitle>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Dashboard Overview</h1>
+          <p className="text-sm text-zinc-400 mt-1">Real-time monitoring of your van systems</p>
+        </div>
+      </div>
+
+      {/* Stats Grid */}
+      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+        {/* GPS Location Card */}
+        <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="pb-3 relative z-10">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                  <MapPin className="h-4 w-4 text-blue-400" />
+                </div>
+                Van Location
+              </CardTitle>
+            </div>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-4 relative z-10">
             <GpsMiniMap lat={gps?.lat ?? null} lon={gps?.lon ?? null} />
 
-            <div className="flex items-center justify-between text-sm">
-              <span className="opacity-80">Status</span>
-              <span className="font-medium">{gpsStatus}</span>
-            </div>
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-zinc-400">Status</span>
+                <span className={`font-semibold ${gpsHasFix ? "text-emerald-400" : "text-amber-400"}`}>
+                  {gpsStatus}
+                </span>
+              </div>
 
-            <div className="flex items-center justify-between text-sm">
-              <span className="opacity-80">Location</span>
-              <span className="font-medium text-xs text-right max-w-[60%] truncate" title={address || undefined}>
-                {gpsHasFix ? (address || `${gps?.lat?.toFixed(4)}, ${gps?.lon?.toFixed(4)}`) : "—"}
-              </span>
-            </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-zinc-400">Location</span>
+                <span className="font-medium text-xs text-right max-w-[60%] truncate text-zinc-300" title={address || undefined}>
+                  {gpsHasFix ? (address || `${gps?.lat?.toFixed(4)}, ${gps?.lon?.toFixed(4)}`) : "—"}
+                </span>
+              </div>
 
-            <div className="flex items-center justify-between text-sm">
-              <span className="opacity-80 flex items-center gap-2">
-                <Navigation className="h-4 w-4" />
-                Speed
-              </span>
-              <span className="font-medium tabular-nums">
-                {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
-              </span>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-zinc-400 flex items-center gap-2">
+                  <Navigation className="h-3.5 w-3.5" />
+                  Speed
+                </span>
+                <span className="font-semibold tabular-nums text-zinc-200">
+                  {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
+                </span>
+              </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* 2) Temperature + Water level (stacked) */}
-        <div className="flex flex-col gap-4">
-          {/* 2a) Temperatures (reduced height) */}
-          <Card className={`rounded-2xl border shadow-sm ${tempClass(kombiT)} flex-1`}>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Thermometer className="h-5 w-5" />
+        {/* Temperature + Water Stacked */}
+        <div className="flex flex-col gap-6">
+          {/* Temperature Card */}
+          <Card className={`group relative overflow-hidden border shadow-lg transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20 flex-1 ${tempClass(kombiT)}`}>
+            <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+            <CardHeader className="pb-3 relative z-10">
+              <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                  <Thermometer className="h-4 w-4 text-amber-400" />
+                </div>
                 Temperatures
               </CardTitle>
             </CardHeader>
-            <CardContent className="flex flex-col space-y-2 py-2">
-              {/* Debug: Always show in dev to help diagnose */}
+            <CardContent className="flex flex-col space-y-3 py-2 relative z-10">
               {import.meta.env.DEV && (
-                <div className="text-xs text-blue-600 dark:text-blue-400 p-1 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800 mb-1">
+                <div className="text-xs text-blue-400 p-1.5 bg-blue-950/50 rounded-lg border border-blue-800/30 mb-1">
                   <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : 'null'}
                 </div>
               )}
               
-              <div className="flex items-center justify-between rounded-xl bg-blue-500/10 border border-blue-500/30 px-3 py-1.5 text-sm">
-                <span className="flex items-center gap-2 opacity-90">
+              <div className="flex items-center justify-between rounded-lg bg-blue-500/10 border border-blue-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-blue-500/15">
+                <span className="flex items-center gap-2.5 text-zinc-300">
                   <Car className="h-4 w-4 text-blue-400" />
-                  <span className="text-blue-300">Kombi</span>
+                  <span className="font-medium">Kombi</span>
                 </span>
-                <span className="font-medium tabular-nums text-blue-200">
-                  {formatTemp(temps?.kombi?.temp_c ?? null)}
-                  <span className="ml-2 text-xs opacity-70">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold tabular-nums text-lg text-blue-300">
+                    {formatTemp(temps?.kombi?.temp_c ?? null)}
+                  </span>
+                  <span className="text-xs text-zinc-400">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
+                </div>
               </div>
 
-              <div className="flex items-center justify-between rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 text-sm">
-                <span className="flex items-center gap-2 opacity-90">
+              <div className="flex items-center justify-between rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-amber-500/15">
+                <span className="flex items-center gap-2.5 text-zinc-300">
                   <Warehouse className="h-4 w-4 text-amber-400" />
-                  <span className="text-amber-300">Garaža</span>
+                  <span className="font-medium">Garaža</span>
                 </span>
-                <span className="font-medium tabular-nums text-amber-200">
-                  {formatTemp(temps?.garaza?.temp_c ?? null)}
-                  <span className="ml-2 text-xs opacity-70">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold tabular-nums text-lg text-amber-300">
+                    {formatTemp(temps?.garaza?.temp_c ?? null)}
+                  </span>
+                  <span className="text-xs text-zinc-400">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
+                </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* 2b) Water level (below Temperature) */}
-          <Card className="rounded-2xl border shadow-sm bg-blue-500/5 border-blue-500/20 flex-1">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Droplet className="h-5 w-5 text-blue-400" />
-                Water level
+          {/* Water Level Card */}
+          <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-blue-950/30 to-blue-900/20 backdrop-blur-sm transition-all duration-300 hover:border-blue-700/50 hover:shadow-xl hover:shadow-blue-900/20 flex-1">
+            <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+            <CardHeader className="pb-3 relative z-10">
+              <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                  <Droplet className="h-4 w-4 text-blue-400" />
+                </div>
+                Water Level
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm py-2">
+            <CardContent className="space-y-3 text-sm py-2 relative z-10">
               <div className="flex items-center justify-between">
-                <span className="opacity-80">Level</span>
-                <span className="font-medium">— %</span>
+                <span className="text-zinc-400">Level</span>
+                <span className="font-semibold text-zinc-200">— %</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="opacity-80">Status</span>
-                <span className="font-medium">—</span>
+                <span className="text-zinc-400">Status</span>
+                <span className="font-semibold text-zinc-200">—</span>
               </div>
             </CardContent>
           </Card>
         </div>
 
-        {/* 3) Battery (placeholder) */}
-        <Card className="rounded-2xl border shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Battery className="h-5 w-5" />
+        {/* Battery Card */}
+        <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
+          <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="pb-3 relative z-10">
+            <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                <Battery className="h-4 w-4 text-emerald-400" />
+              </div>
               Battery
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="opacity-80">State of charge</span>
-              <span className="font-medium">— %</span>
+          <CardContent className="space-y-3 relative z-10">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-zinc-400">State of charge</span>
+              <span className="font-semibold text-zinc-200">— %</span>
             </div>
-            <div className="flex items-center justify-between">
-              <span className="opacity-80">Voltage</span>
-              <span className="font-medium">— V</span>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-zinc-400">Voltage</span>
+              <span className="font-semibold text-zinc-200">— V</span>
             </div>
           </CardContent>
         </Card>
 
-        {/* 4) Heater (placeholder) */}
-        <Card className="rounded-2xl border shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Power className="h-5 w-5" />
+        {/* Heater Card */}
+        <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
+          <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="pb-3 relative z-10">
+            <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-orange-500/10 border border-orange-500/20">
+                <Power className="h-4 w-4 text-orange-400" />
+              </div>
               Heater
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="opacity-80">Status</span>
-              <span className="font-medium">—</span>
+          <CardContent className="space-y-3 relative z-10">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-zinc-400">Status</span>
+              <span className="font-semibold text-zinc-200">—</span>
             </div>
-            <div className="flex items-center justify-between">
-              <span className="opacity-80">Mode</span>
-              <span className="font-medium">—</span>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-zinc-400">Mode</span>
+              <span className="font-semibold text-zinc-200">—</span>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* BELOW: Big map + 24h track */}
-      <Card className="rounded-2xl border shadow-sm">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">GPS map &amp; last 24h history</CardTitle>
+      {/* GPS Map Section */}
+      <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
+        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+        <CardHeader className="pb-4 relative z-10">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-lg font-semibold text-zinc-200">GPS Map & Track</CardTitle>
+              <p className="text-sm text-zinc-400 mt-1">Last 24 hours location history</p>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800/50 border border-zinc-700/50">
+              <Activity className="h-4 w-4 text-blue-400" />
+              <span className="text-xs font-medium text-zinc-300">Live</span>
+            </div>
+          </div>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-4 relative z-10">
           <GpsTrackMap data={track} />
 
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="rounded-xl bg-black/20 px-3 py-2 text-sm flex items-center justify-between">
-              <span className="opacity-80">Points</span>
-              <span className="font-medium tabular-nums">{track?.count ?? 0}</span>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-zinc-400">Track Points</span>
+                <span className="font-bold text-lg tabular-nums text-zinc-200">{track?.count ?? 0}</span>
+              </div>
             </div>
-            <div className="rounded-xl bg-black/20 px-3 py-2 text-sm flex items-center justify-between">
-              <span className="opacity-80">Speed</span>
-              <span className="font-medium tabular-nums">
-                {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
-              </span>
+            <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-zinc-400">Current Speed</span>
+                <span className="font-bold text-lg tabular-nums text-zinc-200">
+                  {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
+                </span>
+              </div>
             </div>
-            <div className="rounded-xl bg-black/20 px-3 py-2 text-sm flex items-center justify-between">
-              <span className="opacity-80">Status</span>
-              <span className="font-medium">{gpsStatus}</span>
+            <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-zinc-400">GPS Status</span>
+                <span className={`font-bold text-lg ${gpsHasFix ? "text-emerald-400" : "text-amber-400"}`}>
+                  {gpsStatus}
+                </span>
+              </div>
             </div>
           </div>
         </CardContent>
