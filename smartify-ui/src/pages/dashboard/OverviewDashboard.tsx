@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { MapPin, Navigation, Car, Warehouse, Thermometer, Battery, Power, Droplet, Activity, TrendingUp } from "lucide-react";
+import { MapPin, Navigation, Car, Warehouse, Thermometer, Battery, Power, Droplet, Activity, TrendingUp, Plus, Trash2, Save, Settings2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 
@@ -107,16 +108,21 @@ function GpsMiniMap({ lat, lon }: { lat: number | null; lon: number | null }) {
   return <div ref={elRef} className="h-32 w-full rounded-xl overflow-hidden border border-zinc-800/50" />;
 }
 
-function GpsTrackMap({ data }: { data: TrackPayload | null }) {
+function GpsTrackMap({ data, currentLat, currentLon }: { data: TrackPayload | null; currentLat: number | null; currentLon: number | null }) {
   const elRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layerRef = useRef<L.LayerGroup | null>(null);
+  const markerRef = useRef<L.CircleMarker | null>(null);
 
   useEffect(() => {
     if (!elRef.current) return;
     if (mapRef.current) return;
 
-    const map = L.map(elRef.current, { zoomControl: true, attributionControl: true }).setView([43.8563, 18.4131], 9);
+    // Initialize map with current location if available, otherwise default
+    const initLat = currentLat ?? 43.8563;
+    const initLon = currentLon ?? 18.4131;
+    
+    const map = L.map(elRef.current, { zoomControl: true, attributionControl: true }).setView([initLat, initLon], currentLat && currentLon ? 12 : 9);
 
     const tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
@@ -140,28 +146,91 @@ function GpsTrackMap({ data }: { data: TrackPayload | null }) {
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
+      markerRef.current = null;
     };
   }, []);
 
+  // Update map when current location changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (currentLat != null && currentLon != null) {
+      // Validate coordinates are reasonable
+      if (currentLat >= -90 && currentLat <= 90 && currentLon >= -180 && currentLon <= 180) {
+        setTimeout(() => {
+          map.setView([currentLat, currentLon], 12);
+          map.invalidateSize();
+
+          // Update or create current position marker
+          if (!markerRef.current) {
+            markerRef.current = L.circleMarker([currentLat, currentLon], { 
+              radius: 8, 
+              color: "#10b981", 
+              fillColor: "#10b981", 
+              fillOpacity: 0.9,
+              weight: 2
+            });
+            markerRef.current.addTo(map);
+          } else {
+            markerRef.current.setLatLng([currentLat, currentLon]);
+          }
+        }, 100);
+      }
+    }
+  }, [currentLat, currentLon]);
+
+  // Update track polyline
   useEffect(() => {
     const map = mapRef.current;
     const layer = layerRef.current;
     if (!map || !layer) return;
 
-    layer.clearLayers();
+    // Clear only the track (polyline), keep the current position marker
+    const layersToRemove: L.Layer[] = [];
+    layer.eachLayer((l) => {
+      if (l instanceof L.Polyline || (l instanceof L.CircleMarker && l !== markerRef.current)) {
+        layersToRemove.push(l);
+      }
+    });
+    layersToRemove.forEach((l) => layer.removeLayer(l));
 
     const pts = data?.points ?? [];
     if (pts.length === 0) return;
 
-    const latlngs: L.LatLngExpression[] = pts.map((p) => [p.lat, p.lon]);
-    const poly = L.polyline(latlngs, { weight: 4, color: "#3b82f6" });
+    const latlngs: L.LatLngExpression[] = pts.map((p) => {
+      // Validate coordinates
+      if (p.lat >= -90 && p.lat <= 90 && p.lon >= -180 && p.lon <= 180) {
+        return [p.lat, p.lon];
+      }
+      return null;
+    }).filter((p): p is L.LatLngExpression => p !== null);
+
+    if (latlngs.length === 0) return;
+
+    const poly = L.polyline(latlngs, { weight: 3, color: "#3b82f6", opacity: 0.7 });
     poly.addTo(layer);
 
+    // Add end marker (if different from current position)
     const last = pts[pts.length - 1];
-    L.circleMarker([last.lat, last.lon], { radius: 7, color: "#3b82f6", fillColor: "#3b82f6", fillOpacity: 0.8 }).addTo(layer);
+    if (last && (last.lat !== currentLat || last.lon !== currentLon)) {
+      if (last.lat >= -90 && last.lat <= 90 && last.lon >= -180 && last.lon <= 180) {
+        L.circleMarker([last.lat, last.lon], { 
+          radius: 6, 
+          color: "#3b82f6", 
+          fillColor: "#3b82f6", 
+          fillOpacity: 0.6 
+        }).addTo(layer);
+      }
+    }
 
-    map.fitBounds(poly.getBounds(), { padding: [20, 20] });
-  }, [data]);
+    // Fit bounds to show both track and current position
+    const bounds = poly.getBounds();
+    if (currentLat != null && currentLon != null) {
+      bounds.extend([currentLat, currentLon]);
+    }
+    map.fitBounds(bounds, { padding: [20, 20] });
+  }, [data, currentLat, currentLon]);
 
   return <div ref={elRef} className="h-[420px] w-full rounded-xl overflow-hidden border border-zinc-800/50" />;
 }
@@ -487,50 +556,133 @@ export default function OverviewDashboard() {
         </Card>
       </div>
 
-      {/* GPS Map Section */}
-      <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
-        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-        <CardHeader className="pb-4 relative z-10">
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-lg font-semibold text-zinc-200">GPS Map & Track</CardTitle>
-              <p className="text-sm text-zinc-400 mt-1">Last 24 hours location history</p>
+      {/* Relay Rules + GPS Map Section */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Relay Rules Card (Left) */}
+        <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
+          <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="pb-4 relative z-10">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
+                  <Settings2 className="h-5 w-5 text-purple-400" />
+                  Relay Rules
+                </CardTitle>
+                <p className="text-sm text-zinc-400 mt-1">Automated relay control rules</p>
+              </div>
+              <Button
+                size="sm"
+                className="bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 text-purple-400"
+                onClick={() => {
+                  // Add new rule logic here
+                  console.log("Add new rule");
+                }}
+              >
+                <Plus className="h-4 w-4 mr-1.5" />
+                Add Rule
+              </Button>
             </div>
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800/50 border border-zinc-700/50">
-              <Activity className="h-4 w-4 text-blue-400" />
-              <span className="text-xs font-medium text-zinc-300">Live</span>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4 relative z-10">
-          <GpsTrackMap data={track} />
+          </CardHeader>
+          <CardContent className="space-y-4 relative z-10">
+            <div className="space-y-3">
+              {/* Example Rule */}
+              <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 p-4 backdrop-blur-sm">
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-sm font-semibold text-zinc-200">Temperature Control</span>
+                      <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Active</span>
+                    </div>
+                    <p className="text-xs text-zinc-400 mt-1">
+                      If Kombi temp &lt; 5°C, turn on heater relay #3
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-zinc-400 hover:text-red-400"
+                    onClick={() => console.log("Delete rule")}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-zinc-500">
+                  <span>Relay: #3</span>
+                  <span>•</span>
+                  <span>Condition: Temp &lt; 5°C</span>
+                </div>
+              </div>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-zinc-400">Track Points</span>
-                <span className="font-bold text-lg tabular-nums text-zinc-200">{track?.count ?? 0}</span>
+              {/* Placeholder for more rules */}
+              <div className="rounded-lg border-2 border-dashed border-zinc-700/30 p-8 text-center">
+                <Settings2 className="h-8 w-8 text-zinc-600 mx-auto mb-2" />
+                <p className="text-sm text-zinc-500">No additional rules configured</p>
+                <p className="text-xs text-zinc-600 mt-1">Click "Add Rule" to create automation</p>
               </div>
             </div>
-            <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-zinc-400">Current Speed</span>
-                <span className="font-bold text-lg tabular-nums text-zinc-200">
-                  {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
-                </span>
+
+            <div className="pt-2 border-t border-zinc-800/50">
+              <div className="flex items-center justify-between text-xs text-zinc-500">
+                <span>Rules are executed on Raspberry Pi</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs bg-zinc-800/50 border-zinc-700/50 text-zinc-300 hover:bg-zinc-700/50"
+                  onClick={() => console.log("Save rules")}
+                >
+                  <Save className="h-3 w-3 mr-1" />
+                  Save Rules
+                </Button>
               </div>
             </div>
-            <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-zinc-400">GPS Status</span>
-                <span className={`font-bold text-lg ${gpsHasFix ? "text-emerald-400" : "text-amber-400"}`}>
-                  {gpsStatus}
-                </span>
+          </CardContent>
+        </Card>
+
+        {/* GPS Map Card (Right) */}
+        <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="pb-4 relative z-10">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg font-semibold text-zinc-200">GPS Map & Track</CardTitle>
+                <p className="text-sm text-zinc-400 mt-1">Last 24 hours location history</p>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800/50 border border-zinc-700/50">
+                <Activity className="h-4 w-4 text-blue-400" />
+                <span className="text-xs font-medium text-zinc-300">Live</span>
               </div>
             </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardHeader>
+          <CardContent className="space-y-4 relative z-10">
+            <GpsTrackMap data={track} currentLat={gps?.lat ?? null} currentLon={gps?.lon ?? null} />
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-zinc-400">Track Points</span>
+                  <span className="font-bold text-lg tabular-nums text-zinc-200">{track?.count ?? 0}</span>
+                </div>
+              </div>
+              <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-zinc-400">Current Speed</span>
+                  <span className="font-bold text-lg tabular-nums text-zinc-200">
+                    {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
+                  </span>
+                </div>
+              </div>
+              <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-zinc-400">GPS Status</span>
+                  <span className={`font-bold text-lg ${gpsHasFix ? "text-emerald-400" : "text-amber-400"}`}>
+                    {gpsStatus}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
