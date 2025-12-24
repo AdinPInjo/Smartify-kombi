@@ -530,21 +530,72 @@ def api_temperature_history(
         return err
 
     now = int(time.time())
+    # Determine time window
     if range == "hour":
         since = now - 3600
+        bucket_seconds = 300  # 5 minutes
     elif range == "day":
         since = now - 86400
+        bucket_seconds = 300  # 5 minutes
     elif range == "week":
         since = now - 7 * 86400
+        bucket_seconds = 1800  # 30 minutes
     elif range == "month":
         since = now - 30 * 86400
+        bucket_seconds = 7200  # 2 hours
     elif range == "year":
         since = now - 365 * 86400
+        bucket_seconds = 86400  # 1 day
     else:
         return JSONResponse({"error": "invalid_range", "allowed": ["hour", "day", "week", "month", "year"]}, status_code=400)
 
-    rows = db_query_temp_since(since, sensor_index=sensor)
-    return JSONResponse({"since": since, "now": now, "rows": rows})
+    # Get all raw rows
+    raw_rows = db_query_temp_since(since, sensor_index=sensor)
+    
+    # Bucket/aggregate data by time window
+    buckets: Dict[int, Dict[int, List[float]]] = {}  # bucket_ts -> sensor_index -> [temps]
+    
+    for row in raw_rows:
+        ts = row["ts"]
+        sensor_idx = row["sensor_index"]
+        temp = row["temperature_c"]
+        
+        if temp is None:
+            continue
+        
+        # Calculate bucket timestamp (round down to bucket boundary)
+        bucket_ts = (ts // bucket_seconds) * bucket_seconds
+        
+        if bucket_ts not in buckets:
+            buckets[bucket_ts] = {}
+        if sensor_idx not in buckets[bucket_ts]:
+            buckets[bucket_ts][sensor_idx] = []
+        
+        buckets[bucket_ts][sensor_idx].append(temp)
+    
+    # Convert buckets to rows (average temperatures per bucket)
+    # Group by bucket_ts and include both sensors
+    aggregated_rows = []
+    for bucket_ts in sorted(buckets.keys()):
+        sensor_data = buckets[bucket_ts]
+        # Ensure we have entries for both sensors (0 and 1) if they exist
+        for sensor_idx in [0, 1]:
+            if sensor_idx in sensor_data:
+                temps = sensor_data[sensor_idx]
+                avg_temp = sum(temps) / len(temps) if temps else None
+                aggregated_rows.append({
+                    "ts": bucket_ts,
+                    "sensor_index": sensor_idx,
+                    "temperature_c": avg_temp,
+                    "humidity": None,  # We're only aggregating temperature for now
+                })
+    
+    return JSONResponse({
+        "since": since,
+        "now": now,
+        "rows": aggregated_rows,
+        "bucket_seconds": bucket_seconds,
+    })
 
 
 # =========================
