@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { MapPin, Navigation, Car, Warehouse, Thermometer, Battery, Power } from "lucide-react";
+import { MapPin, Navigation, Car, Warehouse, Thermometer, Battery, Power, Droplet } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
@@ -178,7 +178,7 @@ export default function OverviewDashboard() {
     queryFn: async () => {
       const r = await apiFetch("/api/gps/current", { cache: "no-store" });
       if (!r.ok) throw new Error(`GPS API returned ${r.status}`);
-      return r.json() as GpsPayload;
+      return (await r.json()) as GpsPayload;
     },
     refetchInterval: 2000, // Poll every 2 seconds
     placeholderData: (previousData) => previousData, // keepPreviousData equivalent
@@ -193,7 +193,7 @@ export default function OverviewDashboard() {
     queryFn: async () => {
       const r = await apiFetch("/api/temperature/latest", { cache: "no-store" });
       if (!r.ok) throw new Error(`Temperature API returned ${r.status}`);
-      return r.json() as {
+      return (await r.json()) as {
         ts: number;
         sensors: Array<{
           sensor_index: number;
@@ -286,9 +286,49 @@ export default function OverviewDashboard() {
 
   const gpsStatus = gps?.ok === false ? "Disconnected" : gpsHasFix ? "Fix" : "No fix";
 
+  // Reverse geocoding for address
+  const { data: address } = useQuery({
+    queryKey: ["address", gps?.lat, gps?.lon],
+    queryFn: async () => {
+      if (!gpsHasFix || !gps?.lat || !gps?.lon) return null;
+      try {
+        // Use OpenStreetMap Nominatim for reverse geocoding (free, no API key needed)
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${gps.lat}&lon=${gps.lon}&zoom=16&addressdetails=1`,
+          {
+            headers: {
+              "User-Agent": "Smartify-Dashboard/1.0", // Required by Nominatim
+            },
+          }
+        );
+        if (!response.ok) return null;
+        const data = await response.json();
+        // Extract readable address
+        const addr = data.address;
+        if (!addr) return null;
+        
+        // Build address string (prefer road, then village/town, then city)
+        const parts = [];
+        if (addr.road) parts.push(addr.road);
+        if (addr.house_number) parts.push(addr.house_number);
+        if (addr.village || addr.town || addr.city) {
+          parts.push(addr.village || addr.town || addr.city);
+        }
+        if (addr.country) parts.push(addr.country);
+        
+        return parts.length > 0 ? parts.join(", ") : data.display_name || null;
+      } catch {
+        return null;
+      }
+    },
+    enabled: gpsHasFix && !!gps?.lat && !!gps?.lon,
+    staleTime: 60000, // Cache for 1 minute (addresses don't change quickly)
+    retry: 1,
+  });
+
   return (
     <div className="space-y-4">
-      {/* TOP: 4 cards */}
+      {/* TOP: 4 columns (Temperature + Water stacked in one column) */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {/* 1) GPS mini */}
         <Card className="rounded-2xl border shadow-sm">
@@ -307,9 +347,9 @@ export default function OverviewDashboard() {
             </div>
 
             <div className="flex items-center justify-between text-sm">
-              <span className="opacity-80">Lat / Lon</span>
-              <span className="font-medium tabular-nums">
-                {gpsHasFix ? `${gps?.lat?.toFixed(5)}, ${gps?.lon?.toFixed(5)}` : "—"}
+              <span className="opacity-80">Location</span>
+              <span className="font-medium text-xs text-right max-w-[60%] truncate" title={address || undefined}>
+                {gpsHasFix ? (address || `${gps?.lat?.toFixed(4)}, ${gps?.lon?.toFixed(4)}`) : "—"}
               </span>
             </div>
 
@@ -325,45 +365,68 @@ export default function OverviewDashboard() {
           </CardContent>
         </Card>
 
-        {/* 2) Temperatures */}
-        <Card className={`rounded-2xl border shadow-sm ${tempClass(kombiT)}`}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Thermometer className="h-5 w-5" />
-              Temperatures
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col space-y-3">
-            {/* Debug: Always show in dev to help diagnose */}
-            {import.meta.env.DEV && (
-              <div className="text-xs text-blue-600 dark:text-blue-400 p-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800">
-                <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : 'null'}
+        {/* 2) Temperature + Water level (stacked) */}
+        <div className="flex flex-col gap-4">
+          {/* 2a) Temperatures (reduced height) */}
+          <Card className={`rounded-2xl border shadow-sm ${tempClass(kombiT)} flex-1`}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Thermometer className="h-5 w-5" />
+                Temperatures
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col space-y-2 py-2">
+              {/* Debug: Always show in dev to help diagnose */}
+              {import.meta.env.DEV && (
+                <div className="text-xs text-blue-600 dark:text-blue-400 p-1 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800 mb-1">
+                  <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : 'null'}
+                </div>
+              )}
+              
+              <div className="flex items-center justify-between rounded-xl bg-blue-500/10 border border-blue-500/30 px-3 py-1.5 text-sm">
+                <span className="flex items-center gap-2 opacity-90">
+                  <Car className="h-4 w-4 text-blue-400" />
+                  <span className="text-blue-300">Kombi</span>
+                </span>
+                <span className="font-medium tabular-nums text-blue-200">
+                  {formatTemp(temps?.kombi?.temp_c ?? null)}
+                  <span className="ml-2 text-xs opacity-70">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
+                </span>
               </div>
-            )}
-            
-            <div className="flex items-center justify-between rounded-xl bg-blue-500/10 border border-blue-500/30 px-3 py-2.5 text-sm">
-              <span className="flex items-center gap-2 opacity-90">
-                <Car className="h-4 w-4 text-blue-400" />
-                <span className="text-blue-300">Kombi</span>
-              </span>
-              <span className="font-medium tabular-nums text-blue-200">
-                {formatTemp(temps?.kombi?.temp_c ?? null)}
-                <span className="ml-2 text-xs opacity-70">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
-              </span>
-            </div>
 
-            <div className="flex items-center justify-between rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5 text-sm">
-              <span className="flex items-center gap-2 opacity-90">
-                <Warehouse className="h-4 w-4 text-amber-400" />
-                <span className="text-amber-300">Garaža</span>
-              </span>
-              <span className="font-medium tabular-nums text-amber-200">
-                {formatTemp(temps?.garaza?.temp_c ?? null)}
-                <span className="ml-2 text-xs opacity-70">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
-              </span>
-            </div>
-          </CardContent>
-        </Card>
+              <div className="flex items-center justify-between rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 text-sm">
+                <span className="flex items-center gap-2 opacity-90">
+                  <Warehouse className="h-4 w-4 text-amber-400" />
+                  <span className="text-amber-300">Garaža</span>
+                </span>
+                <span className="font-medium tabular-nums text-amber-200">
+                  {formatTemp(temps?.garaza?.temp_c ?? null)}
+                  <span className="ml-2 text-xs opacity-70">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* 2b) Water level (below Temperature) */}
+          <Card className="rounded-2xl border shadow-sm bg-blue-500/5 border-blue-500/20 flex-1">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Droplet className="h-5 w-5 text-blue-400" />
+                Water level
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm py-2">
+              <div className="flex items-center justify-between">
+                <span className="opacity-80">Level</span>
+                <span className="font-medium">— %</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="opacity-80">Status</span>
+                <span className="font-medium">—</span>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
 
         {/* 3) Battery (placeholder) */}
         <Card className="rounded-2xl border shadow-sm">
