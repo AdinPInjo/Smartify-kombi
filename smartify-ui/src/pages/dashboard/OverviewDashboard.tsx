@@ -379,7 +379,7 @@ export default function OverviewDashboard() {
               Temperatures
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col h-full space-y-3">
+          <CardContent className="flex flex-col space-y-3">
             {/* Debug: Always show in dev to help diagnose */}
             {import.meta.env.DEV && (
               <div className="text-xs text-blue-600 dark:text-blue-400 p-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800">
@@ -387,23 +387,23 @@ export default function OverviewDashboard() {
               </div>
             )}
             
-            <div className="flex items-center justify-between rounded-xl bg-black/20 px-3 py-4 text-sm flex-1">
+            <div className="flex items-center justify-between rounded-xl bg-blue-500/10 border border-blue-500/30 px-3 py-2.5 text-sm">
               <span className="flex items-center gap-2 opacity-90">
-                <Car className="h-4 w-4" />
-                Kombi
+                <Car className="h-4 w-4 text-blue-400" />
+                <span className="text-blue-300">Kombi</span>
               </span>
-              <span className="font-medium tabular-nums">
+              <span className="font-medium tabular-nums text-blue-200">
                 {formatTemp(temps?.kombi?.temp_c ?? null)}
                 <span className="ml-2 text-xs opacity-70">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
               </span>
             </div>
 
-            <div className="flex items-center justify-between rounded-xl bg-black/20 px-3 py-4 text-sm flex-1">
+            <div className="flex items-center justify-between rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5 text-sm">
               <span className="flex items-center gap-2 opacity-90">
-                <Warehouse className="h-4 w-4" />
-                Garaža
+                <Warehouse className="h-4 w-4 text-amber-400" />
+                <span className="text-amber-300">Garaža</span>
               </span>
-              <span className="font-medium tabular-nums">
+              <span className="font-medium tabular-nums text-amber-200">
                 {formatTemp(temps?.garaza?.temp_c ?? null)}
                 <span className="ml-2 text-xs opacity-70">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
               </span>
