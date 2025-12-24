@@ -381,15 +381,7 @@ export default function OverviewDashboard() {
           {/* Temperature Card */}
           <Card className={`group relative overflow-hidden border shadow-lg transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20 flex-1 ${tempClass(kombiT)}`}>
             <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-            <CardHeader className="pb-3 relative z-10">
-              <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-                <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                  <Thermometer className="h-4 w-4 text-amber-400" />
-                </div>
-                Temperatures
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col space-y-3 py-2 relative z-10">
+            <CardContent className="flex flex-col space-y-3 py-4 relative z-10">
               {import.meta.env.DEV && (
                 <div className="text-xs text-blue-400 p-1.5 bg-blue-950/50 rounded-lg border border-blue-800/30 mb-1">
                   <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : 'null'}
