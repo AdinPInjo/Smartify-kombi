@@ -201,6 +201,10 @@ def require_auth(request: Request, x_api_key: Optional[str]) -> Optional[JSONRes
 # =========================
 
 _dht_lock = threading.Lock()
+_temp_latest: Dict[str, Any] = {
+    "ts": None,
+    "sensors": [],
+}
 
 def read_dht22_all() -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
@@ -262,6 +266,28 @@ def read_dht22_all() -> List[Dict[str, Any]]:
             db_insert_temp(now, idx, t, h)
 
     return results
+
+
+def _dht22_poller_thread() -> None:
+    """Background thread that polls DHT22 sensors at fixed intervals."""
+    global _temp_latest
+    
+    while True:
+        try:
+            results = read_dht22_all()
+            _temp_latest.update({
+                "ts": int(time.time()),
+                "sensors": results,
+            })
+        except Exception as e:
+            _temp_latest.update({
+                "ts": int(time.time()),
+                "sensors": [],
+                "error": str(e),
+            })
+        
+        # Poll every SENSOR_LOG_INTERVAL seconds (default 30s)
+        time.sleep(SENSOR_LOG_INTERVAL)
 
 
 # =========================
@@ -336,82 +362,96 @@ def _gps_reader_thread() -> None:
                 time.sleep(2)
                 continue
 
-            with serial.Serial(GPS_DEVICE, GPS_BAUD, timeout=1) as ser:
+            # Use timeout for serial reads to prevent blocking
+            with serial.Serial(GPS_DEVICE, GPS_BAUD, timeout=2) as ser:
                 _gps_latest["error"] = None
                 while True:
-                    line = ser.readline().decode(errors="ignore").strip()
-                    if not line.startswith("$"):
-                        continue
-
-                    parts = line.split(",")
-                    sentence = parts[0]
-                    now = int(time.time())
-
-                    if sentence.endswith("RMC") and len(parts) >= 12:
-                        status = parts[2] if len(parts) > 2 else ""
-                        if status != "A":
+                    try:
+                        # readline with timeout will return empty string if timeout
+                        line = ser.readline().decode(errors="ignore").strip()
+                        if not line or not line.startswith("$"):
                             continue
 
-                        lat = _nmea_to_decimal(parts[3], parts[4])
-                        lon = _nmea_to_decimal(parts[5], parts[6])
+                        parts = line.split(",")
+                        if not parts:
+                            continue
+                        sentence = parts[0]
+                        now = int(time.time())
 
-                        speed_kn = None
-                        course = None
-                        try:
-                            speed_kn = float(parts[7]) if parts[7] else None
-                        except Exception:
+                        if sentence.endswith("RMC") and len(parts) >= 12:
+                            status = parts[2] if len(parts) > 2 else ""
+                            if status != "A":
+                                continue
+
+                            lat = _nmea_to_decimal(parts[3], parts[4])
+                            lon = _nmea_to_decimal(parts[5], parts[6])
+
                             speed_kn = None
-                        try:
-                            course = float(parts[8]) if parts[8] else None
-                        except Exception:
                             course = None
+                            try:
+                                speed_kn = float(parts[7]) if parts[7] else None
+                            except Exception:
+                                speed_kn = None
+                            try:
+                                course = float(parts[8]) if parts[8] else None
+                            except Exception:
+                                course = None
 
-                        speed_kmh = speed_kn * 1.852 if speed_kn is not None else None
+                            speed_kmh = speed_kn * 1.852 if speed_kn is not None else None
 
-                        _gps_latest.update({
-                            "ts": now,
-                            "lat": lat,
-                            "lon": lon,
-                            "speed_kmh": speed_kmh,
-                            "course": course,
-                            "ok": True,
-                            "error": None,
-                        })
-                        db_insert_gps(now, lat, lon, speed_kmh, course, _gps_latest.get("altitude_m"))
+                            _gps_latest.update({
+                                "ts": now,
+                                "lat": lat,
+                                "lon": lon,
+                                "speed_kmh": speed_kmh,
+                                "course": course,
+                                "ok": True,
+                                "error": None,
+                            })
+                            db_insert_gps(now, lat, lon, speed_kmh, course, _gps_latest.get("altitude_m"))
 
-                    if sentence.endswith("GGA") and len(parts) >= 10:
-                        fix = parts[6] if len(parts) > 6 else "0"
-                        if fix == "0":
-                            continue
+                        if sentence.endswith("GGA") and len(parts) >= 10:
+                            fix = parts[6] if len(parts) > 6 else "0"
+                            if fix == "0":
+                                continue
 
-                        lat = _nmea_to_decimal(parts[2], parts[3])
-                        lon = _nmea_to_decimal(parts[4], parts[5])
+                            lat = _nmea_to_decimal(parts[2], parts[3])
+                            lon = _nmea_to_decimal(parts[4], parts[5])
 
-                        alt = None
-                        try:
-                            alt = float(parts[9]) if parts[9] else None
-                        except Exception:
                             alt = None
+                            try:
+                                alt = float(parts[9]) if parts[9] else None
+                            except Exception:
+                                alt = None
 
-                        # Extract satellite count (field 7 in GGA sentence)
-                        satellites = None
-                        try:
-                            if len(parts) > 7 and parts[7]:
-                                satellites = int(parts[7])
-                        except Exception:
+                            # Extract satellite count (field 7 in GGA sentence)
                             satellites = None
+                            try:
+                                if len(parts) > 7 and parts[7]:
+                                    satellites = int(parts[7])
+                            except Exception:
+                                satellites = None
 
-                        _gps_latest.update({
-                            "ts": now,
-                            "lat": lat if lat is not None else _gps_latest.get("lat"),
-                            "lon": lon if lon is not None else _gps_latest.get("lon"),
-                            "altitude_m": alt,
-                            "satellites": satellites,
-                            "ok": True,
-                            "error": None,
-                        })
-                        db_insert_gps(now, _gps_latest.get("lat"), _gps_latest.get("lon"),
-                                      _gps_latest.get("speed_kmh"), _gps_latest.get("course"), alt)
+                            _gps_latest.update({
+                                "ts": now,
+                                "lat": lat if lat is not None else _gps_latest.get("lat"),
+                                "lon": lon if lon is not None else _gps_latest.get("lon"),
+                                "altitude_m": alt,
+                                "satellites": satellites,
+                                "ok": True,
+                                "error": None,
+                            })
+                            db_insert_gps(now, _gps_latest.get("lat"), _gps_latest.get("lon"),
+                                          _gps_latest.get("speed_kmh"), _gps_latest.get("course"), alt)
+
+                    except serial.SerialTimeoutException:
+                        # Timeout is normal, continue polling
+                        continue
+                    except Exception as e:
+                        _gps_latest["ok"] = False
+                        _gps_latest["error"] = f"Serial read error: {e}"
+                        time.sleep(1)
+                        continue
 
         except Exception as e:
             _gps_latest["ok"] = False
@@ -426,8 +466,12 @@ def _gps_reader_thread() -> None:
 @app.on_event("startup")
 def on_startup() -> None:
     db_init()
-    t = threading.Thread(target=_gps_reader_thread, daemon=True)
-    t.start()
+    # Start GPS reader thread
+    t_gps = threading.Thread(target=_gps_reader_thread, daemon=True)
+    t_gps.start()
+    # Start DHT22 poller thread
+    t_dht = threading.Thread(target=_dht22_poller_thread, daemon=True)
+    t_dht.start()
 
 
 # =========================
@@ -470,8 +514,8 @@ def api_temperature_latest(request: Request, x_api_key: Optional[str] = Header(d
     err = require_auth(request, x_api_key)
     if err:
         return err
-    sensors = read_dht22_all()
-    return JSONResponse({"ts": int(time.time()), "sensors": sensors})
+    # Return cached values immediately (no blocking sensor reads)
+    return JSONResponse(_temp_latest)
 
 
 @app.get("/api/temperature/history")
