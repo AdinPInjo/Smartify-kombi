@@ -44,6 +44,9 @@ export default function TemperatureDashboard() {
     let alive = true;
 
     const load = async () => {
+      // Clear previous data immediately when range changes
+      if (alive) setData(null);
+      
       try {
         const r = await apiFetch(`/api/temperature/history?range=${range}`, { cache: "no-store" });
         if (!r.ok) {
@@ -53,7 +56,11 @@ export default function TemperatureDashboard() {
         const j = (await r.json()) as BackendPayload;
         if (alive) {
           setData(j);
-          console.log(`[TemperatureDashboard] Loaded ${j.rows?.length ?? 0} rows for range ${range}`);
+          console.log(`[TemperatureDashboard] Loaded ${j.rows?.length ?? 0} rows for range ${range}`, {
+            since: j.since,
+            now: j.now,
+            timeSpan: j.now - j.since,
+          });
         }
       } catch (err) {
         console.error(`[TemperatureDashboard] Failed to load data for range ${range}:`, err);
@@ -119,9 +126,19 @@ export default function TemperatureDashboard() {
         <CardContent>
           <div className="h-[360px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
+              <LineChart 
+                key={range} 
+                data={chartData}
+                margin={{ top: 5, right: 10, left: 0, bottom: 5 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="label" minTickGap={20} />
+                <XAxis 
+                  dataKey="label" 
+                  minTickGap={range === "day" ? 20 : range === "week" ? 30 : range === "month" ? 40 : 50}
+                  angle={range === "year" ? -45 : 0}
+                  textAnchor={range === "year" ? "end" : "middle"}
+                  height={range === "year" ? 60 : 30}
+                />
                 <YAxis domain={["auto", "auto"]} />
                 <Tooltip />
                 <Legend />
@@ -132,6 +149,7 @@ export default function TemperatureDashboard() {
                   dot={false} 
                   stroke="#3b82f6" 
                   strokeWidth={2}
+                  connectNulls={false}
                 />
                 <Line 
                   type="monotone" 
@@ -140,6 +158,7 @@ export default function TemperatureDashboard() {
                   dot={false} 
                   stroke="#f59e0b" 
                   strokeWidth={2}
+                  connectNulls={false}
                 />
               </LineChart>
             </ResponsiveContainer>
