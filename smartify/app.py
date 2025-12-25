@@ -974,6 +974,7 @@ RULE_EVAL_INTERVAL = 5  # Evaluate rules every 5 seconds
 def _evaluate_temperature_condition(condition: Dict[str, Any], temp_data: Dict[str, Any]) -> bool:
     """Evaluate a temperature condition. Returns True if condition matches."""
     if condition.get("type") != "temperature":
+        print(f"[Rule Engine] Condition type mismatch: {condition.get('type')} != 'temperature'")
         return False
     
     sensor_name = condition.get("sensor", "")
@@ -981,12 +982,14 @@ def _evaluate_temperature_condition(condition: Dict[str, Any], temp_data: Dict[s
     value = condition.get("value")
     
     if value is None:
+        print(f"[Rule Engine] Condition value is None")
         return False
     
     # Map sensor names to indices: kombi=0, garaza=1
     sensor_map = {"kombi": 0, "garaza": 1}
     sensor_idx = sensor_map.get(sensor_name, -1)
     if sensor_idx < 0:
+        print(f"[Rule Engine] Invalid sensor name: {sensor_name}")
         return False
     
     # Find sensor reading
@@ -997,11 +1000,17 @@ def _evaluate_temperature_condition(condition: Dict[str, Any], temp_data: Dict[s
             sensor_reading = sr
             break
     
-    if not sensor_reading or not sensor_reading.get("ok"):
+    if not sensor_reading:
+        print(f"[Rule Engine] Sensor reading not found for {sensor_name} (index {sensor_idx})")
+        return False
+    
+    if not sensor_reading.get("ok"):
+        print(f"[Rule Engine] Sensor {sensor_name} is not OK: {sensor_reading.get('error')}")
         return False  # Sensor offline/invalid
     
     temp = sensor_reading.get("temperature_c")
     if temp is None:
+        print(f"[Rule Engine] Temperature is None for sensor {sensor_name}")
         return False
     
     # Check if reading is stale (older than 60 seconds)
@@ -1009,15 +1018,22 @@ def _evaluate_temperature_condition(condition: Dict[str, Any], temp_data: Dict[s
     if ts:
         age = time.time() - ts
         if age > 60:
+            print(f"[Rule Engine] Temperature data is stale: {age:.1f}s old")
             return False  # Stale data
     
     # Evaluate condition
+    result = False
     if operator == "below":
-        return temp < value
+        result = temp < value
+        print(f"[Rule Engine] Evaluating: {temp}°C < {value}°C = {result}")
     elif operator == "above":
-        return temp > value
+        result = temp > value
+        print(f"[Rule Engine] Evaluating: {temp}°C > {value}°C = {result}")
+    else:
+        print(f"[Rule Engine] Unknown operator: {operator}")
+        return False
     
-    return False
+    return result
 
 
 def _evaluate_relay_rules() -> None:
@@ -1057,7 +1073,10 @@ def _evaluate_relay_rules() -> None:
             enabled_rules = [r for r in rules if r.get("is_enabled", True)]
             
             if not enabled_rules:
+                print(f"[Rule Engine] No enabled rules for relay {relay_id}")
                 continue  # No enabled rules
+            
+            print(f"[Rule Engine] Evaluating {len(enabled_rules)} enabled rule(s) for relay {relay_id}")
             
             # Sort by priority (lower number = higher priority)
             enabled_rules.sort(key=lambda x: (x.get("priority", 100), x.get("created_at", 0)))
@@ -1069,17 +1088,21 @@ def _evaluate_relay_rules() -> None:
             reason = None
             
             for rule in enabled_rules:
+                rule_name = rule.get("name", "unnamed")
+                print(f"[Rule Engine] Checking rule: {rule_name}")
+                
                 # Check cooldown
                 last_triggered = rule.get("last_triggered_at")
                 if last_triggered:
                     age = int(time.time()) - last_triggered
                     cooldown_sec = rule.get("cooldown_seconds", 60)
                     if age < cooldown_sec:
-                        print(f"[Rule Engine] Rule {rule.get('name')} still in cooldown ({age}s < {cooldown_sec}s)")
+                        print(f"[Rule Engine] Rule '{rule_name}' still in cooldown ({age}s < {cooldown_sec}s)")
                         continue  # Still in cooldown
                 
                 # Evaluate condition
                 condition = rule.get("condition", {})
+                print(f"[Rule Engine] Rule '{rule_name}': condition={condition}")
                 if _evaluate_temperature_condition(condition, temp_data):
                     # Condition matches!
                     action = rule.get("action", "")
@@ -1104,12 +1127,23 @@ def _evaluate_relay_rules() -> None:
                     break  # First match wins
             
             # Apply action if state should change
+            if desired_state:
+                if desired_state == current_state:
+                    print(f"[Rule Engine] Relay {relay_id} already in desired state {desired_state}, no action needed")
+                else:
+                    print(f"[Rule Engine] Changing relay {relay_id} from {current_state} to {desired_state} (reason: {reason})")
+            else:
+                print(f"[Rule Engine] No rule matched for relay {relay_id} (current state: {current_state})")
+            
             if desired_state and desired_state != current_state:
-                print(f"[Rule Engine] Changing relay {relay_id} from {current_state} to {desired_state} (reason: {reason})")
                 # Execute hardware command
+                # NOTE: Hardware is inverted - to turn relay ON, we call relay27.py off
+                # So when desired_state is "on", we use command_off, and vice versa
                 device = db_get_relay_device(relay_id)
                 if device:
-                    cmd_script = device.get("command_on" if desired_state == "on" else "command_off", "")
+                    # Invert: desired_state "on" → use command_off, desired_state "off" → use command_on
+                    cmd_script = device.get("command_off" if desired_state == "on" else "command_on", "")
+                    print(f"[Rule Engine] Using command: {cmd_script} (desired_state={desired_state}, hardware inverted)")
                     if cmd_script:
                         try:
                             # Extract command and args
