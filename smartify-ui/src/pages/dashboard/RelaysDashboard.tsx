@@ -483,8 +483,7 @@ function RelaysDashboard() {
               </CardContent>
             </Card>
           );
-        })
-      )}
+        })}
 
       {/* Rule Dialog */}
       <RuleDialog
