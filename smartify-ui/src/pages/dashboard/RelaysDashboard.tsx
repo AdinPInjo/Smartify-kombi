@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -85,18 +85,30 @@ function RelaysDashboard() {
   });
 
   const relays = Array.isArray(relaysResponse) ? relaysResponse : [];
-  const heaterRelay = relays.find((r) => r.name === "heater");
 
-  // Fetch rules for heater relay
+  // Fetch rules for all relays - aggregate all rules
   const { data: rulesResponse, isLoading: isLoadingRules } = useQuery({
-    queryKey: ["relay-rules", heaterRelay?.id],
+    queryKey: ["relay-rules", relays.map(r => r.id).sort().join(",")],
     queryFn: async () => {
-      if (!heaterRelay) return { rules: [] };
-      const r = await apiFetch(`/api/relays/${heaterRelay.id}/rules`, { cache: "no-store" });
-      if (!r.ok) throw new Error(`Rules API returned ${r.status}`);
-      return await r.json();
+      if (relays.length === 0) return { rules: [] };
+      
+      const allRules: any[] = [];
+      for (const relay of relays) {
+        try {
+          const r = await apiFetch(`/api/relays/${relay.id}/rules`, { cache: "no-store" });
+          if (r.ok) {
+            const data = await r.json();
+            if (data.rules && Array.isArray(data.rules)) {
+              allRules.push(...data.rules);
+            }
+          }
+        } catch (err) {
+          console.error(`[RelaysDashboard] Failed to fetch rules for relay ${relay.id}:`, err);
+        }
+      }
+      return { rules: allRules };
     },
-    enabled: !!heaterRelay,
+    enabled: relays.length > 0,
     retry: 1,
   });
 
@@ -251,6 +263,34 @@ function RelaysDashboard() {
     );
   }
 
+  // Handle empty relays array
+  if (relays.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+              <ToggleLeft className="h-6 w-6 text-blue-400" />
+            </div>
+            Relay Control
+          </h1>
+          <p className="text-sm text-zinc-400 mt-2">Manage connected devices and automation rules</p>
+        </div>
+        <Card className="border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50">
+          <CardContent className="py-12 text-center">
+            <p className="text-zinc-400">No relays found</p>
+            <Button 
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["relays"] })} 
+              className="mt-4"
+            >
+              Refresh
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -299,17 +339,29 @@ function RelaysDashboard() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  {isManual && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="bg-zinc-800/50 border-zinc-700/50 text-zinc-300 hover:bg-zinc-700/50"
-                      onClick={() => setAutoMutation.mutate(relay.id)}
-                      disabled={setAutoMutation.isPending}
-                    >
-                      Return to Auto
-                    </Button>
-                  )}
+                  <Button
+                    size="sm"
+                    variant={isManual ? "default" : "outline"}
+                    className={
+                      isManual
+                        ? "bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/50 text-orange-300"
+                        : "bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-300"
+                    }
+                    onClick={() => {
+                      if (isManual) {
+                        // Return to auto mode
+                        setAutoMutation.mutate(relay.id);
+                      } else {
+                        // Switch to manual mode - toggle current state to force manual mode
+                        const newState = isOn ? "off" : "on";
+                        toggleRelayMutation.mutate({ relayId: relay.id, state: newState });
+                      }
+                    }}
+                    disabled={setAutoMutation.isPending || toggleRelayMutation.isPending}
+                    title={isManual ? "Click to return to Auto mode" : "Click to switch to Manual mode"}
+                  >
+                    {isManual ? "Manual" : "Auto"}
+                  </Button>
                   <Switch
                     checked={isOn}
                     onCheckedChange={(checked) => handleRelayToggle(relay, checked)}
@@ -423,7 +475,7 @@ function RelaysDashboard() {
                             </Button>
                           </div>
                         </div>
-                      </div>
+                    </div>
                     ))}
                   </div>
                 )}
@@ -431,7 +483,8 @@ function RelaysDashboard() {
               </CardContent>
             </Card>
           );
-        })}
+        })
+      )}
 
       {/* Rule Dialog */}
       <RuleDialog
@@ -470,6 +523,30 @@ function RuleDialog({
   const [priority, setPriority] = useState(rule?.priority?.toString() || "100");
   const [cooldown, setCooldown] = useState(rule?.cooldown_seconds?.toString() || "60");
   const [isEnabled, setIsEnabled] = useState(rule?.is_enabled ?? true);
+
+  // Update form fields when rule prop changes (for editing)
+  useEffect(() => {
+    if (rule) {
+      setName(rule.name || "");
+      setSensor(rule.condition?.sensor || "kombi");
+      setOperator((rule.condition?.operator as "below" | "above") || "below");
+      setValue(rule.condition?.value?.toString() || "5");
+      setAction(rule.action || "turn_on");
+      setPriority(rule.priority?.toString() || "100");
+      setCooldown(rule.cooldown_seconds?.toString() || "60");
+      setIsEnabled(rule.is_enabled ?? true);
+    } else {
+      // Reset to defaults when creating a new rule
+      setName("");
+      setSensor("kombi");
+      setOperator("below");
+      setValue("5");
+      setAction("turn_on");
+      setPriority("100");
+      setCooldown("60");
+      setIsEnabled(true);
+    }
+  }, [rule, isOpen]); // Also depend on isOpen to reset when dialog closes
 
   const createRuleMutation = useMutation({
     mutationFn: async () => {

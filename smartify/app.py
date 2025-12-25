@@ -354,6 +354,8 @@ def db_list_relay_rules(relay_id: str) -> List[Dict[str, Any]]:
     for row in rows:
         r = dict(row)
         r["condition"] = json.loads(r["condition_json"])
+        # Convert SQLite integer boolean to Python boolean
+        r["is_enabled"] = bool(r.get("is_enabled", 1))
         result.append(r)
     return result
 
@@ -369,6 +371,8 @@ def db_get_relay_rule(rule_id: str) -> Optional[Dict[str, Any]]:
     if row:
         r = dict(row)
         r["condition"] = json.loads(r["condition_json"])
+        # Convert SQLite integer boolean to Python boolean
+        r["is_enabled"] = bool(r.get("is_enabled", 1))
         return r
     return None
 
@@ -1022,6 +1026,10 @@ def _evaluate_relay_rules() -> None:
         # Get latest temperature data
         temp_data = _temp_latest.copy()
         
+        if not temp_data or not temp_data.get("sensors"):
+            print("[Rule Engine] No temperature data available")
+            return
+        
         # Get all enabled relay devices
         relays = db_list_relay_devices()
         
@@ -1034,17 +1042,22 @@ def _evaluate_relay_rules() -> None:
             # Get current relay state
             relay_state = db_get_relay_state_new(relay_id)
             if not relay_state:
+                print(f"[Rule Engine] No relay state found for {relay_id}")
                 continue
             
             # Check if in manual mode (and not expired)
             if relay_state.get("mode") == "manual":
                 manual_until = relay_state.get("manual_until")
                 if manual_until is None or manual_until > int(time.time()):
+                    print(f"[Rule Engine] Relay {relay_id} is in manual mode, skipping rule evaluation")
                     continue  # Skip rule evaluation, manual mode active
             
             # Get enabled rules for this relay
             rules = db_list_relay_rules(relay_id)
             enabled_rules = [r for r in rules if r.get("is_enabled", True)]
+            
+            if not enabled_rules:
+                continue  # No enabled rules
             
             # Sort by priority (lower number = higher priority)
             enabled_rules.sort(key=lambda x: (x.get("priority", 100), x.get("created_at", 0)))
@@ -1060,7 +1073,9 @@ def _evaluate_relay_rules() -> None:
                 last_triggered = rule.get("last_triggered_at")
                 if last_triggered:
                     age = int(time.time()) - last_triggered
-                    if age < rule.get("cooldown_seconds", 60):
+                    cooldown_sec = rule.get("cooldown_seconds", 60)
+                    if age < cooldown_sec:
+                        print(f"[Rule Engine] Rule {rule.get('name')} still in cooldown ({age}s < {cooldown_sec}s)")
                         continue  # Still in cooldown
                 
                 # Evaluate condition
@@ -1085,10 +1100,12 @@ def _evaluate_relay_rules() -> None:
                             break
                     temp = sensor_reading.get("temperature_c") if sensor_reading else None
                     reason = f"{sensor_name.capitalize()} temp {operator} {value}°C (current: {temp:.1f}°C)"
+                    print(f"[Rule Engine] Rule '{rule.get('name')}' matched: {reason}")
                     break  # First match wins
             
             # Apply action if state should change
             if desired_state and desired_state != current_state:
+                print(f"[Rule Engine] Changing relay {relay_id} from {current_state} to {desired_state} (reason: {reason})")
                 # Execute hardware command
                 device = db_get_relay_device(relay_id)
                 if device:
@@ -1117,19 +1134,29 @@ def _evaluate_relay_rules() -> None:
                                     db_update_rule_last_triggered(matched_rule["id"])
                             else:
                                 # Command failed
+                                error_msg = f"Command failed: {proc.stderr.strip()}"
+                                print(f"[Rule Engine] {error_msg}")
                                 db_log_relay_event(
                                     relay_id, "rule", current_state, current_state,
-                                    f"Command failed: {proc.stderr.strip()}", matched_rule.get("id") if matched_rule else None
+                                    error_msg, matched_rule.get("id") if matched_rule else None
                                 )
                         except Exception as e:
+                            error_msg = f"Exception: {str(e)}"
+                            print(f"[Rule Engine] {error_msg}")
+                            import traceback
+                            traceback.print_exc()
                             db_log_relay_event(
                                 relay_id, "rule", current_state, current_state,
-                                f"Exception: {str(e)}", matched_rule.get("id") if matched_rule else None
+                                error_msg, matched_rule.get("id") if matched_rule else None
                             )
+            elif desired_state == current_state:
+                print(f"[Rule Engine] Relay {relay_id} already in desired state {desired_state}, no action needed")
     
     except Exception as e:
         # Log error but don't crash
         print(f"[Rule Engine] Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def _rule_evaluator_thread() -> None:
