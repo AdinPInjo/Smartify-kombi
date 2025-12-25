@@ -95,15 +95,15 @@ function GpsMiniMap({ lat, lon }: { lat: number | null; lon: number | null }) {
     if (lat == null || lon == null) return;
 
     setTimeout(() => {
-      map.setView([lat, lon], 14);
+    map.setView([lat, lon], 14);
       map.invalidateSize();
 
-      if (!markerRef.current) {
+    if (!markerRef.current) {
         markerRef.current = L.circleMarker([lat, lon], { radius: 6, color: "#3b82f6", fillColor: "#3b82f6", fillOpacity: 0.8 });
-        markerRef.current.addTo(map);
-      } else {
-        markerRef.current.setLatLng([lat, lon]);
-      }
+      markerRef.current.addTo(map);
+    } else {
+      markerRef.current.setLatLng([lat, lon]);
+    }
     }, 100);
   }, [lat, lon]);
 
@@ -123,7 +123,7 @@ function GpsTrackMap({ data, currentLat, currentLon }: { data: TrackPayload | nu
     // Initialize map with current location if available, otherwise default
     const initLat = currentLat ?? 43.8563;
     const initLon = currentLon ?? 18.4131;
-    
+
     const map = L.map(elRef.current, { zoomControl: true, attributionControl: true }).setView([initLat, initLon], currentLat && currentLon ? 12 : 9);
 
     const tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -311,12 +311,16 @@ function HeaderRelayCard() {
     },
   });
 
-  const isOn = relayData?.state === "on";
+  // Invert state interpretation: backend "on" means relay OFF, "off" means relay ON
+  // So when backend returns "off", the relay is actually ON (and UI should show ON)
+  const isOn = relayData?.state === "off";  // Inverted mapping
   const isDisabled = isLoading || toggleMutation.isPending || !!error;
   const isUpdating = toggleMutation.isPending;
 
   const handleToggle = (checked: boolean) => {
-    const newState: "on" | "off" = checked ? "on" : "off";
+    // Swap commands: UI ON (checked=true) → send "off" → calls relay27.py off → relay turns ON ✓
+    //                UI OFF (checked=false) → send "on" → calls relay27.py on → relay turns OFF ✓
+    const newState: "on" | "off" = checked ? "off" : "on";
     toggleMutation.mutate(newState);
   };
 
@@ -543,35 +547,35 @@ export default function OverviewDashboard() {
                   <MapPin className="h-4 w-4 text-blue-400" />
                 </div>
                 Van Location
-              </CardTitle>
+            </CardTitle>
             </div>
           </CardHeader>
           <CardContent className="space-y-4 relative z-10">
             <GpsMiniMap lat={gps?.lat ?? null} lon={gps?.lon ?? null} />
 
             <div className="space-y-2.5">
-              <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center justify-between text-sm">
                 <span className="text-zinc-400">Status</span>
                 <span className={`font-semibold ${gpsHasFix ? "text-emerald-400" : "text-amber-400"}`}>
                   {gpsStatus}
                 </span>
-              </div>
+            </div>
 
-              <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center justify-between text-sm">
                 <span className="text-zinc-400">Location</span>
                 <span className="font-medium text-xs text-right max-w-[60%] truncate text-zinc-300" title={address || undefined}>
                   {gpsHasFix ? (address || `${gps?.lat?.toFixed(4)}, ${gps?.lon?.toFixed(4)}`) : "—"}
-                </span>
-              </div>
+              </span>
+            </div>
 
-              <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center justify-between text-sm">
                 <span className="text-zinc-400 flex items-center gap-2">
                   <Navigation className="h-3.5 w-3.5" />
-                  Speed
-                </span>
+                Speed
+              </span>
                 <span className="font-semibold tabular-nums text-zinc-200">
-                  {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
-                </span>
+                {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
+              </span>
               </div>
             </div>
           </CardContent>
@@ -593,29 +597,29 @@ export default function OverviewDashboard() {
                 <span className="flex items-center gap-2.5 text-zinc-300">
                   <Car className="h-4 w-4 text-blue-400" />
                   <span className="font-medium">Kombi</span>
-                </span>
+              </span>
                 <div className="flex items-center gap-2">
                   <span className="font-bold tabular-nums text-lg text-blue-300">
-                    {formatTemp(temps?.kombi?.temp_c ?? null)}
-                  </span>
+                {formatTemp(temps?.kombi?.temp_c ?? null)}
+              </span>
                   <span className="text-xs text-zinc-400">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
                 </div>
-              </div>
+            </div>
 
               <div className="flex items-center justify-between rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-amber-500/15">
                 <span className="flex items-center gap-2.5 text-zinc-300">
                   <Warehouse className="h-4 w-4 text-amber-400" />
                   <span className="font-medium">Garaža</span>
-                </span>
+              </span>
                 <div className="flex items-center gap-2">
                   <span className="font-bold tabular-nums text-lg text-amber-300">
-                    {formatTemp(temps?.garaza?.temp_c ?? null)}
-                  </span>
+                {formatTemp(temps?.garaza?.temp_c ?? null)}
+              </span>
                   <span className="text-xs text-zinc-400">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
+            </div>
+          </CardContent>
+        </Card>
 
           {/* Water Level Card */}
           <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-blue-950/30 to-blue-900/20 backdrop-blur-sm transition-all duration-300 hover:border-blue-700/50 hover:shadow-xl hover:shadow-blue-900/20 flex-1">
@@ -679,7 +683,7 @@ export default function OverviewDashboard() {
                 <CardTitle className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
                   <Settings2 className="h-5 w-5 text-purple-400" />
                   Relay Rules
-                </CardTitle>
+            </CardTitle>
                 <p className="text-sm text-zinc-400 mt-1">Automated relay control rules</p>
               </div>
               <Button
@@ -762,7 +766,7 @@ export default function OverviewDashboard() {
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800/50 border border-zinc-700/50">
                 <Activity className="h-4 w-4 text-blue-400" />
                 <span className="text-xs font-medium text-zinc-300">Live</span>
-              </div>
+      </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4 relative z-10">
@@ -779,9 +783,9 @@ export default function OverviewDashboard() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-zinc-400">Current Speed</span>
                   <span className="font-bold text-lg tabular-nums text-zinc-200">
-                    {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
-                  </span>
-                </div>
+                {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
+              </span>
+            </div>
               </div>
               <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
                 <div className="flex items-center justify-between">
@@ -790,10 +794,10 @@ export default function OverviewDashboard() {
                     {gpsStatus}
                   </span>
                 </div>
-              </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </CardContent>
+      </Card>
       </div>
     </div>
   );
