@@ -1083,6 +1083,8 @@ def _evaluate_relay_rules() -> None:
             
             # Evaluate rules in priority order
             current_state = relay_state.get("state", "off")
+            current_mode = relay_state.get("mode", "auto")
+            print(f"[Rule Engine] Relay {relay_id} current state: {current_state}, mode: {current_mode}")
             desired_state = None
             matched_rule = None
             reason = None
@@ -1129,7 +1131,7 @@ def _evaluate_relay_rules() -> None:
             # Apply action if state should change
             if desired_state:
                 if desired_state == current_state:
-                    print(f"[Rule Engine] Relay {relay_id} already in desired state {desired_state}, no action needed")
+                    print(f"[Rule Engine] WARNING: Relay {relay_id} database shows state={current_state}, but rule wants {desired_state}. State mismatch? Physical relay may be in different state.")
                 else:
                     print(f"[Rule Engine] Changing relay {relay_id} from {current_state} to {desired_state} (reason: {reason})")
             else:
@@ -1159,6 +1161,7 @@ def _evaluate_relay_rules() -> None:
                             
                             if proc.returncode == 0:
                                 # Success: update state
+                                print(f"[Rule Engine] Command succeeded, updating database state from {current_state} to {desired_state}")
                                 db_set_relay_state_new(relay_id, desired_state, "auto")
                                 db_log_relay_event(
                                     relay_id, "rule", current_state, desired_state,
@@ -1166,6 +1169,7 @@ def _evaluate_relay_rules() -> None:
                                 )
                                 if matched_rule:
                                     db_update_rule_last_triggered(matched_rule["id"])
+                                print(f"[Rule Engine] State updated successfully")
                             else:
                                 # Command failed
                                 error_msg = f"Command failed: {proc.stderr.strip()}"
