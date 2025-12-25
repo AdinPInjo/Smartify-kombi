@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { apiFetch } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
 
 type TempPayload = {
   ts: number | null;
@@ -240,88 +241,107 @@ function GpsTrackMap({ data, currentLat, currentLon }: { data: TrackPayload | nu
 function HeaderRelayCard() {
   const queryClient = useQueryClient();
 
-  // Fetch current relay state
-  const { data: relayData, isLoading, error } = useQuery({
-    queryKey: ["relay", "header"],
+  // Fetch heater relay from new API
+  const { data: relaysResponse, isLoading, error } = useQuery({
+    queryKey: ["relays"],
     queryFn: async () => {
-      const r = await apiFetch("/api/relay/header", { cache: "no-store" });
-      if (!r.ok) throw new Error(`Relay API returned ${r.status}`);
-      return (await r.json()) as {
-        ok: boolean;
+      const r = await apiFetch("/api/relays", { cache: "no-store" });
+      if (!r.ok) throw new Error(`Relays API returned ${r.status}`);
+      const data = await r.json();
+      // Find heater relay
+      const heater = data.relays?.find((relay: any) => relay.name === "heater");
+      if (!heater) throw new Error("Heater relay not found");
+      return heater as {
+        id: string;
         name: string;
         pin: number;
         state: "on" | "off";
+        mode: "auto" | "manual";
+        manual_until: number | null;
+        updated_at: number | null;
+        is_enabled: boolean;
       };
     },
     retry: 1,
+    refetchInterval: 5000, // Refresh every 5 seconds
   });
 
-  // Mutation to toggle relay state
+  // Mutation to toggle relay state (manual mode)
   const toggleMutation = useMutation({
     mutationFn: async (newState: "on" | "off") => {
-      const r = await apiFetch("/api/relay/header", {
+      if (!relaysResponse) throw new Error("Relay not loaded");
+      
+      // Backend stores actual hardware command state
+      // UI ON → relay ON → need to send command "off" (because relay script is inverted)
+      // So when UI wants ON, we send "off" to API, which executes "off" command (turns relay ON)
+      const hardwareState = newState === "on" ? "off" : "on";
+      
+      const r = await apiFetch(`/api/relays/${relaysResponse.id}/state`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ state: newState }),
+        body: JSON.stringify({ 
+          state: hardwareState,  // Hardware command state
+          mode: "manual",
+        }),
         cache: "no-store",
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({ error: "unknown" }));
         throw new Error(err.message || `Failed to set relay: ${r.status}`);
       }
-      return (await r.json()) as {
-        ok: boolean;
-        name: string;
-        pin: number;
-        state: "on" | "off";
-      };
+      const result = await r.json();
+      // Refetch relays to get updated state
+      await queryClient.invalidateQueries({ queryKey: ["relays"] });
+      return result;
     },
-    onMutate: async (newState) => {
-      // Cancel outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ["relay", "header"] });
-      
-      // Snapshot previous value
-      const previousData = queryClient.getQueryData<{ ok: boolean; name: string; pin: number; state: "on" | "off" }>(["relay", "header"]);
-      
-      // Optimistically update
-      const optimisticData = previousData 
-        ? { ...previousData, state: newState }
-        : { ok: true, name: "header", pin: 27, state: newState };
-      queryClient.setQueryData(["relay", "header"], optimisticData);
-      
-      return { previousData };
-    },
-    onSuccess: (data) => {
-      // Update query cache with actual response
-      queryClient.setQueryData(["relay", "header"], data);
-    },
-    onError: (error, newState, context) => {
+    onError: (error) => {
       console.error("[HeaderRelayCard] Failed to toggle relay:", error);
       toast.error("Failed to toggle relay", {
         description: error instanceof Error ? error.message : "Unknown error occurred",
       });
-      // Revert optimistic update
-      if (context?.previousData) {
-        queryClient.setQueryData(["relay", "header"], context.previousData);
-      } else {
-        queryClient.invalidateQueries({ queryKey: ["relay", "header"] });
-      }
+      queryClient.invalidateQueries({ queryKey: ["relays"] });
     },
   });
 
-  // Invert state interpretation: backend "on" means relay OFF, "off" means relay ON
-  // So when backend returns "off", the relay is actually ON (and UI should show ON)
-  const isOn = relayData?.state === "off";  // Inverted mapping
-  const isDisabled = isLoading || toggleMutation.isPending || !!error;
-  const isUpdating = toggleMutation.isPending;
+  // Mutation to return to auto mode
+  const setAutoMutation = useMutation({
+    mutationFn: async () => {
+      if (!relaysResponse) throw new Error("Relay not loaded");
+      const r = await apiFetch(`/api/relays/${relaysResponse.id}/auto`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ error: "unknown" }));
+        throw new Error(err.message || `Failed to set auto mode: ${r.status}`);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["relays"] });
+      return await r.json();
+    },
+    onError: (error) => {
+      toast.error("Failed to set auto mode", {
+        description: error instanceof Error ? error.message : "Unknown error occurred",
+      });
+    },
+  });
+
+  // Invert state: backend stores actual hardware state, but UI expects inverted display
+  const isOn = relaysResponse?.state === "off";  // Inverted: "off" in backend means relay is ON
+  const isManual = relaysResponse?.mode === "manual";
+  const manualUntil = relaysResponse?.manual_until;
+  const isDisabled = isLoading || toggleMutation.isPending || setAutoMutation.isPending || !!error;
+  const isUpdating = toggleMutation.isPending || setAutoMutation.isPending;
 
   const handleToggle = (checked: boolean) => {
-    // Swap commands: UI ON (checked=true) → send "off" → calls relay27.py off → relay turns ON ✓
-    //                UI OFF (checked=false) → send "on" → calls relay27.py on → relay turns OFF ✓
-    const newState: "on" | "off" = checked ? "off" : "on";
+    // UI ON → hardware ON, but API expects inverted command
+    const newState: "on" | "off" = checked ? "on" : "off";
     toggleMutation.mutate(newState);
+  };
+
+  const handleReturnToAuto = () => {
+    setAutoMutation.mutate();
   };
 
   return (
@@ -338,7 +358,18 @@ function HeaderRelayCard() {
       <CardContent className="space-y-4 relative z-10">
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-1">
-            <span className="text-sm font-medium text-zinc-200">Relay Control</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-zinc-200">Relay Control</span>
+              {isManual ? (
+                <span className="text-xs px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                  Manual
+                </span>
+              ) : (
+                <span className="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                  Auto
+                </span>
+              )}
+            </div>
             {error ? (
               <span className="text-xs text-red-400">Offline</span>
             ) : isUpdating ? (
@@ -346,6 +377,11 @@ function HeaderRelayCard() {
             ) : (
               <span className={`text-xs ${isOn ? "text-emerald-400" : "text-zinc-400"}`}>
                 {isOn ? "ON" : "OFF"}
+              </span>
+            )}
+            {manualUntil && manualUntil > Date.now() / 1000 && (
+              <span className="text-xs text-zinc-500">
+                Manual until {new Date(manualUntil * 1000).toLocaleTimeString()}
               </span>
             )}
           </div>
@@ -361,10 +397,158 @@ function HeaderRelayCard() {
             />
           </div>
         </div>
+        {isManual && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full bg-zinc-800/50 border-zinc-700/50 text-zinc-300 hover:bg-zinc-700/50"
+            onClick={handleReturnToAuto}
+            disabled={isDisabled}
+          >
+            Return to Auto
+          </Button>
+        )}
         {error && (
           <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-2 py-1">
             Failed to connect to relay
           </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function RelayRulesWidget() {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+
+  // Fetch heater relay
+  const { data: relaysResponse } = useQuery({
+    queryKey: ["relays"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/relays", { cache: "no-store" });
+      if (!r.ok) throw new Error(`Relays API returned ${r.status}`);
+      const data = await r.json();
+      return data.relays?.find((relay: any) => relay.name === "heater");
+    },
+    retry: 1,
+  });
+
+  const heaterId = relaysResponse?.id;
+
+  // Fetch rules for heater relay
+  const { data: rulesResponse, isLoading } = useQuery({
+    queryKey: ["relay-rules", heaterId],
+    queryFn: async () => {
+      if (!heaterId) return { rules: [] };
+      const r = await apiFetch(`/api/relays/${heaterId}/rules`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`Rules API returned ${r.status}`);
+      return await r.json();
+    },
+    enabled: !!heaterId,
+    retry: 1,
+  });
+
+  const rules = rulesResponse?.rules || [];
+  const enabledRules = rules.filter((r: any) => r.is_enabled);
+  const lastFiredRule = rules
+    .filter((r: any) => r.last_triggered_at)
+    .sort((a: any, b: any) => (b.last_triggered_at || 0) - (a.last_triggered_at || 0))[0];
+
+  const formatRuleDescription = (rule: any) => {
+    const cond = rule.condition || {};
+    const sensor = cond.sensor || "unknown";
+    const operator = cond.operator === "below" ? "<" : ">";
+    const value = cond.value;
+    const action = rule.action === "turn_on" ? "Turn ON" : "Turn OFF";
+    return `${sensor.charAt(0).toUpperCase() + sensor.slice(1)} temp ${operator} ${value}°C → ${action}`;
+  };
+
+  const formatTimeAgo = (timestamp: number | null) => {
+    if (!timestamp) return "Never";
+    const seconds = Math.floor(Date.now() / 1000) - timestamp;
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+  };
+
+  return (
+    <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
+      <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+      <CardHeader className="pb-4 relative z-10">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
+              <Settings2 className="h-5 w-5 text-purple-400" />
+              Relay Rules
+            </CardTitle>
+            <p className="text-sm text-zinc-400 mt-1">
+              {enabledRules.length} active rule{enabledRules.length !== 1 ? "s" : ""}
+            </p>
+          </div>
+          <Button
+            size="sm"
+            className="bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 text-purple-400"
+            onClick={() => navigate("/dashboard/relays")}
+          >
+            <Plus className="h-4 w-4 mr-1.5" />
+            Manage
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4 relative z-10">
+        {lastFiredRule && (
+          <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 p-3 backdrop-blur-sm">
+            <div className="text-xs text-zinc-400 mb-1">Last fired</div>
+            <div className="text-sm font-medium text-zinc-200">{lastFiredRule.name}</div>
+            <div className="text-xs text-zinc-500 mt-1">{formatTimeAgo(lastFiredRule.last_triggered_at)}</div>
+          </div>
+        )}
+
+        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+          {isLoading ? (
+            <div className="text-sm text-zinc-400 text-center py-4">Loading rules...</div>
+          ) : rules.length === 0 ? (
+            <div className="rounded-lg border-2 border-dashed border-zinc-700/30 p-8 text-center">
+              <Settings2 className="h-8 w-8 text-zinc-600 mx-auto mb-2" />
+              <p className="text-sm text-zinc-500">No rules configured</p>
+              <p className="text-xs text-zinc-600 mt-1">Click "Manage" to create automation rules</p>
+            </div>
+          ) : (
+            rules.slice(0, 3).map((rule: any) => (
+              <div key={rule.id} className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 p-3 backdrop-blur-sm">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-sm font-semibold text-zinc-200">{rule.name}</span>
+                      {rule.is_enabled ? (
+                        <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          Active
+                        </span>
+                      ) : (
+                        <span className="text-xs px-2 py-0.5 rounded bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
+                          Disabled
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-400">{formatRuleDescription(rule)}</p>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {rules.length > 3 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full bg-zinc-800/50 border-zinc-700/50 text-zinc-300 hover:bg-zinc-700/50"
+            onClick={() => navigate("/dashboard/relays")}
+          >
+            View all {rules.length} rules
+          </Button>
         )}
       </CardContent>
     </Card>
@@ -675,84 +859,7 @@ export default function OverviewDashboard() {
       {/* Relay Rules + GPS Map Section */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Relay Rules Card (Left) */}
-        <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
-          <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-          <CardHeader className="pb-4 relative z-10">
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
-                  <Settings2 className="h-5 w-5 text-purple-400" />
-                  Relay Rules
-            </CardTitle>
-                <p className="text-sm text-zinc-400 mt-1">Automated relay control rules</p>
-              </div>
-              <Button
-                size="sm"
-                className="bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 text-purple-400"
-                onClick={() => {
-                  // Add new rule logic here
-                  console.log("Add new rule");
-                }}
-              >
-                <Plus className="h-4 w-4 mr-1.5" />
-                Add Rule
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4 relative z-10">
-            <div className="space-y-3">
-              {/* Example Rule */}
-              <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 p-4 backdrop-blur-sm">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm font-semibold text-zinc-200">Temperature Control</span>
-                      <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Active</span>
-                    </div>
-                    <p className="text-xs text-zinc-400 mt-1">
-                      If Kombi temp &lt; 5°C, turn on heater relay #3
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 w-8 p-0 text-zinc-400 hover:text-red-400"
-                    onClick={() => console.log("Delete rule")}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-zinc-500">
-                  <span>Relay: #3</span>
-                  <span>•</span>
-                  <span>Condition: Temp &lt; 5°C</span>
-                </div>
-              </div>
-
-              {/* Placeholder for more rules */}
-              <div className="rounded-lg border-2 border-dashed border-zinc-700/30 p-8 text-center">
-                <Settings2 className="h-8 w-8 text-zinc-600 mx-auto mb-2" />
-                <p className="text-sm text-zinc-500">No additional rules configured</p>
-                <p className="text-xs text-zinc-600 mt-1">Click "Add Rule" to create automation</p>
-              </div>
-            </div>
-
-            <div className="pt-2 border-t border-zinc-800/50">
-              <div className="flex items-center justify-between text-xs text-zinc-500">
-                <span>Rules are executed on Raspberry Pi</span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs bg-zinc-800/50 border-zinc-700/50 text-zinc-300 hover:bg-zinc-700/50"
-                  onClick={() => console.log("Save rules")}
-                >
-                  <Save className="h-3 w-3 mr-1" />
-                  Save Rules
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <RelayRulesWidget />
 
         {/* GPS Map Card (Right) */}
         <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
