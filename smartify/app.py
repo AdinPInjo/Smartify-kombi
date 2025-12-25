@@ -1262,23 +1262,29 @@ def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=
     if err:
         return err
     
-    relays = db_list_relay_devices()
-    result = []
-    for relay in relays:
-        relay_id = relay["id"]
-        state = db_get_relay_state_new(relay_id)
-        result.append({
-            "id": relay_id,
-            "name": relay["name"],
-            "pin": relay["pin"],
-            "state": state.get("state", "off") if state else "off",
-            "mode": state.get("mode", "auto") if state else "auto",
-            "manual_until": state.get("manual_until") if state else None,
-            "updated_at": state.get("updated_at") if state else None,
-            "is_enabled": bool(relay.get("is_enabled", True)),
-        })
-    
-    return JSONResponse({"ok": True, "relays": result})
+    try:
+        relays = db_list_relay_devices()
+        result = []
+        for relay in relays:
+            relay_id = relay["id"]
+            state = db_get_relay_state_new(relay_id)
+            result.append({
+                "id": relay_id,
+                "name": relay["name"],
+                "pin": relay["pin"],
+                "state": state.get("state", "off") if state else "off",
+                "mode": state.get("mode", "auto") if state else "auto",
+                "manual_until": state.get("manual_until") if state else None,
+                "updated_at": state.get("updated_at") if state else None,
+                "is_enabled": bool(relay.get("is_enabled", True)),
+            })
+        
+        return JSONResponse({"ok": True, "relays": result})
+    except Exception as e:
+        print(f"[API] Error listing relays: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "error": str(e), "relays": []}, status_code=500)
 
 
 @app.get("/api/relays/{relay_id}")

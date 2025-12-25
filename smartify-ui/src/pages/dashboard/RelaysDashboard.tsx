@@ -61,18 +61,30 @@ function RelaysDashboard() {
   const [selectedRelayId, setSelectedRelayId] = useState<string | null>(null);
 
   // Fetch all relays
-  const { data: relaysResponse, isLoading: isLoadingRelays } = useQuery({
+  const { data: relaysResponse, isLoading: isLoadingRelays, error: relaysError } = useQuery({
     queryKey: ["relays"],
     queryFn: async () => {
       const r = await apiFetch("/api/relays", { cache: "no-store" });
-      if (!r.ok) throw new Error(`Relays API returned ${r.status}`);
+      if (!r.ok) {
+        const errorText = await r.text();
+        console.error("[RelaysDashboard] API error:", r.status, errorText);
+        throw new Error(`Relays API returned ${r.status}`);
+      }
       const data = await r.json();
-      return data.relays as Relay[];
+      console.log("[RelaysDashboard] API response:", data);
+      // Ensure we have a valid relays array
+      if (!data || typeof data !== "object") {
+        console.error("[RelaysDashboard] Invalid response format:", data);
+        throw new Error("Invalid API response format");
+      }
+      const relays = Array.isArray(data.relays) ? data.relays : [];
+      console.log("[RelaysDashboard] Parsed relays:", relays);
+      return relays as Relay[];
     },
     retry: 1,
   });
 
-  const relays = relaysResponse || [];
+  const relays = Array.isArray(relaysResponse) ? relaysResponse : [];
   const heaterRelay = relays.find((r) => r.name === "heater");
 
   // Fetch rules for heater relay
@@ -224,6 +236,17 @@ function RelaysDashboard() {
     return (
       <div className="space-y-6">
         <div className="text-zinc-400">Loading relays...</div>
+      </div>
+    );
+  }
+
+  if (relaysError) {
+    return (
+      <div className="space-y-6">
+        <div className="text-red-400">
+          Error loading relays: {relaysError instanceof Error ? relaysError.message : "Unknown error"}
+        </div>
+        <Button onClick={() => queryClient.invalidateQueries({ queryKey: ["relays"] })}>Retry</Button>
       </div>
     );
   }

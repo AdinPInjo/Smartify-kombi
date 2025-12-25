@@ -248,8 +248,9 @@ function HeaderRelayCard() {
       const r = await apiFetch("/api/relays", { cache: "no-store" });
       if (!r.ok) throw new Error(`Relays API returned ${r.status}`);
       const data = await r.json();
-      // Find heater relay
-      const heater = data.relays?.find((relay: any) => relay.name === "heater");
+      // Find heater relay - ensure relays is an array
+      const relays = Array.isArray(data.relays) ? data.relays : [];
+      const heater = relays.find((relay: any) => relay.name === "heater");
       if (!heater) throw new Error("Heater relay not found");
       return heater as {
         id: string;
@@ -429,7 +430,12 @@ function RelayRulesWidget() {
       const r = await apiFetch("/api/relays", { cache: "no-store" });
       if (!r.ok) throw new Error(`Relays API returned ${r.status}`);
       const data = await r.json();
-      return data.relays?.find((relay: any) => relay.name === "heater");
+      // Ensure we have a valid relays array
+      if (!data || typeof data !== "object") {
+        throw new Error("Invalid API response format");
+      }
+      const relays = Array.isArray(data.relays) ? data.relays : [];
+      return relays.find((relay: any) => relay.name === "heater") || null;
     },
     retry: 1,
   });
