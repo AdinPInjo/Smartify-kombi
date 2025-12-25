@@ -4,8 +4,10 @@ import L from "leaflet";
 import { MapPin, Navigation, Car, Warehouse, Thermometer, Battery, Power, Droplet, Activity, TrendingUp, Plus, Trash2, Save, Settings2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { apiFetch } from "@/lib/utils";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 type TempPayload = {
   ts: number | null;
@@ -233,6 +235,136 @@ function GpsTrackMap({ data, currentLat, currentLon }: { data: TrackPayload | nu
   }, [data, currentLat, currentLon]);
 
   return <div ref={elRef} className="h-[420px] w-full rounded-xl overflow-hidden border border-zinc-800/50" />;
+}
+
+function HeaderRelayCard() {
+  const queryClient = useQueryClient();
+
+  // Fetch current relay state
+  const { data: relayData, isLoading, error } = useQuery({
+    queryKey: ["relay", "header"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/relay/header", { cache: "no-store" });
+      if (!r.ok) throw new Error(`Relay API returned ${r.status}`);
+      return (await r.json()) as {
+        ok: boolean;
+        name: string;
+        pin: number;
+        state: "on" | "off";
+      };
+    },
+    retry: 1,
+  });
+
+  // Mutation to toggle relay state
+  const toggleMutation = useMutation({
+    mutationFn: async (newState: "on" | "off") => {
+      const r = await apiFetch("/api/relay/header", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ state: newState }),
+        cache: "no-store",
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ error: "unknown" }));
+        throw new Error(err.message || `Failed to set relay: ${r.status}`);
+      }
+      return (await r.json()) as {
+        ok: boolean;
+        name: string;
+        pin: number;
+        state: "on" | "off";
+      };
+    },
+    onMutate: async (newState) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ["relay", "header"] });
+      
+      // Snapshot previous value
+      const previousData = queryClient.getQueryData<{ ok: boolean; name: string; pin: number; state: "on" | "off" }>(["relay", "header"]);
+      
+      // Optimistically update
+      const optimisticData = previousData 
+        ? { ...previousData, state: newState }
+        : { ok: true, name: "header", pin: 27, state: newState };
+      queryClient.setQueryData(["relay", "header"], optimisticData);
+      
+      return { previousData };
+    },
+    onSuccess: (data) => {
+      // Update query cache with actual response
+      queryClient.setQueryData(["relay", "header"], data);
+    },
+    onError: (error, newState, context) => {
+      console.error("[HeaderRelayCard] Failed to toggle relay:", error);
+      toast.error("Failed to toggle relay", {
+        description: error instanceof Error ? error.message : "Unknown error occurred",
+      });
+      // Revert optimistic update
+      if (context?.previousData) {
+        queryClient.setQueryData(["relay", "header"], context.previousData);
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["relay", "header"] });
+      }
+    },
+  });
+
+  const isOn = relayData?.state === "on";
+  const isDisabled = isLoading || toggleMutation.isPending || !!error;
+  const isUpdating = toggleMutation.isPending;
+
+  const handleToggle = (checked: boolean) => {
+    const newState: "on" | "off" = checked ? "on" : "off";
+    toggleMutation.mutate(newState);
+  };
+
+  return (
+    <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
+      <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+      <CardHeader className="pb-3 relative z-10">
+        <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+          <div className="p-2 rounded-lg bg-orange-500/10 border border-orange-500/20">
+            <Power className="h-4 w-4 text-orange-400" />
+          </div>
+          Header ON-OFF
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 relative z-10">
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-zinc-200">Relay Control</span>
+            {error ? (
+              <span className="text-xs text-red-400">Offline</span>
+            ) : isUpdating ? (
+              <span className="text-xs text-zinc-400">Updating...</span>
+            ) : (
+              <span className={`text-xs ${isOn ? "text-emerald-400" : "text-zinc-400"}`}>
+                {isOn ? "ON" : "OFF"}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            {isUpdating && (
+              <div className="h-4 w-4 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
+            )}
+            <Switch
+              checked={isOn}
+              onCheckedChange={handleToggle}
+              disabled={isDisabled}
+              className="data-[state=checked]:bg-orange-500 data-[state=unchecked]:bg-zinc-700"
+            />
+          </div>
+        </div>
+        {error && (
+          <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-2 py-1">
+            Failed to connect to relay
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function OverviewDashboard() {
@@ -532,28 +664,8 @@ export default function OverviewDashboard() {
           </CardContent>
         </Card>
 
-        {/* Heater Card */}
-        <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
-          <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-          <CardHeader className="pb-3 relative z-10">
-            <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-              <div className="p-2 rounded-lg bg-orange-500/10 border border-orange-500/20">
-                <Power className="h-4 w-4 text-orange-400" />
-              </div>
-              Heater
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 relative z-10">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-zinc-400">Status</span>
-              <span className="font-semibold text-zinc-200">—</span>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-zinc-400">Mode</span>
-              <span className="font-semibold text-zinc-200">—</span>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Header ON-OFF Card */}
+        <HeaderRelayCard />
       </div>
 
       {/* Relay Rules + GPS Map Section */}

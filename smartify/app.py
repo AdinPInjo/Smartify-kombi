@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, Request, Form, Header
+from fastapi import FastAPI, Request, Form, Header, Body
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -106,6 +106,16 @@ def db_init() -> None:
         );
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS relay_states (
+            name TEXT PRIMARY KEY,
+            pin INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -163,6 +173,32 @@ def db_query_gps_since(since_ts: int, limit: int = 1000) -> List[Dict[str, Any]]
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+
+def db_get_relay_state(name: str) -> Optional[Dict[str, Any]]:
+    """Get relay state from database. Returns None if not found."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT name, pin, state, updated_at FROM relay_states WHERE name = ?", (name,))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return dict(row)
+    return None
+
+
+def db_set_relay_state(name: str, pin: int, state: str) -> None:
+    """Set relay state in database. state must be 'on' or 'off'."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    now = int(time.time())
+    cur.execute(
+        "INSERT OR REPLACE INTO relay_states (name, pin, state, updated_at) VALUES (?, ?, ?, ?)",
+        (name, pin, state, now),
+    )
+    conn.commit()
+    conn.close()
 
 
 # =========================
@@ -466,6 +502,8 @@ def _gps_reader_thread() -> None:
 @app.on_event("startup")
 def on_startup() -> None:
     db_init()
+    # Initialize relay states
+    _init_relay_state(HEADER_RELAY_NAME, HEADER_RELAY_PIN)
     # Start GPS reader thread
     t_gps = threading.Thread(target=_gps_reader_thread, daemon=True)
     t_gps.start()
@@ -636,6 +674,69 @@ def api_gps_track(
 
 
 # =========================
+# Relay Control
+# =========================
+
+_relay_lock = threading.Lock()
+RELAY_SCRIPT = "/usr/local/bin/relay27.py"
+HEADER_RELAY_NAME = "header"
+HEADER_RELAY_PIN = 27
+
+
+def _set_relay_state(name: str, pin: int, state: str, save_to_db: bool = True) -> Dict[str, Any]:
+    """
+    Set relay state by executing sudo command.
+    state must be 'on' or 'off'.
+    save_to_db: if True, also persist state to database (default True).
+    Returns dict with success status.
+    """
+    if state not in ("on", "off"):
+        return {"ok": False, "error": "invalid_state", "message": "state must be 'on' or 'off'"}
+
+    try:
+        cmd = ["sudo", RELAY_SCRIPT, state]
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        
+        if proc.returncode != 0:
+            return {
+                "ok": False,
+                "error": "relay_command_failed",
+                "message": proc.stderr.strip() or f"Command failed with code {proc.returncode}",
+            }
+        
+        # Store state in database if requested
+        if save_to_db:
+            db_set_relay_state(name, pin, state)
+        
+        return {"ok": True, "state": state}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "timeout", "message": "Relay command timed out"}
+    except Exception as e:
+        return {"ok": False, "error": "exception", "message": str(e)}
+
+
+def _init_relay_state(name: str, pin: int) -> None:
+    """
+    Initialize relay state on startup.
+    Reads state from DB (defaults to 'off' if not found) and sets the relay.
+    Does NOT save to DB (already in DB).
+    """
+    stored = db_get_relay_state(name)
+    state = stored["state"] if stored else "off"
+    
+    # Set the actual relay to the stored state (don't save to DB, it's already there)
+    result = _set_relay_state(name, pin, state, save_to_db=False)
+    if not result.get("ok"):
+        # Log error but don't crash on startup
+        print(f"[Relay] Warning: Failed to initialize {name} relay to {state}: {result.get('message')}")
+
+
+# =========================
 # API: Network (nmcli)
 # =========================
 
@@ -679,6 +780,72 @@ def api_network_scan(request: Request, x_api_key: Optional[str] = Header(default
         rows.append({"ssid": ssid, "signal": signal, "security": security})
 
     return JSONResponse({"networks": rows})
+
+
+# =========================
+# API: Relay Control
+# =========================
+
+@app.get("/api/relay/header")
+def api_relay_header_get(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    stored = db_get_relay_state(HEADER_RELAY_NAME)
+    if stored:
+        return JSONResponse({
+            "ok": True,
+            "name": HEADER_RELAY_NAME,
+            "pin": HEADER_RELAY_PIN,
+            "state": stored["state"],
+        })
+    else:
+        # Default to 'off' if not in database
+        return JSONResponse({
+            "ok": True,
+            "name": HEADER_RELAY_NAME,
+            "pin": HEADER_RELAY_PIN,
+            "state": "off",
+        })
+
+
+@app.post("/api/relay/header")
+def api_relay_header_post(
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    # Extract and validate state from body
+    state = body.get("state", "").strip().lower()
+    if state not in ("on", "off"):
+        return JSONResponse({"ok": False, "error": "invalid_state", "message": "state must be 'on' or 'off'"}, status_code=400)
+    
+    # Prevent rapid toggles with lock
+    if not _relay_lock.acquire(blocking=False):
+        return JSONResponse({"ok": False, "error": "busy", "message": "Another relay operation in progress"}, status_code=429)
+    
+    try:
+        result = _set_relay_state(HEADER_RELAY_NAME, HEADER_RELAY_PIN, state)
+        if result.get("ok"):
+            return JSONResponse({
+                "ok": True,
+                "name": HEADER_RELAY_NAME,
+                "pin": HEADER_RELAY_PIN,
+                "state": state,
+            })
+        else:
+            return JSONResponse({
+                "ok": False,
+                "error": result.get("error", "unknown"),
+                "message": result.get("message", "Failed to set relay state"),
+            }, status_code=500)
+    finally:
+        _relay_lock.release()
 
 
 # =========================
