@@ -1138,12 +1138,13 @@ def _evaluate_temperature_condition(condition: Dict[str, Any], temp_data: Dict[s
     return result
 
 
-def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Optional[str] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Optional[str] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool]:
     """
     Deterministically evaluate enabled rules for a relay.
-    Returns (desired_state, matched_rule) tuple.
-    desired_state is "on" or "off" based on first matching rule, or "off" if no rule matches.
+    Returns (desired_state, matched_rule, sensor_data_available) tuple.
+    desired_state is "on" or "off" based on first matching rule, or None if sensor data unavailable.
     matched_rule is the rule dict that matched, or None if no rule matched.
+    sensor_data_available is False if sensor data is unavailable (should preserve current state).
     
     Cooldown only prevents triggering a state CHANGE, not maintaining the current state.
     """
@@ -1151,7 +1152,21 @@ def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Opti
     enabled_rules = [r for r in rules if r.get("is_enabled", True)]
     
     if not enabled_rules:
-        return ("off", None)  # No enabled rules -> default to off
+        return ("off", None, True)  # No enabled rules -> default to off (sensor data not needed)
+    
+    # Check if we have valid sensor data
+    sensors = temp_data.get("sensors", [])
+    if not sensors:
+        # No sensor data available - return None to preserve current state
+        print(f"[Rule Engine] No sensor data available, preserving current state")
+        return (None, None, False)
+    
+    # Check if any sensor readings are OK
+    has_valid_data = any(s.get("ok", False) for s in sensors)
+    if not has_valid_data:
+        # No valid sensor data - return None to preserve current state
+        print(f"[Rule Engine] No valid sensor data available, preserving current state")
+        return (None, None, False)
     
     # Sort by priority (lower number = higher priority), then by creation time
     enabled_rules.sort(key=lambda x: (x.get("priority", 100), x.get("created_at", 0)))
@@ -1178,7 +1193,7 @@ def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Opti
         # If it would maintain current state, cooldown doesn't apply
         if current_state is not None and rule_desired_state == current_state:
             # Rule wants same state as current - cooldown doesn't apply, rule matches
-            return (rule_desired_state, rule)
+            return (rule_desired_state, rule, True)
         
         # Rule would change state - check cooldown
         last_triggered = rule.get("last_triggered_at")
@@ -1190,10 +1205,10 @@ def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Opti
                 continue
         
         # Rule matches and either no cooldown or cooldown expired - first match wins
-        return (rule_desired_state, rule)
+        return (rule_desired_state, rule, True)
     
-    # No rule matched -> default to off
-    return ("off", None)
+    # No rule matched -> default to off (but only if we have valid sensor data)
+    return ("off", None, True)
 
 
 def reconcile_relay(relay_id: str, force: bool = False) -> bool:
@@ -1251,29 +1266,45 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         # Auto mode: evaluate rules
         temp_data = _temp_latest.copy()
         # Pass current_actual to evaluate_rules so cooldown only applies to state changes
-        desired_state, matched_rule = evaluate_rules(relay_id, temp_data, current_actual)
-        source = "rule"
-        if matched_rule:
-            # Build reason string
-            condition = matched_rule.get("condition", {})
-            sensor_name = condition.get("sensor", "")
-            operator = condition.get("operator", "")
-            value = condition.get("value")
-            sensor_reading = None
-            for sr in temp_data.get("sensors", []):
-                if sr.get("sensor_index") == (0 if sensor_name == "kombi" else 1):
-                    sensor_reading = sr
-                    break
-            temp = sensor_reading.get("temperature_c") if sensor_reading else None
-            reason = f"Rule '{matched_rule.get('name')}': {sensor_name.capitalize()} temp {operator} {value}°C (current: {temp:.1f}°C)"
-            # Don't update last_triggered_at here - only update when hardware state actually changes
+        desired_state_result, matched_rule, sensor_data_available = evaluate_rules(relay_id, temp_data, current_actual)
+        
+        if not sensor_data_available:
+            # Sensor data unavailable - preserve current desired_state
+            # Don't change desired_state, keep it as is
+            print(f"[Reconcile] Sensor data unavailable, preserving current desired_state: {current_desired}")
+            desired_state = current_desired  # Keep current desired_state
+            source = "rule"
+            reason = "Sensor data unavailable, preserving current state"
+            matched_rule = None  # No rule matched due to sensor failure
         else:
-            reason = "No rule matched, default to off"
+            # Sensor data available - use the result
+            desired_state = desired_state_result
+            source = "rule"
+            if matched_rule:
+                # Build reason string
+                condition = matched_rule.get("condition", {})
+                sensor_name = condition.get("sensor", "")
+                operator = condition.get("operator", "")
+                value = condition.get("value")
+                sensor_reading = None
+                for sr in temp_data.get("sensors", []):
+                    if sr.get("sensor_index") == (0 if sensor_name == "kombi" else 1):
+                        sensor_reading = sr
+                        break
+                temp = sensor_reading.get("temperature_c") if sensor_reading else None
+                reason = f"Rule '{matched_rule.get('name')}': {sensor_name.capitalize()} temp {operator} {value}°C (current: {temp:.1f}°C)"
+                # Don't update last_triggered_at here - only update when hardware state actually changes
+            else:
+                reason = "No rule matched, default to off"
     
-    # Step 3: Update desired_state in database
-    if desired_state != current_desired:
+    # Step 3: Update desired_state in database (only if it changed)
+    if desired_state is not None and desired_state != current_desired:
         db_update_relay_state_new(relay_id, desired_state=desired_state)
         print(f"[Reconcile] Updated desired_state for relay {relay_id}: {current_desired} -> {desired_state} ({reason})")
+    elif desired_state is None:
+        # desired_state is None means sensor data unavailable - use current_desired
+        desired_state = current_desired
+        print(f"[Reconcile] Sensor data unavailable, preserving desired_state for relay {relay_id}: {current_desired} ({reason})")
     
     # Step 4: Check if hardware needs to be updated
     if desired_state == current_actual:
