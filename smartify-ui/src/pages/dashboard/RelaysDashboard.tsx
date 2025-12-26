@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ToggleLeft, Power, Plus, Trash2, Edit2, Clock, Pause, Play } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -308,6 +309,25 @@ function RelaysDashboard() {
         const isOn = relay.state === "on"; // Logical state: "on" means relay should be ON
         const isManual = relay.mode === "manual";
         const relayRules = rules.filter((r) => r.relay_id === relay.id);
+        
+        // Check if any enabled rule for this relay is in cooldown
+        const now = Math.floor(Date.now() / 1000);
+        const isInCooldown = relayRules.some((rule: Rule) => {
+          if (!rule.is_enabled || !rule.last_triggered_at) return false;
+          const age = now - rule.last_triggered_at;
+          return age < rule.cooldown_seconds;
+        });
+        
+        // Get the rule in cooldown (if any) to show cooldown time remaining
+        const ruleInCooldown = relayRules.find((rule: Rule) => {
+          if (!rule.is_enabled || !rule.last_triggered_at) return false;
+          const age = now - rule.last_triggered_at;
+          return age < rule.cooldown_seconds;
+        });
+        
+        const cooldownRemaining = ruleInCooldown 
+          ? Math.max(0, ruleInCooldown.cooldown_seconds - (now - ruleInCooldown.last_triggered_at))
+          : 0;
 
           return (
           <Card
@@ -361,12 +381,30 @@ function RelaysDashboard() {
                   >
                     {isManual ? "Manual" : "Auto"}
                   </Button>
-                  <Switch
-                    checked={isOn}
-                    onCheckedChange={(checked) => handleRelayToggle(relay, checked)}
-                    disabled={toggleRelayMutation.isPending}
-                    className="data-[state=checked]:bg-orange-500 data-[state=unchecked]:bg-zinc-700"
-                  />
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div>
+                          <Switch
+                            checked={isOn}
+                            onCheckedChange={(checked) => handleRelayToggle(relay, checked)}
+                            disabled={toggleRelayMutation.isPending || isInCooldown}
+                            className="data-[state=checked]:bg-orange-500 data-[state=unchecked]:bg-zinc-700"
+                          />
+                        </div>
+                      </TooltipTrigger>
+                      {isInCooldown && (
+                        <TooltipContent>
+                          <p className="text-sm">
+                            Relay is in cooldown period. Please wait {cooldownRemaining}s before manual control.
+                          </p>
+                          <p className="text-xs text-zinc-400 mt-1">
+                            Cooldown prevents rapid toggling and allows automation rules to stabilize.
+                          </p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
               </div>
             </CardHeader>
