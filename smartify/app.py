@@ -2021,120 +2021,144 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
     """
     Determine if relay is in a pending/transitional state (cooldown, reconciling, startup, sensor issues).
     Returns dict with pending status, human-readable message, and detailed sensor/cooldown info.
+    NEVER throws - always returns safe defaults on error.
     """
+    # Initialize all variables at top to prevent UnboundLocalError
     now = int(time.time())
     pending = False
-    pending_reason = None
-    pending_message = None
-    cooldown_remaining = None
-    sensor_age_seconds = None
-    sensor_sample_count = None
-    sensor_is_ready = None
-    sensor_is_stale = None
+    pending_reason: Optional[str] = None
+    pending_message: Optional[str] = None
+    cooldown_remaining: Optional[int] = None
+    sensor_age_seconds: Optional[int] = None
+    sensor_sample_count: Optional[int] = None
+    sensor_is_ready: Optional[bool] = None
+    sensor_is_stale: Optional[bool] = None
+    source: Optional[str] = None
+    mode: str = "auto"  # Default mode
     
-    # Get relay state
-    relay_state = db_get_relay_state_new(relay_id)
-    if not relay_state:
-        # State not found - could be during startup
+    try:
+        # Get relay state
+        relay_state = db_get_relay_state_new(relay_id)
+        if not relay_state:
+            # State not found - could be during startup
+            return {
+                "pending": True,
+                "pending_reason": "startup",
+                "pending_message": "System starting… initializing sensors",
+                "cooldown_remaining": None,
+                "sensor_age_seconds": None,
+                "sensor_sample_count": None,
+                "sensor_is_ready": None,
+                "sensor_is_stale": None,
+                "source": "startup"
+            }
+        
+        actual_state = relay_state.get("actual_state")
+        desired_state = relay_state.get("desired_state")
+        last_applied_at = relay_state.get("last_applied_at", 0)
+        mode = relay_state.get("mode", "auto")  # Update mode from state
+        
+        # Check if actual_state is unknown (startup/reconciling)
+        if actual_state is None or actual_state == "":
+            pending = True
+            pending_reason = "reconciling"
+            pending_message = "Applying relay state… please wait"
+            source = "startup" if last_applied_at == 0 else "rule"
+        
+        # Check if desired_state differs from actual_state (reconciling)
+        elif desired_state and desired_state != actual_state:
+            pending = True
+            pending_reason = "reconciling"
+            pending_message = "Applying relay state… please wait"
+            source = mode  # "manual" or "rule"
+        
+        # Check sensor status for AUTO mode relays (if rules depend on sensors)
+        if mode == "auto" and not pending:
+            rules = db_list_relay_rules(relay_id)
+            enabled_rules = [r for r in rules if r.get("is_enabled", True)]
+            
+            # Check if any rule depends on a sensor that is stale or warming up
+            for rule in enabled_rules:
+                condition = rule.get("condition", {})
+                if condition.get("type") == "temperature":
+                    sensor_name = condition.get("sensor", "")
+                    if sensor_name:
+                        snapshot = get_sensor_snapshot(sensor_name)
+                        if not snapshot:
+                            continue  # Skip if snapshot missing
+                        
+                        # Extract sensor info for response
+                        sensor_age_seconds = snapshot.get("age_seconds", 0)
+                        sensor_sample_count = snapshot.get("sample_count", 0)
+                        sensor_is_ready = snapshot.get("is_ready", False)
+                        sensor_is_stale = snapshot.get("is_stale", False)
+                        
+                        # Check is_ready first (before age calculations)
+                        if not sensor_is_ready:
+                            pending = True
+                            pending_reason = "sensor_warming_up"
+                            pending_message = f"Waiting for temperature snapshot… collected {sensor_sample_count}/{SENSOR_WARMUP_SAMPLES} samples"
+                            source = "sensor"
+                            break
+                        
+                        # Now safe to check is_stale and use age_seconds
+                        if sensor_is_stale:
+                            pending = True
+                            # Safely coerce age_seconds to int (should never be None, but defensive)
+                            if sensor_age_seconds is None:
+                                sensor_age_seconds = 0
+                            sensor_age_seconds = int(sensor_age_seconds)
+                            age_min = sensor_age_seconds // 60
+                            pending_reason = "sensor_stale"
+                            pending_message = f"No valid temperature reading for {age_min} minute{'s' if age_min != 1 else ''}. Relay forced OFF for safety."
+                            source = "sensor"
+                            break
+            
+            # Check cooldown (only if sensor is OK)
+            if not pending:
+                for rule in enabled_rules:
+                    last_triggered = rule.get("last_triggered_at")
+                    if last_triggered:
+                        age = now - last_triggered
+                        cooldown_sec = rule.get("cooldown_seconds", 60)
+                        if age < cooldown_sec:
+                            pending = True
+                            pending_reason = "cooldown"
+                            cooldown_remaining = cooldown_sec - age
+                            pending_message = f"Cooldown active: {cooldown_remaining}s remaining"
+                            source = "rule"
+                            break
+        
+        # Ensure source is always defined
+        final_source = source if source is not None else mode
+        
         return {
-            "pending": True,
-            "pending_reason": "startup",
-            "pending_message": "System starting… initializing sensors",
+            "pending": pending,
+            "pending_reason": pending_reason,
+            "pending_message": pending_message or (f"Relay is in {pending_reason} state" if pending_reason else None),
+            "cooldown_remaining": cooldown_remaining,
+            "sensor_age_seconds": sensor_age_seconds,
+            "sensor_sample_count": sensor_sample_count,
+            "sensor_is_ready": sensor_is_ready,
+            "sensor_is_stale": sensor_is_stale,
+            "source": final_source
+        }
+    except Exception as e:
+        # NEVER throw - always return safe defaults
+        print(f"[_get_relay_pending_state] Error for relay {relay_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "pending": False,
+            "pending_reason": "unknown_error",
+            "pending_message": f"Pending state error: {str(e)}",
             "cooldown_remaining": None,
             "sensor_age_seconds": None,
             "sensor_sample_count": None,
             "sensor_is_ready": None,
             "sensor_is_stale": None,
-            "source": "startup"
+            "source": "unknown"
         }
-    
-    actual_state = relay_state.get("actual_state")
-    desired_state = relay_state.get("desired_state")
-    last_applied_at = relay_state.get("last_applied_at", 0)
-    mode = relay_state.get("mode", "auto")
-    
-    # Check if actual_state is unknown (startup/reconciling)
-    if actual_state is None or actual_state == "":
-        pending = True
-        pending_reason = "reconciling"
-        pending_message = "Applying relay state… please wait"
-        source = "startup" if last_applied_at == 0 else "rule"
-    
-    # Check if desired_state differs from actual_state (reconciling)
-    elif desired_state and desired_state != actual_state:
-        pending = True
-        pending_reason = "reconciling"
-        pending_message = "Applying relay state… please wait"
-        source = mode  # "manual" or "rule"
-    
-    # Check sensor status for AUTO mode relays (if rules depend on sensors)
-    if mode == "auto" and not pending:
-        rules = db_list_relay_rules(relay_id)
-        enabled_rules = [r for r in rules if r.get("is_enabled", True)]
-        
-        # Check if any rule depends on a sensor that is stale or warming up
-        for rule in enabled_rules:
-            condition = rule.get("condition", {})
-            if condition.get("type") == "temperature":
-                sensor_name = condition.get("sensor", "")
-                if sensor_name:
-                    snapshot = get_sensor_snapshot(sensor_name)
-                    if not snapshot:
-                        continue  # Skip if snapshot missing
-                    
-                    # Extract sensor info for response
-                    sensor_age_seconds = snapshot.get("age_seconds", 0)
-                    sensor_sample_count = snapshot.get("sample_count", 0)
-                    sensor_is_ready = snapshot.get("is_ready", False)
-                    sensor_is_stale = snapshot.get("is_stale", False)
-                    
-                    # Check is_ready first (before age calculations)
-                    if not sensor_is_ready:
-                        pending = True
-                        pending_reason = "sensor_warming_up"
-                        pending_message = f"Waiting for temperature snapshot… collected {sensor_sample_count}/{SENSOR_WARMUP_SAMPLES} samples"
-                        source = "sensor"
-                        break
-                    
-                    # Now safe to check is_stale and use age_seconds
-                    if sensor_is_stale:
-                        pending = True
-                        # Safely coerce age_seconds to int (should never be None, but defensive)
-                        if sensor_age_seconds is None:
-                            sensor_age_seconds = 0
-                        sensor_age_seconds = int(sensor_age_seconds)
-                        age_min = sensor_age_seconds // 60
-                        pending_reason = "sensor_stale"
-                        pending_message = f"No valid temperature reading for {age_min} minute{'s' if age_min != 1 else ''}. Relay forced OFF for safety."
-                        source = "sensor"
-                        break
-        
-        # Check cooldown (only if sensor is OK)
-        if not pending:
-            for rule in enabled_rules:
-                last_triggered = rule.get("last_triggered_at")
-                if last_triggered:
-                    age = now - last_triggered
-                    cooldown_sec = rule.get("cooldown_seconds", 60)
-                    if age < cooldown_sec:
-                        pending = True
-                        pending_reason = "cooldown"
-                        cooldown_remaining = cooldown_sec - age
-                        pending_message = f"Cooldown active: {cooldown_remaining}s remaining"
-                        source = "rule"
-                        break
-    
-    return {
-        "pending": pending,
-        "pending_reason": pending_reason,
-        "pending_message": pending_message or (f"Relay is in {pending_reason} state" if pending_reason else None),
-        "cooldown_remaining": cooldown_remaining,
-        "sensor_age_seconds": sensor_age_seconds,
-        "sensor_sample_count": sensor_sample_count,
-        "sensor_is_ready": sensor_is_ready,
-        "sensor_is_stale": sensor_is_stale,
-        "source": source or mode
-    }
 
 @app.get("/api/relays")
 def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
@@ -2291,6 +2315,16 @@ def api_relay_set_state(
     err = require_auth(request, x_api_key)
     if err:
         return err
+    
+    # Validate relay_id - reject undefined/null/invalid
+    if not relay_id or relay_id in ("undefined", "null", "None") or not relay_id.strip():
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_relay_id",
+            "message": "Invalid relay ID",
+            "state": "off",
+            "pending": False
+        }, status_code=400)
     
     try:
         # Check if relay is in pending state (cooldown/reconciling)
