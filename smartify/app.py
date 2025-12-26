@@ -1477,6 +1477,7 @@ def get_sensor_snapshot(sensor_name: str) -> Dict[str, Any]:
     """
     Get sensor snapshot with stale detection.
     Returns: value, updated_at, last_good_at, is_stale, age_seconds, is_ready
+    ALWAYS returns age_seconds as int (never None) for safe integer operations.
     """
     now = int(time.time())
     snapshot = db_get_sensor_snapshot(sensor_name)
@@ -1490,17 +1491,22 @@ def get_sensor_snapshot(sensor_name: str) -> Dict[str, Any]:
             "updated_at": None,
             "last_good_at": None,
             "is_stale": True,
-            "age_seconds": None,
+            "age_seconds": 0,  # Always return int, never None
             "is_ready": False,
         }
     
-    last_good_at = snapshot.get("last_good_at", 0)
-    updated_at = snapshot.get("updated_at", 0)
-    sample_count = snapshot.get("sample_count", 0)
-    age_seconds = now - last_good_at if last_good_at else None
+    # Safely extract fields with defaults
+    last_good_at = snapshot.get("last_good_at") or 0
+    updated_at = snapshot.get("updated_at") or 0
+    sample_count = snapshot.get("sample_count") or 0
+    
+    # Always compute age_seconds as int (never None)
+    # Use last_good_at if available, otherwise updated_at, otherwise 0
+    reference_time = last_good_at if last_good_at else (updated_at if updated_at else 0)
+    age_seconds = max(0, now - reference_time) if reference_time > 0 else 0
     
     # Stale if no valid samples for 10 minutes
-    is_stale = age_seconds is not None and age_seconds > SENSOR_STALE_THRESHOLD
+    is_stale = age_seconds > SENSOR_STALE_THRESHOLD
     
     # Ready if we have at least N samples (warmup requirement)
     is_ready = sample_count >= SENSOR_WARMUP_SAMPLES
@@ -1510,10 +1516,10 @@ def get_sensor_snapshot(sensor_name: str) -> Dict[str, Any]:
         "avg_temp": snapshot.get("avg_temp"),
         "avg_humidity": snapshot.get("avg_humidity"),
         "sample_count": sample_count,
-        "updated_at": updated_at,
-        "last_good_at": last_good_at,
+        "updated_at": updated_at if updated_at else None,
+        "last_good_at": last_good_at if last_good_at else None,
         "is_stale": is_stale,
-        "age_seconds": age_seconds,
+        "age_seconds": age_seconds,  # Always int, never None
         "is_ready": is_ready,
     }
 
@@ -1522,6 +1528,11 @@ def _evaluate_temperature_condition(condition: Dict[str, Any]) -> Tuple[bool, Op
     Evaluate a temperature condition using snapshot data.
     Returns: (result: bool, reason: Optional[str])
     If sensor is stale or not ready, returns (False, reason) to force OFF.
+    
+    Defensive checks:
+    - Checks is_ready FIRST (before any age_seconds math)
+    - Safely handles None/missing fields
+    - Always coerces age_seconds to int
     """
     if condition.get("type") != "temperature":
         return (False, f"Condition type mismatch: {condition.get('type')} != 'temperature'")
@@ -1540,15 +1551,27 @@ def _evaluate_temperature_condition(condition: Dict[str, Any]) -> Tuple[bool, Op
     # Get snapshot (always use snapshot, never raw sensor reads)
     snapshot = get_sensor_snapshot(sensor_name)
     
-    # Check if sensor is stale (no valid samples for 10 minutes)
-    if snapshot.get("is_stale"):
-        age_min = snapshot.get("age_seconds", 0) // 60
-        return (False, f"sensor_stale(>{age_min}m)")
+    # Defensive check: ensure snapshot has required fields
+    if not snapshot:
+        return (False, "sensor_no_snapshot")
     
-    # Check if sensor is not ready (warmup period)
-    if not snapshot.get("is_ready"):
+    # Check if sensor is not ready (warmup period) - CHECK THIS FIRST before age calculations
+    is_ready = snapshot.get("is_ready", False)
+    if not is_ready:
         sample_count = snapshot.get("sample_count", 0)
         return (False, f"sensor_warming_up({sample_count}/{SENSOR_WARMUP_SAMPLES} samples)")
+    
+    # Check if sensor is stale (no valid samples for 10 minutes)
+    # Now safe to use age_seconds since is_ready was checked first
+    is_stale = snapshot.get("is_stale", False)
+    if is_stale:
+        # Safely coerce age_seconds to int (should never be None from get_sensor_snapshot, but defensive)
+        age_seconds = snapshot.get("age_seconds")
+        if age_seconds is None:
+            age_seconds = 0
+        age_seconds = int(age_seconds)
+        age_min = age_seconds // 60
+        return (False, f"sensor_stale(>{age_min}m)")
     
     # Get temperature from snapshot
     temp = snapshot.get("avg_temp")
@@ -2045,15 +2068,26 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
                 sensor_name = condition.get("sensor", "")
                 if sensor_name:
                     snapshot = get_sensor_snapshot(sensor_name)
-                    if snapshot.get("is_stale"):
-                        pending = True
-                        age_min = snapshot.get("age_seconds", 0) // 60
-                        reason = f"sensor_stale"
-                        source = "sensor"
-                        break
-                    elif not snapshot.get("is_ready"):
+                    if not snapshot:
+                        continue  # Skip if snapshot missing
+                    
+                    # Check is_ready first (before age calculations)
+                    if not snapshot.get("is_ready", False):
                         pending = True
                         reason = f"sensor_warming_up"
+                        source = "sensor"
+                        break
+                    
+                    # Now safe to check is_stale and use age_seconds
+                    if snapshot.get("is_stale", False):
+                        pending = True
+                        # Safely coerce age_seconds to int (should never be None, but defensive)
+                        age_seconds = snapshot.get("age_seconds")
+                        if age_seconds is None:
+                            age_seconds = 0
+                        age_seconds = int(age_seconds)
+                        age_min = age_seconds // 60
+                        reason = f"sensor_stale"
                         source = "sensor"
                         break
         
