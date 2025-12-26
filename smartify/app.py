@@ -81,6 +81,41 @@ if STATIC_DIR.exists():
 # DB helpers
 # =========================
 
+def _run_schema_migrations(conn: sqlite3.Connection, cur: sqlite3.Cursor) -> None:
+    """
+    Run automatic schema migrations.
+    Checks for missing columns and applies ALTER TABLE as needed.
+    This function is idempotent and safe to run on every startup.
+    Future migrations can be added here following the same pattern.
+    """
+    # Migration: active_low column in relay_devices
+    try:
+        cur.execute("PRAGMA table_info(relay_devices)")
+        columns = [row[1] for row in cur.fetchall()]  # Column name is at index 1
+        if "active_low" not in columns:
+            print("[DB] migrated: added active_low to relay_devices")
+            cur.execute("ALTER TABLE relay_devices ADD COLUMN active_low BOOLEAN NOT NULL DEFAULT 0")
+            conn.commit()
+    except sqlite3.OperationalError as e:
+        # Table might not exist yet (will be created by CREATE TABLE IF NOT EXISTS)
+        # This is safe to ignore - migration will run on next startup after table is created
+        pass
+    except Exception as e:
+        print(f"[DB Migration] Unexpected error checking/adding active_low column: {e}")
+        # Don't raise - allow startup to continue, migration will retry on next startup
+    
+    # Future migrations can be added here:
+    # try:
+    #     cur.execute("PRAGMA table_info(relay_devices)")
+    #     columns = [row[1] for row in cur.fetchall()]
+    #     if "new_column" not in columns:
+    #         print("[DB] migrated: added new_column to relay_devices")
+    #         cur.execute("ALTER TABLE relay_devices ADD COLUMN new_column TEXT DEFAULT ''")
+    #         conn.commit()
+    # except Exception as e:
+    #     print(f"[DB Migration] Error adding new_column: {e}")
+
+
 def db_init() -> None:
     """Initialize database schema and run migrations."""
     print(f"[DB] Initializing database at: {DB_PATH}")
