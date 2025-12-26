@@ -130,10 +130,17 @@ def db_init() -> None:
             pin INTEGER NOT NULL,
             command_on TEXT NOT NULL,
             command_off TEXT NOT NULL,
+            active_low BOOLEAN NOT NULL DEFAULT 0,
             is_enabled BOOLEAN NOT NULL DEFAULT 1
         );
         """
     )
+    
+    # Migration: Add active_low column if it doesn't exist
+    try:
+        cur.execute("ALTER TABLE relay_devices ADD COLUMN active_low BOOLEAN NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS relay_state_new (
@@ -214,10 +221,11 @@ def db_init() -> None:
     cur.execute("SELECT COUNT(*) FROM relay_devices WHERE name = 'heater'")
     if cur.fetchone()[0] == 0:
         heater_id = str(uuid.uuid4())
+        # Default to pin 25 (user updated from 27), active_high (active_low=0)
         cur.execute(
-            """INSERT INTO relay_devices (id, name, pin, command_on, command_off, is_enabled)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (heater_id, "heater", 27, "/usr/local/bin/relay27.py on", "/usr/local/bin/relay27.py off", 1)
+            """INSERT INTO relay_devices (id, name, pin, command_on, command_off, active_low, is_enabled)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (heater_id, "heater", 25, "", "", 0, 1)  # Empty command strings, will use pinctrl
         )
         # Initialize relay state
         now = int(time.time())
@@ -1348,30 +1356,15 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         print(f"[Reconcile] Rate limit: last_applied {now - last_applied}s ago, skipping hardware update")
         return False
     
-    # Step 6: Apply hardware command
-    print(f"[Reconcile] Applying hardware command: relay {relay_id} {current_actual} -> {desired_state} (source: {source}, reason: {reason})")
+    # Step 6: Apply hardware command using pinctrl
+    relay_name = device.get("name", "unknown")
+    pin = device.get("pin")
+    print(f"[Reconcile] Applying hardware: relay {relay_name} (id={relay_id}, pin={pin}) {current_actual} -> {desired_state} (source: {source}, reason: {reason})")
     
-    # Hardware is inverted: to turn relay ON, we call relay27.py off
-    # So when desired_state is "on", we use command_off, and vice versa
-    cmd_script = device.get("command_off" if desired_state == "on" else "command_on", "")
-    print(f"[Reconcile] Executing: {cmd_script} (desired_state={desired_state}, hardware inverted)")
+    # Use new pin-based hardware apply function
+    result = apply_relay_hardware(relay_id, desired_state)
     
-    if not cmd_script:
-        print(f"[Reconcile] No command script found for relay {relay_id}")
-        return False
-    
-    try:
-        parts = cmd_script.split()
-        cmd = ["sudo"] + parts
-        
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        
-        if proc.returncode == 0:
+    if result.get("ok"):
             # Success: update actual_state
             db_update_relay_state_new(
                 relay_id,
@@ -1467,13 +1460,76 @@ def _rule_evaluator_thread() -> None:
 # =========================
 
 _relay_lock = threading.Lock()
-RELAY_SCRIPT = "/usr/local/bin/relay27.py"
 HEADER_RELAY_NAME = "header"
-HEADER_RELAY_PIN = 27
+HEADER_RELAY_PIN = 27  # Legacy constant, actual pin comes from DB
 
 
 # DEPRECATED: _set_relay_state and _init_relay_state removed
 # All relay control now goes through reconcile_relay() which uses relay_state_new as single source of truth
+
+
+def apply_relay_hardware(relay_id: str, desired_state: str) -> Dict[str, Any]:
+    """
+    Apply desired_state to relay hardware using pinctrl.
+    
+    Args:
+        relay_id: Relay device ID
+        desired_state: "on" or "off"
+    
+    Returns:
+        Dict with ok, error, message fields
+    """
+    if desired_state not in ("on", "off"):
+        return {"ok": False, "error": "invalid_state", "message": "desired_state must be 'on' or 'off'"}
+    
+    # Get relay device info
+    device = db_get_relay_device(relay_id)
+    if not device:
+        return {"ok": False, "error": "not_found", "message": f"Relay device {relay_id} not found"}
+    
+    pin = device.get("pin")
+    relay_name = device.get("name", "unknown")
+    active_low = bool(device.get("active_low", 0))
+    
+    if pin is None:
+        return {"ok": False, "error": "no_pin", "message": f"Relay {relay_id} has no pin configured"}
+    
+    # Determine pinctrl command based on desired_state and active_low
+    # active_high (active_low=0): dh=on, dl=off
+    # active_low (active_low=1): dh=off, dl=on
+    if desired_state == "on":
+        pinctrl_op = "dl" if active_low else "dh"  # active_low: dl=on, active_high: dh=on
+    else:
+        pinctrl_op = "dh" if active_low else "dl"  # active_low: dh=off, active_high: dl=off
+    
+    cmd = ["sudo", "pinctrl", "set", str(pin), "op", pinctrl_op]
+    cmd_str = " ".join(cmd)
+    
+    print(f"[Hardware] Applying relay {relay_name} (id={relay_id}, pin={pin}): desired_state={desired_state}, active_low={active_low}, command={cmd_str}")
+    
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        
+        if proc.returncode == 0:
+            print(f"[Hardware] Successfully applied {desired_state} to relay {relay_name} (pin {pin})")
+            return {"ok": True, "state": desired_state, "pin": pin, "command": cmd_str}
+        else:
+            error_msg = proc.stderr.strip() or f"Command failed with code {proc.returncode}"
+            print(f"[Hardware] Failed to apply {desired_state} to relay {relay_name} (pin {pin}): {error_msg}")
+            return {"ok": False, "error": "command_failed", "message": error_msg}
+    except subprocess.TimeoutExpired:
+        error_msg = "pinctrl command timed out"
+        print(f"[Hardware] {error_msg} for relay {relay_name} (pin {pin})")
+        return {"ok": False, "error": "timeout", "message": error_msg}
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[Hardware] Exception applying {desired_state} to relay {relay_name} (pin {pin}): {error_msg}")
+        return {"ok": False, "error": "exception", "message": error_msg}
 
 
 # =========================
@@ -1576,8 +1632,7 @@ def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = He
             "id": relay["id"],
             "name": relay["name"],
             "pin": relay["pin"],
-            "command_on": relay["command_on"],
-            "command_off": relay["command_off"],
+            "active_low": bool(relay.get("active_low", 0)),
             "is_enabled": bool(relay.get("is_enabled", True)),
             "state": state.get("actual_state") or state.get("state", "off") if state else "off",
             "mode": state.get("mode", "auto") if state else "auto",
@@ -1904,27 +1959,15 @@ def api_relay_header_post(
             return JSONResponse({"ok": False, "error": "busy", "message": "Another relay operation in progress"}, status_code=429)
         
         try:
-            # Execute hardware command
-            cmd_script = relay.get("command_on" if actual_state == "on" else "command_off", "")
-            if cmd_script:
-                parts = cmd_script.split()
-                cmd = ["sudo"] + parts
-                try:
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-                    if proc.returncode != 0:
-                        _relay_lock.release()
-                        return JSONResponse({
-                            "ok": False,
-                            "error": "command_failed",
-                            "message": proc.stderr.strip(),
-                        }, status_code=500)
-                except Exception as e:
-                    _relay_lock.release()
-                    return JSONResponse({
-                        "ok": False,
-                        "error": "exception",
-                        "message": str(e),
-                    }, status_code=500)
+            # Execute hardware command using pinctrl
+            result = apply_relay_hardware(relay_id, actual_state)
+            if not result.get("ok"):
+                _relay_lock.release()
+                return JSONResponse({
+                    "ok": False,
+                    "error": result.get("error", "hardware_failed"),
+                    "message": result.get("message", "Failed to apply hardware state"),
+                }, status_code=500)
             
             # Update state using reconcile (manual mode)
             # Get old state for logging
