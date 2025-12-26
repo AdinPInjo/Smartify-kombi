@@ -396,10 +396,8 @@ function RelaysDashboard() {
         const relayRules = rules.filter((r) => r.relay_id === relay.id);
         
         // Use pending state from API response (backend calculates cooldown/reconciling/startup)
+        // Only used to disable toggle/mode switch, NOT for display (cooldown/warming shown per-rule)
         const isPending = relay.pending === true;
-        const pendingMessage = relay.pending_message || "Relay is in pending state";
-        const cooldownRemaining = relay.cooldown_remaining ?? null;
-        const sensorSampleCount = relay.sensor_sample_count ?? null;
 
           return (
           <Card
@@ -414,25 +412,12 @@ function RelaysDashboard() {
                     <Power className="h-5 w-5 text-orange-400" />
                     {relay.name.charAt(0).toUpperCase() + relay.name.slice(1)}
                   </CardTitle>
-                  {/* Status badge (top-right) */}
+                  {/* Status badge (top-right) - simplified, no cooldown/warming (shown per-rule) */}
                   <div className="flex items-center gap-2 text-xs max-w-[60%] text-right flex-shrink-0">
-                    {isPending ? (
+                    {isPending && relay.pending_reason === "reconciling" ? (
                       <div className="flex items-center gap-1.5">
-                        {relay.pending_reason === "reconciling" && (
-                          <div className="h-3 w-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-                        )}
-                        <span className={
-                          relay.pending_reason === "sensor_stale" || relay.pending_reason === "sensor_warming_up"
-                            ? "text-amber-400"
-                            : relay.pending_reason === "cooldown"
-                            ? "text-zinc-400"
-                            : "text-zinc-400"
-                        }>
-                          {pendingMessage}
-                          {cooldownRemaining !== null && cooldownRemaining > 0 && (
-                            <span className="ml-1 text-orange-400">({cooldownRemaining}s)</span>
-                          )}
-                        </span>
+                        <div className="h-3 w-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                        <span className="text-zinc-400">Reconciling...</span>
                       </div>
                     ) : (
                       <span className="text-zinc-500">
@@ -461,7 +446,7 @@ function RelaysDashboard() {
                       {isOn ? "ON" : "OFF"}
                     </span>
                   </div>
-                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3">
                   <Button
                     size="sm"
                     variant={isManual ? "default" : "outline"}
@@ -516,16 +501,8 @@ function RelaysDashboard() {
                       {isPending && (
                         <TooltipContent>
                           <p className="text-sm font-medium">
-                            {pendingMessage}
-                            {cooldownRemaining !== null && cooldownRemaining > 0 && (
-                              <span className="ml-1 text-orange-400">({cooldownRemaining}s)</span>
-                            )}
+                            {relay.pending_message || "Relay is reconciling state"}
                           </p>
-                          {sensorSampleCount !== null && relay.sensor_sample_count !== undefined && (
-                            <p className="text-xs text-zinc-400 mt-1">
-                              Progress: {sensorSampleCount}/6 samples collected
-                            </p>
-                          )}
                           <p className="text-xs text-zinc-400 mt-1">
                             Manual control is disabled during this period.
                           </p>
@@ -534,11 +511,11 @@ function RelaysDashboard() {
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-              </div>
+                    </div>
             </CardHeader>
             <CardContent className="space-y-4 relative z-10">
               {/* Rules Section */}
-              <div>
+                    <div>
                 <div className="flex items-center justify-between mb-3">
                   <Label className="text-sm font-semibold text-zinc-200">Rules</Label>
                   <Button
@@ -656,7 +633,7 @@ function RelaysDashboard() {
                             </span>
                           </div>
                         )}
-                      </div>
+                    </div>
                     ))}
                   </div>
                 )}

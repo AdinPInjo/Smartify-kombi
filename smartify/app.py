@@ -1709,9 +1709,9 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             "snapshot_temp": None,
             "threshold": None,
             "operator": None,
-            "age_seconds": None,
+            "age_seconds": 0,
             "sample_count": 0,
-            "cooldown_remaining": None
+            "cooldown_remaining": 0
         }
     
     # Parse condition_json - handle errors gracefully
@@ -1748,9 +1748,9 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "snapshot_temp": None,
                 "threshold": None,
                 "operator": None,
-                "age_seconds": None,
+                "age_seconds": 0,
                 "sample_count": 0,
-                "cooldown_remaining": None
+                "cooldown_remaining": 0
             }
     except (json.JSONDecodeError, TypeError, ValueError) as e:
         return {
@@ -1762,9 +1762,9 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             "snapshot_temp": None,
             "threshold": None,
             "operator": None,
-            "age_seconds": None,
+            "age_seconds": 0,
             "sample_count": 0,
-            "cooldown_remaining": None
+            "cooldown_remaining": 0
         }
     
     if not condition or not isinstance(condition, dict):
@@ -1777,15 +1777,15 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             "snapshot_temp": None,
             "threshold": None,
             "operator": None,
-            "age_seconds": None,
+            "age_seconds": 0,
             "sample_count": 0,
-            "cooldown_remaining": None
+            "cooldown_remaining": 0
         }
     
     # Check cooldown first (even if condition is met, cooldown blocks execution)
     last_triggered = rule.get("last_triggered_at")
     cooldown_seconds = rule.get("cooldown_seconds", 60)
-    cooldown_remaining = None
+    cooldown_remaining = 0
     if last_triggered:
         age = now - last_triggered
         if age < cooldown_seconds:
@@ -1799,7 +1799,7 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "snapshot_temp": None,
                 "threshold": None,
                 "operator": None,
-                "age_seconds": None,
+                "age_seconds": 0,
                 "sample_count": 0,
                 "cooldown_remaining": cooldown_remaining
             }
@@ -1819,9 +1819,9 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "snapshot_temp": None,
                 "threshold": None,
                 "operator": None,
-                "age_seconds": None,
+                "age_seconds": 0,
                 "sample_count": 0,
-                "cooldown_remaining": None
+                "cooldown_remaining": 0
             }
         
         # Get snapshot for this specific sensor
@@ -1836,19 +1836,19 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "snapshot_temp": None,
                 "threshold": None,
                 "operator": None,
-                "age_seconds": None,
+                "age_seconds": 0,
                 "sample_count": 0,
-                "cooldown_remaining": None
+                "cooldown_remaining": 0
             }
         
-        # Extract sensor status
-        sample_count = snapshot.get("sample_count", 0)
+        # Extract sensor status - ensure all numeric fields are integers, never None
+        sample_count = int(snapshot.get("sample_count", 0) or 0)
         is_ready = snapshot.get("is_ready", False)
         is_stale = snapshot.get("is_stale", False)
-        snapshot_temp = snapshot.get("avg_temp")
-        age_seconds = snapshot.get("age_seconds", 0)
+        snapshot_temp = snapshot.get("avg_temp")  # Can be None
+        age_seconds = int(snapshot.get("age_seconds", 0) or 0)  # Always int, never None
         operator = condition.get("operator", "")
-        threshold = condition.get("value")
+        threshold = condition.get("value")  # Can be None
         
         # Check warmup (not ready)
         if not is_ready:
@@ -1863,12 +1863,12 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "operator": operator,
                 "age_seconds": age_seconds,
                 "sample_count": sample_count,
-                "cooldown_remaining": None
+                "cooldown_remaining": 0
             }
         
         # Check stale
         if is_stale:
-            age_min = int(age_seconds) // 60 if age_seconds else 0
+            age_min = age_seconds // 60  # age_seconds is already int
             return {
                 "can_evaluate": True,
                 "matched": False,
@@ -1880,7 +1880,7 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "operator": operator,
                 "age_seconds": age_seconds,
                 "sample_count": sample_count,
-                "cooldown_remaining": None
+                "cooldown_remaining": 0
             }
         
         # Sensor is ready - evaluate condition
@@ -1896,7 +1896,7 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "operator": operator,
                 "age_seconds": age_seconds,
                 "sample_count": sample_count,
-                "cooldown_remaining": None
+                "cooldown_remaining": 0
             }
         
         if operator == "below":
@@ -1915,7 +1915,7 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "operator": operator,
                 "age_seconds": age_seconds,
                 "sample_count": sample_count,
-                "cooldown_remaining": None
+                "cooldown_remaining": 0
             }
         
         if condition_met:
@@ -1930,7 +1930,7 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "operator": operator,
                 "age_seconds": age_seconds,
                 "sample_count": sample_count,
-                "cooldown_remaining": None
+                "cooldown_remaining": 0
             }
         else:
             return {
@@ -1944,7 +1944,7 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "operator": operator,
                 "age_seconds": age_seconds,
                 "sample_count": sample_count,
-                "cooldown_remaining": None
+                "cooldown_remaining": 0
             }
     else:
         # Non-temperature rule (e.g., manual timer) - not waiting for sensor
@@ -1957,9 +1957,9 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             "snapshot_temp": None,
             "threshold": None,
             "operator": None,
-            "age_seconds": None,
+            "age_seconds": 0,
             "sample_count": 0,
-            "cooldown_remaining": None
+            "cooldown_remaining": 0
         }
 
 
@@ -2908,9 +2908,9 @@ def api_relay_rules_list(
                     "snapshot_temp": None,
                     "threshold": None,
                     "operator": None,
-                    "age_seconds": None,
+                    "age_seconds": 0,
                     "sample_count": 0,
-                    "cooldown_remaining": None
+                    "cooldown_remaining": 0
                 }
                 rules_with_status.append(rule_with_status)
         
