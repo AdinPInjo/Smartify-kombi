@@ -63,15 +63,18 @@ type Rule = {
   created_at: number;
   updated_at: number;
   // Runtime status (from backend)
-  runtime_status?: "waiting_sensor" | "sensor_stale" | "cooldown" | "condition_met" | "condition_not_met" | "disabled" | "error";
-  runtime_message?: string;
-  runtime_meta?: {
-    sample_count?: number;
-    is_ready?: boolean;
-    is_stale?: boolean;
-    cooldown_remaining?: number | null;
+  runtime_status?: {
+    can_evaluate?: boolean;
+    matched?: boolean;
+    reason_code?: "ok" | "sensor_warming_up" | "sensor_stale" | "cooldown" | "disabled" | "parse_error" | "error";
+    message?: string;
+    sensor_name?: string | null;
     snapshot_temp?: number | null;
-    sensor?: string | null;
+    threshold?: number | null;
+    operator?: string | null;
+    age_seconds?: number | null;
+    sample_count?: number;
+    cooldown_remaining?: number | null;
   };
 };
 
@@ -638,18 +641,18 @@ function RelaysDashboard() {
                           </div>
                         </div>
                         {/* Rule runtime status (bottom-right) */}
-                        {rule.runtime_message && (
+                        {rule.runtime_status?.message && (
                           <div className="absolute bottom-2 right-2 text-xs">
                             <span className={
-                              rule.runtime_status === "sensor_stale" || rule.runtime_status === "error"
+                              rule.runtime_status.reason_code === "sensor_stale" || rule.runtime_status.reason_code === "error" || rule.runtime_status.reason_code === "parse_error"
                                 ? "text-amber-400"
-                                : rule.runtime_status === "waiting_sensor" || rule.runtime_status === "cooldown"
+                                : rule.runtime_status.reason_code === "sensor_warming_up" || rule.runtime_status.reason_code === "cooldown"
                                 ? "text-zinc-400"
-                                : rule.runtime_status === "condition_met"
+                                : rule.runtime_status.reason_code === "ok" && rule.runtime_status.matched
                                 ? "text-emerald-400"
                                 : "text-zinc-500"
                             }>
-                              {rule.runtime_message}
+                              {rule.runtime_status.message}
                             </span>
                           </div>
                         )}

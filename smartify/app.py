@@ -582,7 +582,7 @@ def db_update_relay_state_new(
 
 
 def db_list_relay_rules(relay_id: str) -> List[Dict[str, Any]]:
-    """List rules for a relay."""
+    """List rules for a relay. Handles JSON parsing errors gracefully."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -592,7 +592,17 @@ def db_list_relay_rules(relay_id: str) -> List[Dict[str, Any]]:
     result = []
     for row in rows:
         r = dict(row)
-        r["condition"] = json.loads(r["condition_json"])
+        # Parse condition_json - handle errors gracefully
+        condition_json_str = r.get("condition_json", "")
+        if condition_json_str:
+            try:
+                r["condition"] = json.loads(condition_json_str)
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                # If JSON parsing fails, set condition to empty dict (will be caught by evaluate_single_rule)
+                print(f"[DB] Error parsing condition_json for rule {r.get('id', 'unknown')}: {e}")
+                r["condition"] = {}
+        else:
+            r["condition"] = {}
         # Convert SQLite integer boolean to Python boolean
         r["is_enabled"] = bool(r.get("is_enabled", 1))
         result.append(r)
@@ -1666,6 +1676,293 @@ def _evaluate_temperature_condition(condition: Dict[str, Any]) -> Tuple[bool, Op
     return (result, None)
 
 
+def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
+    """
+    Evaluate a single rule and return its runtime status without applying hardware.
+    Handles JSON parsing errors gracefully.
+    
+    Returns:
+        {
+            "can_evaluate": bool,
+            "matched": bool,
+            "reason_code": str,  # "ok" | "sensor_warming_up" | "sensor_stale" | "cooldown" | "disabled" | "parse_error" | "error"
+            "message": str (human-readable),
+            "sensor_name": str | None,
+            "snapshot_temp": float | None,
+            "threshold": float | None,
+            "operator": str | None,
+            "age_seconds": int | None,
+            "sample_count": int,
+            "cooldown_remaining": int | None
+        }
+    """
+    now = int(time.time())
+    
+    # Check if rule is disabled
+    if not rule.get("is_enabled", True):
+        return {
+            "can_evaluate": False,
+            "matched": False,
+            "reason_code": "disabled",
+            "message": "Rule disabled",
+            "sensor_name": None,
+            "snapshot_temp": None,
+            "threshold": None,
+            "operator": None,
+            "age_seconds": None,
+            "sample_count": 0,
+            "cooldown_remaining": None
+        }
+    
+    # Parse condition_json - handle errors gracefully
+    condition = None
+    try:
+        # db_list_relay_rules already parses condition_json into "condition", but handle both cases
+        if "condition" in rule:
+            condition = rule["condition"]
+        elif "condition_json" in rule:
+            condition_json_str = rule["condition_json"]
+            if condition_json_str:
+                condition = json.loads(condition_json_str)
+            else:
+                return {
+                    "can_evaluate": False,
+                    "matched": False,
+                    "reason_code": "parse_error",
+                    "message": "Rule error: condition missing",
+                    "sensor_name": None,
+                    "snapshot_temp": None,
+                    "threshold": None,
+                    "operator": None,
+                    "age_seconds": None,
+                    "sample_count": 0,
+                    "cooldown_remaining": None
+                }
+        else:
+            return {
+                "can_evaluate": False,
+                "matched": False,
+                "reason_code": "parse_error",
+                "message": "Rule error: condition missing",
+                "sensor_name": None,
+                "snapshot_temp": None,
+                "threshold": None,
+                "operator": None,
+                "age_seconds": None,
+                "sample_count": 0,
+                "cooldown_remaining": None
+            }
+    except (json.JSONDecodeError, TypeError, ValueError) as e:
+        return {
+            "can_evaluate": False,
+            "matched": False,
+            "reason_code": "parse_error",
+            "message": f"Rule error: invalid condition JSON ({str(e)})",
+            "sensor_name": None,
+            "snapshot_temp": None,
+            "threshold": None,
+            "operator": None,
+            "age_seconds": None,
+            "sample_count": 0,
+            "cooldown_remaining": None
+        }
+    
+    if not condition or not isinstance(condition, dict):
+        return {
+            "can_evaluate": False,
+            "matched": False,
+            "reason_code": "parse_error",
+            "message": "Rule error: invalid condition format",
+            "sensor_name": None,
+            "snapshot_temp": None,
+            "threshold": None,
+            "operator": None,
+            "age_seconds": None,
+            "sample_count": 0,
+            "cooldown_remaining": None
+        }
+    
+    # Check cooldown first (even if condition is met, cooldown blocks execution)
+    last_triggered = rule.get("last_triggered_at")
+    cooldown_seconds = rule.get("cooldown_seconds", 60)
+    cooldown_remaining = None
+    if last_triggered:
+        age = now - last_triggered
+        if age < cooldown_seconds:
+            cooldown_remaining = cooldown_seconds - age
+            return {
+                "can_evaluate": True,
+                "matched": False,
+                "reason_code": "cooldown",
+                "message": f"Cooldown… {cooldown_remaining}s",
+                "sensor_name": None,
+                "snapshot_temp": None,
+                "threshold": None,
+                "operator": None,
+                "age_seconds": None,
+                "sample_count": 0,
+                "cooldown_remaining": cooldown_remaining
+            }
+    
+    # Evaluate condition
+    condition_type = condition.get("type", "")
+    
+    if condition_type == "temperature":
+        sensor_name = condition.get("sensor", "")
+        if not sensor_name:
+            return {
+                "can_evaluate": False,
+                "matched": False,
+                "reason_code": "error",
+                "message": "Rule error: sensor missing",
+                "sensor_name": None,
+                "snapshot_temp": None,
+                "threshold": None,
+                "operator": None,
+                "age_seconds": None,
+                "sample_count": 0,
+                "cooldown_remaining": None
+            }
+        
+        # Get snapshot for this specific sensor
+        snapshot = get_sensor_snapshot(sensor_name)
+        if not snapshot:
+            return {
+                "can_evaluate": False,
+                "matched": False,
+                "reason_code": "error",
+                "message": "Rule error: no sensor data",
+                "sensor_name": sensor_name,
+                "snapshot_temp": None,
+                "threshold": None,
+                "operator": None,
+                "age_seconds": None,
+                "sample_count": 0,
+                "cooldown_remaining": None
+            }
+        
+        # Extract sensor status
+        sample_count = snapshot.get("sample_count", 0)
+        is_ready = snapshot.get("is_ready", False)
+        is_stale = snapshot.get("is_stale", False)
+        snapshot_temp = snapshot.get("avg_temp")
+        age_seconds = snapshot.get("age_seconds", 0)
+        operator = condition.get("operator", "")
+        threshold = condition.get("value")
+        
+        # Check warmup (not ready)
+        if not is_ready:
+            return {
+                "can_evaluate": True,
+                "matched": False,
+                "reason_code": "sensor_warming_up",
+                "message": f"Waiting for temperature snapshot… {sample_count}/6",
+                "sensor_name": sensor_name,
+                "snapshot_temp": snapshot_temp,
+                "threshold": threshold,
+                "operator": operator,
+                "age_seconds": age_seconds,
+                "sample_count": sample_count,
+                "cooldown_remaining": None
+            }
+        
+        # Check stale
+        if is_stale:
+            age_min = int(age_seconds) // 60 if age_seconds else 0
+            return {
+                "can_evaluate": True,
+                "matched": False,
+                "reason_code": "sensor_stale",
+                "message": f"Sensor stale ({age_min} min). Forced OFF.",
+                "sensor_name": sensor_name,
+                "snapshot_temp": snapshot_temp,
+                "threshold": threshold,
+                "operator": operator,
+                "age_seconds": age_seconds,
+                "sample_count": sample_count,
+                "cooldown_remaining": None
+            }
+        
+        # Sensor is ready - evaluate condition
+        if snapshot_temp is None:
+            return {
+                "can_evaluate": False,
+                "matched": False,
+                "reason_code": "error",
+                "message": "Rule error: no temperature value",
+                "sensor_name": sensor_name,
+                "snapshot_temp": None,
+                "threshold": threshold,
+                "operator": operator,
+                "age_seconds": age_seconds,
+                "sample_count": sample_count,
+                "cooldown_remaining": None
+            }
+        
+        if operator == "below":
+            condition_met = snapshot_temp < threshold
+        elif operator == "above":
+            condition_met = snapshot_temp > threshold
+        else:
+            return {
+                "can_evaluate": False,
+                "matched": False,
+                "reason_code": "error",
+                "message": "Rule error: invalid operator",
+                "sensor_name": sensor_name,
+                "snapshot_temp": snapshot_temp,
+                "threshold": threshold,
+                "operator": operator,
+                "age_seconds": age_seconds,
+                "sample_count": sample_count,
+                "cooldown_remaining": None
+            }
+        
+        if condition_met:
+            return {
+                "can_evaluate": True,
+                "matched": True,
+                "reason_code": "ok",
+                "message": "Temperature acquired — condition met",
+                "sensor_name": sensor_name,
+                "snapshot_temp": snapshot_temp,
+                "threshold": threshold,
+                "operator": operator,
+                "age_seconds": age_seconds,
+                "sample_count": sample_count,
+                "cooldown_remaining": None
+            }
+        else:
+            return {
+                "can_evaluate": True,
+                "matched": False,
+                "reason_code": "ok",
+                "message": "Temperature acquired — condition not met",
+                "sensor_name": sensor_name,
+                "snapshot_temp": snapshot_temp,
+                "threshold": threshold,
+                "operator": operator,
+                "age_seconds": age_seconds,
+                "sample_count": sample_count,
+                "cooldown_remaining": None
+            }
+    else:
+        # Non-temperature rule (e.g., manual timer) - not waiting for sensor
+        return {
+            "can_evaluate": True,
+            "matched": False,
+            "reason_code": "ok",
+            "message": "Rule active",
+            "sensor_name": None,
+            "snapshot_temp": None,
+            "threshold": None,
+            "operator": None,
+            "age_seconds": None,
+            "sample_count": 0,
+            "cooldown_remaining": None
+        }
+
+
 def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, current_state: Optional[str] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool, Optional[str]]:
     """
     Deterministically evaluate enabled rules for a relay using snapshot data.
@@ -2568,31 +2865,67 @@ def api_relay_rules_list(
     request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    """List rules for a relay with runtime status."""
+    """List rules for a relay with runtime status. NEVER returns 500."""
     err = require_auth(request, x_api_key)
     if err:
         return err
     
-    rules = db_list_relay_rules(relay_id)
-    
-    # Add runtime status for each rule
-    rules_with_status = []
-    for rule in rules:
-        runtime_status = evaluate_single_rule(rule, relay_id)
-        rule_with_status = dict(rule)  # Copy rule dict
-        rule_with_status["runtime_status"] = runtime_status["status"]
-        rule_with_status["runtime_message"] = runtime_status["message"]
-        rule_with_status["runtime_meta"] = {
-            "sample_count": runtime_status["sample_count"],
-            "is_ready": runtime_status["is_ready"],
-            "is_stale": runtime_status["is_stale"],
-            "cooldown_remaining": runtime_status["cooldown_remaining"],
-            "snapshot_temp": runtime_status["snapshot_temp"],
-            "sensor": runtime_status["sensor"]
-        }
-        rules_with_status.append(rule_with_status)
-    
-    return JSONResponse({"ok": True, "rules": rules_with_status})
+    try:
+        rules = db_list_relay_rules(relay_id)
+        
+        # Add runtime status for each rule
+        rules_with_status = []
+        for rule in rules:
+            try:
+                runtime_status = evaluate_single_rule(rule, relay_id)
+                rule_with_status = dict(rule)  # Copy rule dict
+                rule_with_status["runtime_status"] = {
+                    "can_evaluate": runtime_status["can_evaluate"],
+                    "matched": runtime_status["matched"],
+                    "reason_code": runtime_status["reason_code"],
+                    "message": runtime_status["message"],
+                    "sensor_name": runtime_status["sensor_name"],
+                    "snapshot_temp": runtime_status["snapshot_temp"],
+                    "threshold": runtime_status["threshold"],
+                    "operator": runtime_status["operator"],
+                    "age_seconds": runtime_status["age_seconds"],
+                    "sample_count": runtime_status["sample_count"],
+                    "cooldown_remaining": runtime_status["cooldown_remaining"]
+                }
+                rules_with_status.append(rule_with_status)
+            except Exception as e:
+                # If evaluating one rule fails, mark it as error but continue with others
+                print(f"[API] Error evaluating rule {rule.get('id', 'unknown')}: {e}")
+                import traceback
+                traceback.print_exc()
+                rule_with_status = dict(rule)
+                rule_with_status["runtime_status"] = {
+                    "can_evaluate": False,
+                    "matched": False,
+                    "reason_code": "error",
+                    "message": f"Rule error: {str(e)}",
+                    "sensor_name": None,
+                    "snapshot_temp": None,
+                    "threshold": None,
+                    "operator": None,
+                    "age_seconds": None,
+                    "sample_count": 0,
+                    "cooldown_remaining": None
+                }
+                rules_with_status.append(rule_with_status)
+        
+        return JSONResponse({"ok": True, "rules": rules_with_status})
+    except Exception as e:
+        # NEVER return 500 - always return valid JSON
+        print(f"[API] Error in /api/relays/{relay_id}/rules: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({
+            "ok": False,
+            "error": "internal_error",
+            "message": f"Failed to load rules: {str(e)}",
+            "rules": []
+        })
 
 
 @app.post("/api/relays/{relay_id}/rules")
