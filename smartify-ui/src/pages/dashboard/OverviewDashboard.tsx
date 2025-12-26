@@ -272,18 +272,14 @@ function HeaderRelayCard() {
     mutationFn: async (newState: "on" | "off") => {
       if (!relaysResponse) throw new Error("Relay not loaded");
       
-      // Backend stores actual hardware command state
-      // UI ON → relay ON → need to send command "off" (because relay script is inverted)
-      // So when UI wants ON, we send "off" to API, which executes "off" command (turns relay ON)
-      const hardwareState = newState === "on" ? "off" : "on";
-      
+      // Send logical state (user intent) - backend will handle hardware inversion
       const r = await apiFetch(`/api/relays/${relaysResponse.id}/state`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ 
-          state: hardwareState,  // Hardware command state
+          state: newState,  // Logical state (what user wants)
           mode: "manual",
         }),
         cache: "no-store",
@@ -328,15 +324,15 @@ function HeaderRelayCard() {
     },
   });
 
-  // Invert state: backend stores actual hardware state, but UI expects inverted display
-  const isOn = relaysResponse?.state === "off";  // Inverted: "off" in backend means relay is ON
+  // Backend stores logical state (what user wants, not hardware command)
+  const isOn = relaysResponse?.state === "on";  // Logical state: "on" means relay should be ON
   const isManual = relaysResponse?.mode === "manual";
   const manualUntil = relaysResponse?.manual_until;
   const isDisabled = isLoading || toggleMutation.isPending || setAutoMutation.isPending || !!error;
   const isUpdating = toggleMutation.isPending || setAutoMutation.isPending;
 
   const handleToggle = (checked: boolean) => {
-    // UI ON → hardware ON, but API expects inverted command
+    // Send logical state (user intent) - backend handles hardware inversion
     const newState: "on" | "off" = checked ? "on" : "off";
     toggleMutation.mutate(newState);
   };

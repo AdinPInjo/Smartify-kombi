@@ -117,12 +117,11 @@ function RelaysDashboard() {
   // Mutation to toggle relay state
   const toggleRelayMutation = useMutation({
     mutationFn: async ({ relayId, state }: { relayId: string; state: "on" | "off" }) => {
-      // Invert for hardware
-      const hardwareState = state === "on" ? "off" : "on";
+      // Send logical state (user intent) - backend will handle hardware inversion
       const r = await apiFetch(`/api/relays/${relayId}/state`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state: hardwareState, mode: "manual" }),
+        body: JSON.stringify({ state: state, mode: "manual" }),
         cache: "no-store",
       });
       if (!r.ok) {
@@ -306,7 +305,7 @@ function RelaysDashboard() {
 
       {/* Relays */}
         {relays.map((relay) => {
-        const isOn = relay.state === "off"; // Inverted display
+        const isOn = relay.state === "on"; // Logical state: "on" means relay should be ON
         const isManual = relay.mode === "manual";
         const relayRules = rules.filter((r) => r.relay_id === relay.id);
 
