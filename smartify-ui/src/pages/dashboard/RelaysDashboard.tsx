@@ -82,6 +82,10 @@ function RelaysDashboard() {
       }
       const data = await r.json();
       console.log("[RelaysDashboard] API response:", data);
+      // Check if response indicates error
+      if (data.ok === false) {
+        throw new Error(data.error || data.message || "Failed to load relays");
+      }
       // Ensure we have a valid relays array
       if (!data || typeof data !== "object") {
         console.error("[RelaysDashboard] Invalid response format:", data);
@@ -252,11 +256,25 @@ function RelaysDashboard() {
   };
 
   const handleRelayToggle = (relay: Relay, checked: boolean) => {
+    // Guard: prevent undefined relay_id calls
+    if (!relay?.id || relay.id === "undefined" || relay.id === "null") {
+      toast.error("Relay ID missing", {
+        description: "Relay data not loaded yet. Please wait and try again.",
+      });
+      return;
+    }
     const newState: "on" | "off" = checked ? "on" : "off";
     toggleRelayMutation.mutate({ relayId: relay.id, state: newState });
   };
 
   const handleAddRule = (relayId: string) => {
+    // Guard: prevent undefined relay_id calls
+    if (!relayId || relayId === "undefined" || relayId === "null") {
+      toast.error("Relay ID missing", {
+        description: "Relay data not loaded yet. Please wait and try again.",
+      });
+      return;
+    }
     setSelectedRelayId(relayId);
     setEditingRule(null);
     setIsRuleDialogOpen(true);
@@ -286,7 +304,7 @@ function RelaysDashboard() {
     );
   }
 
-  // Handle empty relays array
+  // Handle empty relays array - show error banner if there was an error, otherwise "no relays"
   if (relays.length === 0) {
     return (
       <div className="space-y-6">
@@ -299,17 +317,35 @@ function RelaysDashboard() {
           </h1>
           <p className="text-sm text-zinc-400 mt-2">Manage connected devices and automation rules</p>
         </div>
-        <Card className="border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50">
-          <CardContent className="py-12 text-center">
-            <p className="text-zinc-400">No relays found</p>
-            <Button 
-              onClick={() => queryClient.invalidateQueries({ queryKey: ["relays"] })} 
-              className="mt-4"
-            >
-              Refresh
-            </Button>
-          </CardContent>
-        </Card>
+        {relaysError ? (
+          <Card className="border-red-500/50 bg-gradient-to-br from-red-900/20 to-zinc-950/50">
+            <CardContent className="py-12 text-center">
+              <p className="text-red-400 font-medium mb-2">Error loading relays</p>
+              <p className="text-sm text-zinc-400 mb-4">
+                {relaysError instanceof Error ? relaysError.message : "Unknown error occurred"}
+              </p>
+              <Button 
+                onClick={() => queryClient.invalidateQueries({ queryKey: ["relays"] })} 
+                className="mt-4"
+                variant="outline"
+              >
+                Retry
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50">
+            <CardContent className="py-12 text-center">
+              <p className="text-zinc-400">No relays found</p>
+              <Button 
+                onClick={() => queryClient.invalidateQueries({ queryKey: ["relays"] })} 
+                className="mt-4"
+              >
+                Refresh
+              </Button>
+            </CardContent>
+          </Card>
+        )}
       </div>
     );
   }
@@ -366,6 +402,36 @@ function RelaysDashboard() {
                       {isOn ? "ON" : "OFF"}
                     </span>
                   </div>
+                  {/* Inline status text (always visible) */}
+                  <div className="mt-2">
+                    {isPending ? (
+                      <div className="flex items-center gap-2 text-xs">
+                        {relay.pending_reason === "reconciling" && (
+                          <div className="h-3 w-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
+                        )}
+                        <span className={
+                          relay.pending_reason === "sensor_stale" || relay.pending_reason === "sensor_warming_up"
+                            ? "text-amber-400"
+                            : relay.pending_reason === "cooldown"
+                            ? "text-zinc-400"
+                            : "text-zinc-400"
+                        }>
+                          {pendingMessage}
+                          {cooldownRemaining !== null && cooldownRemaining > 0 && (
+                            <span className="ml-1 text-orange-400">({cooldownRemaining}s)</span>
+                          )}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-zinc-500">
+                        {isManual ? (
+                          <>MANUAL: {isOn ? "ON" : "OFF"}</>
+                        ) : (
+                          <>AUTO: monitoring {relayRules.length > 0 ? `${relayRules.length} rule${relayRules.length !== 1 ? "s" : ""}` : "no rules"}</>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-3">
                   <Button
@@ -377,6 +443,13 @@ function RelaysDashboard() {
                         : "bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-300"
                     }
                     onClick={() => {
+                      // Guard: prevent undefined relay_id calls
+                      if (!relay?.id || relay.id === "undefined" || relay.id === "null") {
+                        toast.error("Relay ID missing", {
+                          description: "Relay data not loaded yet. Please wait and try again.",
+                        });
+                        return;
+                      }
                       // Never allow mode change when pending
                       if (isPending) return;
                       if (isManual) {
@@ -477,6 +550,16 @@ function RelaysDashboard() {
                                 </span>
                               )}
                               <span className="text-xs text-zinc-500">Priority: {rule.priority}</span>
+                              {/* Show relay status in rule row */}
+                              {isPending && (
+                                <span className="text-xs text-amber-400 ml-auto">
+                                  {relay.pending_reason === "sensor_stale" ? "Sensor stale" :
+                                   relay.pending_reason === "sensor_warming_up" ? "Warming up" :
+                                   relay.pending_reason === "cooldown" ? `Cooldown ${cooldownRemaining}s` :
+                                   relay.pending_reason === "reconciling" ? "Reconciling" :
+                                   "Pending"}
+                                </span>
+                              )}
                             </div>
                             <p className="text-xs text-zinc-400 mb-2">{formatRuleDescription(rule)}</p>
                             <div className="flex items-center gap-3 text-xs text-zinc-500">
