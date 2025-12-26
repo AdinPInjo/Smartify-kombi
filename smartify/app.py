@@ -890,11 +890,43 @@ def _gps_reader_thread() -> None:
 # Startup
 # =========================
 
+def reconcile_all_relays_on_startup() -> None:
+    """
+    Startup reconciliation: Apply desired_state from relay_state_new to hardware.
+    This ensures hardware matches the database state after reboot.
+    On startup, we always apply the desired_state (computed from AUTO+rules or MANUAL override).
+    If no rules match and mode=AUTO, desired_state will be OFF (from evaluate_rules).
+    """
+    print("[Startup] Reconciling all relays from relay_state_new (single source of truth)...")
+    relays = db_list_relay_devices()
+    
+    for relay in relays:
+        if not relay.get("is_enabled", True):
+            print(f"[Startup] Skipping disabled relay {relay.get('name', 'unknown')}")
+            continue
+        
+        relay_id = relay["id"]
+        relay_name = relay.get("name", "unknown")
+        
+        try:
+            # Force reconciliation (bypass rate limiting on startup)
+            # This will compute desired_state from mode (AUTO+rules or MANUAL) and apply to hardware
+            changed = reconcile_relay(relay_id, force=True)
+            if changed:
+                print(f"[Startup] Applied hardware state for relay {relay_name} ({relay_id})")
+            else:
+                print(f"[Startup] Relay {relay_name} ({relay_id}) already in correct state")
+        except Exception as e:
+            print(f"[Startup] Error reconciling relay {relay_name} ({relay_id}): {e}")
+            import traceback
+            traceback.print_exc()
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     db_init()
-    # Initialize relay states (legacy)
-    _init_relay_state(HEADER_RELAY_NAME, HEADER_RELAY_PIN)
+    # Reconcile all relays from relay_state_new (single source of truth)
+    reconcile_all_relays_on_startup()
     # Start GPS reader thread
     t_gps = threading.Thread(target=_gps_reader_thread, daemon=True)
     t_gps.start()
@@ -1317,11 +1349,12 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         return False
     
     # Step 6: Apply hardware command
-    print(f"[Reconcile] Applying hardware command: relay {relay_id} {current_actual} -> {desired_state}")
+    print(f"[Reconcile] Applying hardware command: relay {relay_id} {current_actual} -> {desired_state} (source: {source}, reason: {reason})")
     
     # Hardware is inverted: to turn relay ON, we call relay27.py off
     # So when desired_state is "on", we use command_off, and vice versa
     cmd_script = device.get("command_off" if desired_state == "on" else "command_on", "")
+    print(f"[Reconcile] Executing: {cmd_script} (desired_state={desired_state}, hardware inverted)")
     
     if not cmd_script:
         print(f"[Reconcile] No command script found for relay {relay_id}")
@@ -1351,7 +1384,7 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
             if matched_rule:
                 db_update_rule_last_triggered(matched_rule["id"])
             
-            # Log event
+            # Log event (always log hardware applies, including startup)
             rule_id = matched_rule.get("id") if matched_rule else None
             db_log_relay_event(
                 relay_id,
@@ -1362,7 +1395,7 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
                 rule_id
             )
             
-            print(f"[Reconcile] Successfully updated relay {relay_id} to {desired_state}")
+            print(f"[Reconcile] Successfully updated relay {relay_id} to {desired_state} (source: {source}, reason: {reason})")
             return True
         else:
             # Command failed
@@ -1439,57 +1472,8 @@ HEADER_RELAY_NAME = "header"
 HEADER_RELAY_PIN = 27
 
 
-def _set_relay_state(name: str, pin: int, state: str, save_to_db: bool = True) -> Dict[str, Any]:
-    """
-    Set relay state by executing sudo command.
-    state must be 'on' or 'off'.
-    save_to_db: if True, also persist state to database (default True).
-    Returns dict with success status.
-    """
-    if state not in ("on", "off"):
-        return {"ok": False, "error": "invalid_state", "message": "state must be 'on' or 'off'"}
-
-    try:
-        cmd = ["sudo", RELAY_SCRIPT, state]
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        
-        if proc.returncode != 0:
-            return {
-                "ok": False,
-                "error": "relay_command_failed",
-                "message": proc.stderr.strip() or f"Command failed with code {proc.returncode}",
-            }
-        
-        # Store state in database if requested
-        if save_to_db:
-            db_set_relay_state(name, pin, state)
-        
-        return {"ok": True, "state": state}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout", "message": "Relay command timed out"}
-    except Exception as e:
-        return {"ok": False, "error": "exception", "message": str(e)}
-
-
-def _init_relay_state(name: str, pin: int) -> None:
-    """
-    Initialize relay state on startup.
-    Reads state from DB (defaults to 'off' if not found) and sets the relay.
-    Does NOT save to DB (already in DB).
-    """
-    stored = db_get_relay_state(name)
-    state = stored["state"] if stored else "off"
-    
-    # Set the actual relay to the stored state (don't save to DB, it's already there)
-    result = _set_relay_state(name, pin, state, save_to_db=False)
-    if not result.get("ok"):
-        # Log error but don't crash on startup
-        print(f"[Relay] Warning: Failed to initialize {name} relay to {state}: {result.get('message')}")
+# DEPRECATED: _set_relay_state and _init_relay_state removed
+# All relay control now goes through reconcile_relay() which uses relay_state_new as single source of truth
 
 
 # =========================
@@ -1884,22 +1868,14 @@ def api_relay_header_get(request: Request, x_api_key: Optional[str] = Header(def
                 "state": "off" if actual_state == "on" else "on",  # Inverted for legacy compatibility
             })
     
-    # Fallback to old system if new system not available
-    stored = db_get_relay_state(HEADER_RELAY_NAME)
-    if stored:
-        return JSONResponse({
-            "ok": True,
-            "name": HEADER_RELAY_NAME,
-            "pin": HEADER_RELAY_PIN,
-            "state": stored["state"],
-        })
-    else:
-        return JSONResponse({
-            "ok": True,
-            "name": HEADER_RELAY_NAME,
-            "pin": HEADER_RELAY_PIN,
-            "state": "off",
-        })
+    # No fallback - relay_state_new is the single source of truth
+    # If relay not found, return default
+    return JSONResponse({
+        "ok": True,
+        "name": HEADER_RELAY_NAME,
+        "pin": HEADER_RELAY_PIN,
+        "state": "off",  # Default to off if relay not found
+    })
 
 
 @app.post("/api/relay/header")
@@ -1950,11 +1926,19 @@ def api_relay_header_post(
                         "message": str(e),
                     }, status_code=500)
             
-            # Update state (manual mode)
+            # Update state using reconcile (manual mode)
+            # Get old state for logging
             current_state_data = db_get_relay_state_new(relay_id)
-            old_state = current_state_data.get("state", "off") if current_state_data else "off"
-            db_set_relay_state_new(relay_id, actual_state, "manual", None)
-            db_log_relay_event(relay_id, "manual", old_state, actual_state, "Manual override (legacy endpoint)")
+            old_state = current_state_data.get("actual_state") or current_state_data.get("state", "off") if current_state_data else "off"
+            
+            # Use reconcile to set manual mode
+            db_update_relay_state_new(
+                relay_id=relay_id,
+                mode="manual",
+                manual_state=actual_state,
+                manual_until=None
+            )
+            reconcile_relay(relay_id, force=True)
             
             _relay_lock.release()
             return JSONResponse({
@@ -1971,27 +1955,13 @@ def api_relay_header_post(
                 "message": str(e),
             }, status_code=500)
     
-    # Fallback to old system
-    if not _relay_lock.acquire(blocking=False):
-        return JSONResponse({"ok": False, "error": "busy", "message": "Another relay operation in progress"}, status_code=429)
-    
-    try:
-        result = _set_relay_state(HEADER_RELAY_NAME, HEADER_RELAY_PIN, state)
-        if result.get("ok"):
-            return JSONResponse({
-                "ok": True,
-                "name": HEADER_RELAY_NAME,
-                "pin": HEADER_RELAY_PIN,
-                "state": state,
-            })
-        else:
-            return JSONResponse({
-                "ok": False,
-                "error": result.get("error", "unknown"),
-                "message": result.get("message", "Failed to set relay state"),
-            }, status_code=500)
-    finally:
-        _relay_lock.release()
+    # No fallback - use new system only
+    # If we get here, the relay device wasn't found, which shouldn't happen after db_init()
+    return JSONResponse({
+        "ok": False,
+        "error": "relay_not_found",
+        "message": "Relay device not found in database",
+    }, status_code=404)
 
 
 # =========================
