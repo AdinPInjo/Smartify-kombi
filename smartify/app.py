@@ -2066,6 +2066,12 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
     last_applied = relay_state.get("last_applied_at", 0)
     manual_until = relay_state.get("manual_until")
     
+    # Initialize all variables that may be used later (prevent UnboundLocalError)
+    desired_state = None
+    matched_rule = None
+    source = "unknown"
+    reason = "Unknown"
+    
     # Step 1: Handle manual mode expiration
     if mode == "manual" and manual_until is not None:
         if now > manual_until:
@@ -2082,6 +2088,7 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
             desired_state = current_actual  # Fallback to current state
         source = "manual"
         reason = "Manual override"
+        matched_rule = None  # No rule in manual mode
     else:
         # Auto mode: evaluate rules using snapshot (not raw temp_data)
         # Pass current_actual to evaluate_rules so cooldown only applies to state changes
@@ -2101,7 +2108,7 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
             # Sensor data available - use the result
             desired_state = desired_state_result
             source = "rule"
-            if matched_rule:
+            if matched_rule is not None:
                 # Build reason string using snapshot data
                 condition = matched_rule.get("condition", {})
                 sensor_name = condition.get("sensor", "")
@@ -2159,11 +2166,11 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         
         # Update rule's last_triggered_at only if we actually changed hardware state
         # (cooldown was already checked in evaluate_rules, but we only update timestamp on actual state change)
-        if matched_rule:
+        if matched_rule is not None:
             db_update_rule_last_triggered(matched_rule["id"])
         
         # Log event (always log hardware applies, including startup)
-        rule_id = matched_rule.get("id") if matched_rule else None
+        rule_id = matched_rule.get("id") if matched_rule is not None else None
         db_log_relay_event(
             relay_id,
             source,
@@ -2775,8 +2782,48 @@ def api_relay_set_state(
             manual_until=manual_until if mode == "manual" else None
         )
         
-        # Reconcile will handle hardware command
-        reconcile_relay(relay_id, force=True)
+        # Apply hardware command directly (manual override)
+        result = apply_relay_hardware(relay_id, state)
+        
+        # Check if hardware apply succeeded
+        if not result.get("ok"):
+            # Hardware apply failed - return error
+            error_msg = result.get("message", result.get("error", "Failed to apply hardware"))
+            return JSONResponse({
+                "ok": False,
+                "error": "hardware_failed",
+                "message": error_msg,
+                "state": state,
+                "pending": False
+            })
+        
+        # Hardware apply succeeded - update actual_state in DB
+        now_time = int(time.time())
+        db_update_relay_state_new(
+            relay_id,
+            actual_state=state,
+            desired_state=state,  # In manual mode, desired == actual
+            last_applied_at=now_time
+        )
+        
+        # Log event
+        db_log_relay_event(
+            relay_id,
+            "manual",
+            "unknown",  # Previous state unknown
+            state,
+            "Manual override",
+            None
+        )
+        
+        # Best effort: try to reconcile (but don't fail if it errors)
+        try:
+            reconcile_relay(relay_id, force=True)
+        except Exception as reconcile_error:
+            # Hardware was already successfully applied, so log warning but don't fail
+            print(f"[API] Warning: Hardware applied successfully but reconcile failed: {reconcile_error}")
+            import traceback
+            traceback.print_exc()
         
         # Get updated state for response
         updated_state = db_get_relay_state_new(relay_id)
