@@ -82,6 +82,8 @@ if STATIC_DIR.exists():
 # =========================
 
 def db_init() -> None:
+    """Initialize database schema and run migrations."""
+    print(f"[DB] Initializing database at: {DB_PATH}")
     conn = sqlite3.connect(DB_PATH)
     # Enable WAL mode for better concurrency and prevent database locked errors
     conn.execute("PRAGMA journal_mode=WAL")
@@ -136,11 +138,8 @@ def db_init() -> None:
         """
     )
     
-    # Migration: Add active_low column if it doesn't exist
-    try:
-        cur.execute("ALTER TABLE relay_devices ADD COLUMN active_low BOOLEAN NOT NULL DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
+    # Run schema migrations
+    _run_schema_migrations(conn, cur)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS relay_state_new (
@@ -237,6 +236,7 @@ def db_init() -> None:
     
     conn.commit()
     conn.close()
+    print(f"[DB] Database initialization complete at: {DB_PATH}")
 
 
 def db_insert_temp(ts: int, sensor_index: int, t: Optional[float], h: Optional[float]) -> None:
@@ -898,6 +898,37 @@ def _gps_reader_thread() -> None:
 # Startup
 # =========================
 
+def boot_failsafe_all_relays_off() -> None:
+    """
+    Boot failsafe: Immediately set all enabled relays to OFF before any rules run.
+    This prevents relays from staying ON due to previous hardware state or floating inputs during boot.
+    """
+    print("[Startup] Boot failsafe: Setting all relays to OFF...")
+    relays = db_list_relay_devices()
+    
+    for relay in relays:
+        if not relay.get("is_enabled", True):
+            continue
+        
+        pin = relay.get("pin")
+        relay_name = relay.get("name", "unknown")
+        active_low = bool(relay.get("active_low", 0))
+        
+        if pin is None:
+            print(f"[Startup] Boot failsafe: Skipping relay {relay_name} (no pin configured)")
+            continue
+        
+        try:
+            # Force OFF immediately using direct pinctrl (bypasses DB and rate limiting)
+            result = apply_relay_hardware_direct(pin, "off", active_low)
+            if result.get("ok"):
+                print(f"[Startup] Boot failsafe: Set relay {relay_name} (pin {pin}) to OFF")
+            else:
+                print(f"[Startup] Boot failsafe: Failed to set relay {relay_name} (pin {pin}) to OFF: {result.get('message')}")
+        except Exception as e:
+            print(f"[Startup] Boot failsafe: Exception setting relay {relay_name} (pin {pin}) to OFF: {e}")
+
+
 def reconcile_all_relays_on_startup() -> None:
     """
     Startup reconciliation: Apply desired_state from relay_state_new to hardware.
@@ -933,7 +964,10 @@ def reconcile_all_relays_on_startup() -> None:
 @app.on_event("startup")
 def on_startup() -> None:
     db_init()
-    # Reconcile all relays from relay_state_new (single source of truth)
+    # Step 1: Boot failsafe - immediately set all relays to OFF (before rules run)
+    boot_failsafe_all_relays_off()
+    # Step 2: Reconcile all relays from relay_state_new (single source of truth)
+    # This will apply correct state based on AUTO+rules or MANUAL mode
     reconcile_all_relays_on_startup()
     # Start GPS reader thread
     t_gps = threading.Thread(target=_gps_reader_thread, daemon=True)
@@ -1365,55 +1399,41 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
     result = apply_relay_hardware(relay_id, desired_state)
     
     if result.get("ok"):
-            # Success: update actual_state
-            db_update_relay_state_new(
-                relay_id,
-                actual_state=desired_state,
-                last_applied_at=now
-            )
-            
-            # Update rule's last_triggered_at only if we actually changed hardware state
-            # (cooldown was already checked in evaluate_rules, but we only update timestamp on actual state change)
-            if matched_rule:
-                db_update_rule_last_triggered(matched_rule["id"])
-            
-            # Log event (always log hardware applies, including startup)
-            rule_id = matched_rule.get("id") if matched_rule else None
-            db_log_relay_event(
-                relay_id,
-                source,
-                current_actual,
-                desired_state,
-                reason,
-                rule_id
-            )
-            
-            print(f"[Reconcile] Successfully updated relay {relay_id} to {desired_state} (source: {source}, reason: {reason})")
-            return True
-        else:
-            # Command failed
-            error_msg = f"Command failed: {proc.stderr.strip()}"
-            print(f"[Reconcile] {error_msg}")
-            db_log_relay_event(
-                relay_id,
-                source,
-                current_actual,
-                current_actual,  # State didn't change
-                error_msg,
-                None
-            )
-            return False
-    except Exception as e:
-        error_msg = f"Exception: {str(e)}"
-        print(f"[Reconcile] {error_msg}")
-        import traceback
-        traceback.print_exc()
+        # Success: update actual_state
+        db_update_relay_state_new(
+            relay_id,
+            actual_state=desired_state,
+            last_applied_at=now
+        )
+        
+        # Update rule's last_triggered_at only if we actually changed hardware state
+        # (cooldown was already checked in evaluate_rules, but we only update timestamp on actual state change)
+        if matched_rule:
+            db_update_rule_last_triggered(matched_rule["id"])
+        
+        # Log event (always log hardware applies, including startup)
+        rule_id = matched_rule.get("id") if matched_rule else None
         db_log_relay_event(
             relay_id,
             source,
             current_actual,
+            desired_state,
+            reason,
+            rule_id
+        )
+        
+        print(f"[Reconcile] Successfully updated relay {relay_name} (id={relay_id}, pin={pin}) to {desired_state} (source: {source}, reason: {reason})")
+        return True
+    else:
+        # Hardware apply failed
+        error_msg = result.get("message", result.get("error", "Unknown error"))
+        print(f"[Reconcile] Failed to apply hardware: {error_msg}")
+        db_log_relay_event(
+            relay_id,
+            source,
             current_actual,
-            error_msg,
+            current_actual,  # State didn't change
+            f"Hardware apply failed: {error_msg}",
             None
         )
         return False
@@ -1466,6 +1486,52 @@ HEADER_RELAY_PIN = 27  # Legacy constant, actual pin comes from DB
 
 # DEPRECATED: _set_relay_state and _init_relay_state removed
 # All relay control now goes through reconcile_relay() which uses relay_state_new as single source of truth
+
+
+def apply_relay_hardware_direct(pin: int, desired_state: str, active_low: bool = False) -> Dict[str, Any]:
+    """
+    Apply desired_state directly to GPIO pin using pinctrl (bypasses DB lookup).
+    Used for boot failsafe to force OFF state.
+    
+    Args:
+        pin: GPIO pin number
+        desired_state: "on" or "off"
+        active_low: True if relay is active_low, False for active_high
+    
+    Returns:
+        Dict with ok, error, message fields
+    """
+    if desired_state not in ("on", "off"):
+        return {"ok": False, "error": "invalid_state", "message": "desired_state must be 'on' or 'off'"}
+    
+    # Determine pinctrl command based on desired_state and active_low
+    # active_high (active_low=0): dh=on, dl=off
+    # active_low (active_low=1): dh=off, dl=on
+    if desired_state == "on":
+        pinctrl_op = "dl" if active_low else "dh"  # active_low: dl=on, active_high: dh=on
+    else:
+        pinctrl_op = "dh" if active_low else "dl"  # active_low: dh=off, active_high: dl=off
+    
+    cmd = ["sudo", "pinctrl", "set", str(pin), "op", pinctrl_op]
+    cmd_str = " ".join(cmd)
+    
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        
+        if proc.returncode == 0:
+            return {"ok": True, "state": desired_state, "pin": pin, "command": cmd_str}
+        else:
+            error_msg = proc.stderr.strip() or f"Command failed with code {proc.returncode}"
+            return {"ok": False, "error": "command_failed", "message": error_msg}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "timeout", "message": "pinctrl command timed out"}
+    except Exception as e:
+        return {"ok": False, "error": "exception", "message": str(e)}
 
 
 def apply_relay_hardware(relay_id: str, desired_state: str) -> Dict[str, Any]:
@@ -1599,6 +1665,7 @@ def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=
                 "id": relay_id,
                 "name": relay["name"],
                 "pin": relay["pin"],
+                "active_low": bool(relay.get("active_low", 0)),
                 "state": state.get("actual_state") or state.get("state", "off") if state else "off",
                 "mode": state.get("mode", "auto") if state else "auto",
                 "manual_until": state.get("manual_until") if state else None,
