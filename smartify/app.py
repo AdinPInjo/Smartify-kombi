@@ -778,6 +778,11 @@ SENSOR_SNAPSHOT_INTERVAL = 60  # Update snapshot every 60 seconds
 SENSOR_STALE_THRESHOLD = 600  # 10 minutes without valid samples = stale
 SENSOR_WARMUP_SAMPLES = 6  # Need at least 6 samples (30s) before snapshot is "ready"
 
+# Live sensor status (updated every 5s, used for warmup progress)
+SENSOR_LIVE_STATUS: Dict[str, Dict[str, Any]] = {}  # sensor_name -> {valid_count_30s, last_valid_ts, last_attempt_ts, last_error, is_ready}
+_sensor_live_status_lock = threading.Lock()
+SENSOR_LIVE_STATUS_WINDOW = 30  # Count valid samples within last 30 seconds
+
 def read_dht22_all() -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     try:
@@ -866,18 +871,33 @@ def _sensor_sampler_thread() -> None:
     """
     Background thread that samples DHT22 sensors every 5 seconds,
     accumulates samples in memory, and updates snapshot every 60 seconds.
+    Also updates live sensor status for warmup progress tracking.
     """
-    global _sensor_samples
+    global _sensor_samples, SENSOR_LIVE_STATUS
     
     # Map sensor_index to sensor_name (kombi=0, garaza=1)
     sensor_name_map = {0: "kombi", 1: "garaza"}
     
-    # Initialize deques for each sensor
+    # Initialize deques and live status for each sensor
     with _sensor_samples_lock:
         for idx in range(len(DHT22_PINS)):
             sensor_name = sensor_name_map.get(idx, f"sensor_{idx}")
             if sensor_name not in _sensor_samples:
                 _sensor_samples[sensor_name] = deque(maxlen=15)  # Keep last 15 samples (75s max)
+    
+    # Initialize live status tracking (deque of valid timestamps for 30s window)
+    valid_timestamps: Dict[str, deque] = {}  # sensor_name -> deque of valid timestamps
+    with _sensor_live_status_lock:
+        for idx in range(len(DHT22_PINS)):
+            sensor_name = sensor_name_map.get(idx, f"sensor_{idx}")
+            valid_timestamps[sensor_name] = deque(maxlen=10)  # Max 10 timestamps (50s)
+            SENSOR_LIVE_STATUS[sensor_name] = {
+                "valid_count_30s": 0,
+                "last_valid_ts": None,
+                "last_attempt_ts": None,
+                "last_error": None,
+                "is_ready": False
+            }
     
     last_snapshot_time = int(time.time())
     last_snapshot_time = (last_snapshot_time // SENSOR_SNAPSHOT_INTERVAL) * SENSOR_SNAPSHOT_INTERVAL  # Align to minute boundary
@@ -889,7 +909,7 @@ def _sensor_sampler_thread() -> None:
             # Read all sensors
             results = read_dht22_all()
             
-            # Store samples in memory
+            # Store samples in memory and update live status
             with _sensor_samples_lock:
                 for result in results:
                     sensor_idx = result.get("sensor_index", -1)
@@ -900,11 +920,45 @@ def _sensor_sampler_thread() -> None:
                     temp = result.get("temperature_c")
                     humidity = result.get("humidity")
                     ok = result.get("ok", False)
+                    error = result.get("error")
                     
                     # Store sample (temp, humidity, timestamp, ok)
                     if sensor_name not in _sensor_samples:
                         _sensor_samples[sensor_name] = deque(maxlen=15)
                     _sensor_samples[sensor_name].append((temp, humidity, now, ok))
+                    
+                    # Update live status (every 5s)
+                    with _sensor_live_status_lock:
+                        # Update last_attempt_ts always
+                        SENSOR_LIVE_STATUS[sensor_name]["last_attempt_ts"] = now
+                        
+                        if ok and temp is not None and humidity is not None:
+                            # Valid reading: add timestamp to deque
+                            valid_ts_deque = valid_timestamps.get(sensor_name)
+                            if valid_ts_deque is None:
+                                valid_ts_deque = deque(maxlen=10)
+                                valid_timestamps[sensor_name] = valid_ts_deque
+                            valid_ts_deque.append(now)
+                            
+                            # Count valid samples within last 30 seconds
+                            cutoff = now - SENSOR_LIVE_STATUS_WINDOW
+                            valid_count_30s = sum(1 for ts in valid_ts_deque if ts >= cutoff)
+                            
+                            # Update live status
+                            SENSOR_LIVE_STATUS[sensor_name]["valid_count_30s"] = valid_count_30s
+                            SENSOR_LIVE_STATUS[sensor_name]["last_valid_ts"] = now
+                            SENSOR_LIVE_STATUS[sensor_name]["last_error"] = None
+                            SENSOR_LIVE_STATUS[sensor_name]["is_ready"] = valid_count_30s >= SENSOR_WARMUP_SAMPLES
+                        else:
+                            # Invalid reading: update error but don't overwrite last_valid_ts
+                            SENSOR_LIVE_STATUS[sensor_name]["last_error"] = error or "Invalid reading"
+                            # Recalculate valid_count_30s from existing timestamps
+                            valid_ts_deque = valid_timestamps.get(sensor_name)
+                            if valid_ts_deque:
+                                cutoff = now - SENSOR_LIVE_STATUS_WINDOW
+                                valid_count_30s = sum(1 for ts in valid_ts_deque if ts >= cutoff)
+                                SENSOR_LIVE_STATUS[sensor_name]["valid_count_30s"] = valid_count_30s
+                                SENSOR_LIVE_STATUS[sensor_name]["is_ready"] = valid_count_30s >= SENSOR_WARMUP_SAMPLES
                     
                     # Optionally store in DB for debugging (can be disabled for performance)
                     # db_insert_sensor_sample(sensor_name, temp, humidity, ok, now)
@@ -1476,29 +1530,43 @@ RULE_EVAL_INTERVAL = 5  # Evaluate rules every 5 seconds
 def get_sensor_snapshot(sensor_name: str) -> Dict[str, Any]:
     """
     Get sensor snapshot with stale detection.
+    Uses live status for warmup progress (updates every 5s).
     Returns: value, updated_at, last_good_at, is_stale, age_seconds, is_ready
     ALWAYS returns age_seconds as int (never None) for safe integer operations.
     """
     now = int(time.time())
     snapshot = db_get_sensor_snapshot(sensor_name)
     
+    # Get live status (updated every 5s)
+    with _sensor_live_status_lock:
+        live_status = SENSOR_LIVE_STATUS.get(sensor_name, {})
+        live_valid_count = live_status.get("valid_count_30s", 0)
+        live_is_ready = live_status.get("is_ready", False)
+        live_last_valid_ts = live_status.get("last_valid_ts")
+        live_last_attempt_ts = live_status.get("last_attempt_ts", 0)
+    
     if not snapshot:
+        # No snapshot yet - use live status for warmup progress
+        # Age is time since last attempt (or 0 if never attempted)
+        age_seconds = max(0, now - live_last_attempt_ts) if live_last_attempt_ts > 0 else 0
+        is_stale = age_seconds > SENSOR_STALE_THRESHOLD
+        
         return {
             "sensor_name": sensor_name,
             "avg_temp": None,
             "avg_humidity": None,
-            "sample_count": 0,
+            "sample_count": live_valid_count,  # Use live count for warmup progress
             "updated_at": None,
-            "last_good_at": None,
-            "is_stale": True,
-            "age_seconds": 0,  # Always return int, never None
-            "is_ready": False,
+            "last_good_at": live_last_valid_ts,
+            "is_stale": is_stale,
+            "age_seconds": age_seconds,  # Always int, never None
+            "is_ready": live_is_ready,  # Use live is_ready
         }
     
-    # Safely extract fields with defaults
+    # Snapshot exists - use it for temperature values, but use live status for warmup if not ready
     last_good_at = snapshot.get("last_good_at") or 0
     updated_at = snapshot.get("updated_at") or 0
-    sample_count = snapshot.get("sample_count") or 0
+    snapshot_sample_count = snapshot.get("sample_count") or 0
     
     # Always compute age_seconds as int (never None)
     # Use last_good_at if available, otherwise updated_at, otherwise 0
@@ -1508,14 +1576,22 @@ def get_sensor_snapshot(sensor_name: str) -> Dict[str, Any]:
     # Stale if no valid samples for 10 minutes
     is_stale = age_seconds > SENSOR_STALE_THRESHOLD
     
-    # Ready if we have at least N samples (warmup requirement)
-    is_ready = sample_count >= SENSOR_WARMUP_SAMPLES
+    # If snapshot is not ready yet, use live status for warmup progress
+    # Otherwise use snapshot sample_count
+    if snapshot_sample_count < SENSOR_WARMUP_SAMPLES:
+        # Snapshot not ready - use live status
+        sample_count = live_valid_count
+        is_ready = live_is_ready
+    else:
+        # Snapshot is ready - use snapshot values
+        sample_count = snapshot_sample_count
+        is_ready = True
     
     return {
         "sensor_name": sensor_name,
         "avg_temp": snapshot.get("avg_temp"),
         "avg_humidity": snapshot.get("avg_humidity"),
-        "sample_count": sample_count,
+        "sample_count": sample_count,  # Live count during warmup, snapshot count when ready
         "updated_at": updated_at if updated_at else None,
         "last_good_at": last_good_at if last_good_at else None,
         "is_stale": is_stale,
@@ -1716,7 +1792,10 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         
         if not sensor_data_available:
             # Sensor data unavailable (stale/warming) - force OFF
-            print(f"[Reconcile] Sensor data unavailable ({reason_str}), forcing OFF")
+            # Only log occasionally to avoid spam (every 30s or when state changes)
+            should_log = (now % 30 == 0) or (current_desired != "off")
+            if should_log:
+                print(f"[Reconcile] Sensor data unavailable ({reason_str}), desired_state=OFF")
             desired_state = "off"
             source = "rule"
             reason = f"Sensor unavailable: {reason_str}"
@@ -1752,6 +1831,12 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
     # Step 4: Check if hardware needs to be updated
     if desired_state == current_actual:
         # Already in desired state, nothing to do
+        # During warmup/stale, if already OFF, don't spam hardware or logs
+        if reason and ("sensor_warming_up" in reason or "sensor_stale" in reason):
+            # Only update desired_state in DB, don't log event repeatedly
+            if desired_state != current_desired:
+                db_update_relay_state_new(relay_id, desired_state=desired_state)
+            return False
         return False
     
     # Step 5: Rate limiting - avoid flapping

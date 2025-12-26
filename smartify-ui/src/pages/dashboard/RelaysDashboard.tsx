@@ -86,24 +86,36 @@ function RelaysDashboard() {
       if (data.ok === false) {
         throw new Error(data.error || data.message || "Failed to load relays");
       }
-      // Ensure we have a valid relays array
+      // Ensure we have a valid relays array - harden parsing to prevent .some() crash
       if (!data || typeof data !== "object") {
         console.error("[RelaysDashboard] Invalid response format:", data);
+        console.warn("[RelaysDashboard] Received invalid response shape, expected object with 'relays' array");
         throw new Error("Invalid API response format");
       }
-      const relays = Array.isArray(data.relays) ? data.relays : [];
-      console.log("[RelaysDashboard] Parsed relays:", relays);
-      return relays as Relay[];
+      // Harden array parsing: handle both {relays: [...]} and direct array
+      const relaysArr = Array.isArray(data?.relays) ? data.relays : (Array.isArray(data) ? data : []);
+      if (!Array.isArray(relaysArr)) {
+        console.warn("[RelaysDashboard] relays is not an array:", typeof relaysArr, relaysArr);
+        throw new Error("Invalid relays array format");
+      }
+      console.log("[RelaysDashboard] Parsed relays:", relaysArr.length, "relays");
+      return relaysArr as Relay[];
     },
     retry: 1,
     refetchInterval: (query) => {
       // Poll more frequently (1.5s) when any relay is pending, otherwise 5s
-      const relays = query.state.data as Relay[] | undefined;
-      const hasPending = relays?.some(r => r.pending === true);
+      // Harden: never call .some() on non-array
+      const data = query.state.data;
+      if (!data || !Array.isArray(data)) {
+        return 5000;  // Default interval if data is invalid
+      }
+      const relays = data as Relay[];
+      const hasPending = relays.some(r => r.pending === true);
       return hasPending ? 1500 : 5000;
     },
   });
 
+  // Harden: ensure relays is always an array
   const relays = Array.isArray(relaysResponse) ? relaysResponse : [];
 
   // Fetch rules for all relays - aggregate all rules
@@ -382,32 +394,18 @@ function RelaysDashboard() {
           >
             <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
             <CardHeader className="pb-4 relative z-10">
-                <div className="flex items-center justify-between">
-                    <div>
+                {/* Header row: Relay name (left) + Status badge (right) */}
+                <div className="flex items-center justify-between mb-3">
                   <CardTitle className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
                     <Power className="h-5 w-5 text-orange-400" />
                     {relay.name.charAt(0).toUpperCase() + relay.name.slice(1)}
                   </CardTitle>
-                  <div className="flex items-center gap-2 mt-1">
-                    {isManual ? (
-                      <span className="text-xs px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">
-                        Manual
-                      </span>
-                    ) : (
-                      <span className="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                        Auto
-                      </span>
-                    )}
-                    <span className={`text-xs ${isOn ? "text-emerald-400" : "text-zinc-400"}`}>
-                      {isOn ? "ON" : "OFF"}
-                    </span>
-                  </div>
-                  {/* Inline status text (always visible) */}
-                  <div className="mt-2">
+                  {/* Status badge (top-right) */}
+                  <div className="flex items-center gap-2 text-xs max-w-[60%] text-right flex-shrink-0">
                     {isPending ? (
-                      <div className="flex items-center gap-2 text-xs">
+                      <div className="flex items-center gap-1.5">
                         {relay.pending_reason === "reconciling" && (
-                          <div className="h-3 w-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
+                          <div className="h-3 w-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
                         )}
                         <span className={
                           relay.pending_reason === "sensor_stale" || relay.pending_reason === "sensor_warming_up"
@@ -423,16 +421,32 @@ function RelaysDashboard() {
                         </span>
                       </div>
                     ) : (
-                      <div className="text-xs text-zinc-500">
+                      <span className="text-zinc-500">
                         {isManual ? (
                           <>MANUAL: {isOn ? "ON" : "OFF"}</>
                         ) : (
                           <>AUTO: monitoring {relayRules.length > 0 ? `${relayRules.length} rule${relayRules.length !== 1 ? "s" : ""}` : "no rules"}</>
                         )}
-                      </div>
+                      </span>
                     )}
                   </div>
                 </div>
+                {/* Controls row: Mode badge + State + Toggle */}
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                    {isManual ? (
+                      <span className="text-xs px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                        Manual
+                      </span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                        Auto
+                      </span>
+                    )}
+                    <span className={`text-xs ${isOn ? "text-emerald-400" : "text-zinc-400"}`}>
+                      {isOn ? "ON" : "OFF"}
+                    </span>
+                  </div>
                 <div className="flex items-center gap-3">
                   <Button
                     size="sm"
