@@ -996,6 +996,53 @@ def reconcile_all_relays_on_startup() -> None:
             traceback.print_exc()
 
 
+def evaluate_rules_on_startup() -> None:
+    """
+    After startup reconciliation, explicitly evaluate rules for all AUTO mode relays.
+    This ensures that if rules are enabled and conditions are already TRUE at boot,
+    the relay will transition to ON immediately rather than waiting for sensor events.
+    """
+    print("[Startup] Evaluating rules for AUTO mode relays...")
+    relays = db_list_relay_devices()
+    
+    for relay in relays:
+        if not relay.get("is_enabled", True):
+            continue
+        
+        relay_id = relay["id"]
+        relay_name = relay.get("name", "unknown")
+        
+        # Get relay state to check mode
+        relay_state = db_get_relay_state_new(relay_id)
+        if not relay_state:
+            continue
+        
+        mode = relay_state.get("mode", "auto")
+        
+        # Only evaluate rules for AUTO mode relays
+        if mode != "auto":
+            continue
+        
+        print(f"[Startup] Evaluating rules for relay {relay_name} (id={relay_id})...")
+        
+        try:
+            # Force reconciliation which will evaluate rules and apply if conditions match
+            # This bypasses rate limiting and ensures immediate evaluation
+            changed = reconcile_relay(relay_id, force=True)
+            if changed:
+                # Get updated state to see what happened
+                updated_state = db_get_relay_state_new(relay_id)
+                desired = updated_state.get("desired_state", "unknown") if updated_state else "unknown"
+                actual = updated_state.get("actual_state", "unknown") if updated_state else "unknown"
+                print(f"[Startup] Rule matched → applied {desired} to relay {relay_name} (actual: {actual})")
+            else:
+                print(f"[Startup] No rule matched or relay {relay_name} already in correct state")
+        except Exception as e:
+            print(f"[Startup] Error evaluating rules for relay {relay_name} ({relay_id}): {e}")
+            import traceback
+            traceback.print_exc()
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     db_init()
@@ -1004,6 +1051,9 @@ def on_startup() -> None:
     # Step 2: Reconcile all relays from relay_state_new (single source of truth)
     # This will apply correct state based on AUTO+rules or MANUAL mode
     reconcile_all_relays_on_startup()
+    # Step 3: Explicitly evaluate rules for AUTO mode relays
+    # This ensures rules with conditions already TRUE at boot will trigger immediately
+    evaluate_rules_on_startup()
     # Start GPS reader thread
     t_gps = threading.Thread(target=_gps_reader_thread, daemon=True)
     t_gps.start()
@@ -1696,12 +1746,20 @@ def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=
         for relay in relays:
             relay_id = relay["id"]
             state = db_get_relay_state_new(relay_id)
+            # During startup race conditions, if hardware state is unknown, return desired_state
+            # This prevents 500 errors when API is called before hardware is fully initialized
+            if state:
+                # Prefer actual_state, fallback to desired_state, then state field, then "off"
+                hardware_state = state.get("actual_state") or state.get("desired_state") or state.get("state", "off")
+            else:
+                hardware_state = "off"  # Safe default if state not found
+            
             result.append({
                 "id": relay_id,
                 "name": relay["name"],
                 "pin": relay["pin"],
                 "active_low": bool(relay.get("active_low", 0)),
-                "state": state.get("actual_state") or state.get("state", "off") if state else "off",
+                "state": hardware_state,
                 "mode": state.get("mode", "auto") if state else "auto",
                 "manual_until": state.get("manual_until") if state else None,
                 "updated_at": state.get("updated_at") if state else None,
@@ -1728,6 +1786,14 @@ def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = He
         return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
     
     state = db_get_relay_state_new(relay_id)
+    # During startup race conditions, if hardware state is unknown, return desired_state
+    # This prevents 500 errors when API is called before hardware is fully initialized
+    if state:
+        # Prefer actual_state, fallback to desired_state, then state field, then "off"
+        hardware_state = state.get("actual_state") or state.get("desired_state") or state.get("state", "off")
+    else:
+        hardware_state = "off"  # Safe default if state not found
+    
     return JSONResponse({
         "ok": True,
         "relay": {
@@ -1736,7 +1802,7 @@ def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = He
             "pin": relay["pin"],
             "active_low": bool(relay.get("active_low", 0)),
             "is_enabled": bool(relay.get("is_enabled", True)),
-            "state": state.get("actual_state") or state.get("state", "off") if state else "off",
+            "state": hardware_state,
             "mode": state.get("mode", "auto") if state else "auto",
             "manual_until": state.get("manual_until") if state else None,
             "updated_at": state.get("updated_at") if state else None,
