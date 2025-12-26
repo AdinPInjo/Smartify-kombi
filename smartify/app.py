@@ -2020,13 +2020,17 @@ def api_network_scan(request: Request, x_api_key: Optional[str] = Header(default
 def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
     """
     Determine if relay is in a pending/transitional state (cooldown, reconciling, startup, sensor issues).
-    Returns dict with pending status, reason, and cooldown info.
+    Returns dict with pending status, human-readable message, and detailed sensor/cooldown info.
     """
     now = int(time.time())
     pending = False
-    reason = None
+    pending_reason = None
+    pending_message = None
     cooldown_remaining = None
-    source = None
+    sensor_age_seconds = None
+    sensor_sample_count = None
+    sensor_is_ready = None
+    sensor_is_stale = None
     
     # Get relay state
     relay_state = db_get_relay_state_new(relay_id)
@@ -2034,8 +2038,13 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
         # State not found - could be during startup
         return {
             "pending": True,
-            "reason": "startup",
+            "pending_reason": "startup",
+            "pending_message": "System starting… initializing sensors",
             "cooldown_remaining": None,
+            "sensor_age_seconds": None,
+            "sensor_sample_count": None,
+            "sensor_is_ready": None,
+            "sensor_is_stale": None,
             "source": "startup"
         }
     
@@ -2047,13 +2056,15 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
     # Check if actual_state is unknown (startup/reconciling)
     if actual_state is None or actual_state == "":
         pending = True
-        reason = "reconciling"
+        pending_reason = "reconciling"
+        pending_message = "Applying relay state… please wait"
         source = "startup" if last_applied_at == 0 else "rule"
     
     # Check if desired_state differs from actual_state (reconciling)
     elif desired_state and desired_state != actual_state:
         pending = True
-        reason = "reconciling"
+        pending_reason = "reconciling"
+        pending_message = "Applying relay state… please wait"
         source = mode  # "manual" or "rule"
     
     # Check sensor status for AUTO mode relays (if rules depend on sensors)
@@ -2071,23 +2082,30 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
                     if not snapshot:
                         continue  # Skip if snapshot missing
                     
+                    # Extract sensor info for response
+                    sensor_age_seconds = snapshot.get("age_seconds", 0)
+                    sensor_sample_count = snapshot.get("sample_count", 0)
+                    sensor_is_ready = snapshot.get("is_ready", False)
+                    sensor_is_stale = snapshot.get("is_stale", False)
+                    
                     # Check is_ready first (before age calculations)
-                    if not snapshot.get("is_ready", False):
+                    if not sensor_is_ready:
                         pending = True
-                        reason = f"sensor_warming_up"
+                        pending_reason = "sensor_warming_up"
+                        pending_message = f"Waiting for temperature snapshot… collected {sensor_sample_count}/{SENSOR_WARMUP_SAMPLES} samples"
                         source = "sensor"
                         break
                     
                     # Now safe to check is_stale and use age_seconds
-                    if snapshot.get("is_stale", False):
+                    if sensor_is_stale:
                         pending = True
                         # Safely coerce age_seconds to int (should never be None, but defensive)
-                        age_seconds = snapshot.get("age_seconds")
-                        if age_seconds is None:
-                            age_seconds = 0
-                        age_seconds = int(age_seconds)
-                        age_min = age_seconds // 60
-                        reason = f"sensor_stale"
+                        if sensor_age_seconds is None:
+                            sensor_age_seconds = 0
+                        sensor_age_seconds = int(sensor_age_seconds)
+                        age_min = sensor_age_seconds // 60
+                        pending_reason = "sensor_stale"
+                        pending_message = f"No valid temperature reading for {age_min} minute{'s' if age_min != 1 else ''}. Relay forced OFF for safety."
                         source = "sensor"
                         break
         
@@ -2100,15 +2118,21 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
                     cooldown_sec = rule.get("cooldown_seconds", 60)
                     if age < cooldown_sec:
                         pending = True
-                        reason = "cooldown"
+                        pending_reason = "cooldown"
                         cooldown_remaining = cooldown_sec - age
+                        pending_message = f"Cooldown active: {cooldown_remaining}s remaining"
                         source = "rule"
                         break
     
     return {
         "pending": pending,
-        "reason": reason,
+        "pending_reason": pending_reason,
+        "pending_message": pending_message or (f"Relay is in {pending_reason} state" if pending_reason else None),
         "cooldown_remaining": cooldown_remaining,
+        "sensor_age_seconds": sensor_age_seconds,
+        "sensor_sample_count": sensor_sample_count,
+        "sensor_is_ready": sensor_is_ready,
+        "sensor_is_stale": sensor_is_stale,
         "source": source or mode
     }
 
@@ -2133,6 +2157,9 @@ def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=
             else:
                 hardware_state = "off"  # Safe default if state not found
             
+            # Get pending state info for each relay
+            pending_info = _get_relay_pending_state(relay_id)
+            
             result.append({
                 "id": relay_id,
                 "name": relay["name"],
@@ -2143,6 +2170,15 @@ def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=
                 "manual_until": state.get("manual_until") if state else None,
                 "updated_at": state.get("updated_at") if state else None,
                 "is_enabled": bool(relay.get("is_enabled", True)),
+                "pending": pending_info["pending"],
+                "pending_reason": pending_info["pending_reason"],
+                "pending_message": pending_info["pending_message"],
+                "cooldown_remaining": pending_info["cooldown_remaining"],
+                "sensor_age_seconds": pending_info["sensor_age_seconds"],
+                "sensor_sample_count": pending_info["sensor_sample_count"],
+                "sensor_is_ready": pending_info["sensor_is_ready"],
+                "sensor_is_stale": pending_info["sensor_is_stale"],
+                "source": pending_info["source"]
             })
         
         return JSONResponse({"ok": True, "relays": result})
@@ -2206,8 +2242,13 @@ def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = He
                 "manual_until": state.get("manual_until") if state else None,
                 "updated_at": state.get("updated_at") if state else None,
                 "pending": pending_info["pending"],
-                "reason": pending_info["reason"],
+                "pending_reason": pending_info["pending_reason"],
+                "pending_message": pending_info["pending_message"],
                 "cooldown_remaining": pending_info["cooldown_remaining"],
+                "sensor_age_seconds": pending_info["sensor_age_seconds"],
+                "sensor_sample_count": pending_info["sensor_sample_count"],
+                "sensor_is_ready": pending_info["sensor_is_ready"],
+                "sensor_is_stale": pending_info["sensor_is_stale"],
                 "source": pending_info["source"]
             },
         })
@@ -2227,8 +2268,13 @@ def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = He
                 "state": "off",
                 "mode": "auto",
                 "pending": True,
-                "reason": "error",
+                "pending_reason": "error",
+                "pending_message": "Error retrieving relay state",
                 "cooldown_remaining": None,
+                "sensor_age_seconds": None,
+                "sensor_sample_count": None,
+                "sensor_is_ready": None,
+                "sensor_is_stale": None,
                 "source": "system"
             }
         })
@@ -2251,16 +2297,8 @@ def api_relay_set_state(
         pending_info = _get_relay_pending_state(relay_id)
         if pending_info["pending"]:
             # Return error response but with HTTP 200 (never 500)
-            reason_msg = pending_info["reason"]
-            if reason_msg == "cooldown":
-                cooldown_msg = f" ({pending_info['cooldown_remaining']}s remaining)" if pending_info["cooldown_remaining"] else ""
-                error_msg = f"Relay is in cooldown period{cooldown_msg}"
-            elif reason_msg == "reconciling":
-                error_msg = "Relay state is being synchronized"
-            elif reason_msg == "startup":
-                error_msg = "Relay is initializing after startup"
-            else:
-                error_msg = f"Relay is in {reason_msg} state"
+            # Use the human-readable message from pending_info
+            error_msg = pending_info["pending_message"] or f"Relay is in {pending_info['pending_reason']} state"
             
             # Get current state for response
             relay_state = db_get_relay_state_new(relay_id)
@@ -2274,8 +2312,13 @@ def api_relay_set_state(
                 "message": error_msg,
                 "state": current_state,
                 "pending": True,
-                "reason": pending_info["reason"],
+                "pending_reason": pending_info["pending_reason"],
+                "pending_message": pending_info["pending_message"],
                 "cooldown_remaining": pending_info["cooldown_remaining"],
+                "sensor_age_seconds": pending_info["sensor_age_seconds"],
+                "sensor_sample_count": pending_info["sensor_sample_count"],
+                "sensor_is_ready": pending_info["sensor_is_ready"],
+                "sensor_is_stale": pending_info["sensor_is_stale"],
                 "source": pending_info["source"]
             })
         
@@ -2335,8 +2378,13 @@ def api_relay_set_state(
             "mode": mode,
             "manual_until": manual_until,
             "pending": updated_pending["pending"],
-            "reason": updated_pending["reason"],
+            "pending_reason": updated_pending["pending_reason"],
+            "pending_message": updated_pending["pending_message"],
             "cooldown_remaining": updated_pending["cooldown_remaining"],
+            "sensor_age_seconds": updated_pending["sensor_age_seconds"],
+            "sensor_sample_count": updated_pending["sensor_sample_count"],
+            "sensor_is_ready": updated_pending["sensor_is_ready"],
+            "sensor_is_stale": updated_pending["sensor_is_stale"],
             "source": updated_pending["source"]
         })
     except Exception as e:
@@ -2360,8 +2408,13 @@ def api_relay_set_state(
             "message": "Failed to set relay state",
             "state": fallback_state,
             "pending": True,
-            "reason": "error",
+            "pending_reason": "error",
+            "pending_message": "Error setting relay state",
             "cooldown_remaining": None,
+            "sensor_age_seconds": None,
+            "sensor_sample_count": None,
+            "sensor_is_ready": None,
+            "sensor_is_stale": None,
             "source": "system"
         })
 

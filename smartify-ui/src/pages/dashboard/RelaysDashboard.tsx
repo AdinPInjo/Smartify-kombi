@@ -35,8 +35,13 @@ type Relay = {
   updated_at: number | null;
   is_enabled: boolean;
   pending?: boolean;
-  reason?: string;
+  pending_reason?: string;
+  pending_message?: string;
   cooldown_remaining?: number | null;
+  sensor_age_seconds?: number | null;
+  sensor_sample_count?: number | null;
+  sensor_is_ready?: boolean | null;
+  sensor_is_stale?: boolean | null;
   source?: string;
 };
 
@@ -87,6 +92,12 @@ function RelaysDashboard() {
       return relays as Relay[];
     },
     retry: 1,
+    refetchInterval: (query) => {
+      // Poll more frequently (1.5s) when any relay is pending, otherwise 5s
+      const relays = query.state.data as Relay[] | undefined;
+      const hasPending = relays?.some(r => r.pending === true);
+      return hasPending ? 1500 : 5000;
+    },
   });
 
   const relays = Array.isArray(relaysResponse) ? relaysResponse : [];
@@ -324,8 +335,9 @@ function RelaysDashboard() {
         
         // Use pending state from API response (backend calculates cooldown/reconciling/startup)
         const isPending = relay.pending === true;
-        const pendingReason = relay.reason;
+        const pendingMessage = relay.pending_message || "Relay is in pending state";
         const cooldownRemaining = relay.cooldown_remaining ?? null;
+        const sensorSampleCount = relay.sensor_sample_count ?? null;
 
           return (
           <Card
@@ -402,15 +414,17 @@ function RelaysDashboard() {
                       </TooltipTrigger>
                       {isPending && (
                         <TooltipContent>
-                          <p className="text-sm">
-                            {pendingReason === "cooldown" && cooldownRemaining !== null
-                              ? `Relay is waiting for cooldown to expire (${cooldownRemaining}s remaining)`
-                              : pendingReason === "reconciling"
-                              ? "Relay state is being synchronized"
-                              : pendingReason === "startup"
-                              ? "Relay is initializing after startup"
-                              : `Relay is in ${pendingReason} state`}
+                          <p className="text-sm font-medium">
+                            {pendingMessage}
+                            {cooldownRemaining !== null && cooldownRemaining > 0 && (
+                              <span className="ml-1 text-orange-400">({cooldownRemaining}s)</span>
+                            )}
                           </p>
+                          {sensorSampleCount !== null && relay.sensor_sample_count !== undefined && (
+                            <p className="text-xs text-zinc-400 mt-1">
+                              Progress: {sensorSampleCount}/6 samples collected
+                            </p>
+                          )}
                           <p className="text-xs text-zinc-400 mt-1">
                             Manual control is disabled during this period.
                           </p>
