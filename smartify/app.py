@@ -1138,12 +1138,14 @@ def _evaluate_temperature_condition(condition: Dict[str, Any], temp_data: Dict[s
     return result
 
 
-def evaluate_rules(relay_id: str, temp_data: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Optional[str] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     """
     Deterministically evaluate enabled rules for a relay.
     Returns (desired_state, matched_rule) tuple.
     desired_state is "on" or "off" based on first matching rule, or "off" if no rule matches.
     matched_rule is the rule dict that matched, or None if no rule matched.
+    
+    Cooldown only prevents triggering a state CHANGE, not maintaining the current state.
     """
     rules = db_list_relay_rules(relay_id)
     enabled_rules = [r for r in rules if r.get("is_enabled", True)]
@@ -1154,26 +1156,41 @@ def evaluate_rules(relay_id: str, temp_data: Dict[str, Any]) -> Tuple[Optional[s
     # Sort by priority (lower number = higher priority), then by creation time
     enabled_rules.sort(key=lambda x: (x.get("priority", 100), x.get("created_at", 0)))
     
-    # Check cooldown and evaluate each rule in priority order
+    # Evaluate each rule in priority order
     now = int(time.time())
     for rule in enabled_rules:
-        # Check cooldown
+        # Evaluate condition first
+        condition = rule.get("condition", {})
+        if not _evaluate_temperature_condition(condition, temp_data):
+            continue  # Condition doesn't match, skip this rule
+        
+        # Condition matches - determine desired state
+        action = rule.get("action", "")
+        rule_desired_state = None
+        if action == "turn_on":
+            rule_desired_state = "on"
+        elif action == "turn_off":
+            rule_desired_state = "off"
+        else:
+            continue  # Invalid action
+        
+        # Check cooldown only if this rule would CHANGE the state
+        # If it would maintain current state, cooldown doesn't apply
+        if current_state is not None and rule_desired_state == current_state:
+            # Rule wants same state as current - cooldown doesn't apply, rule matches
+            return (rule_desired_state, rule)
+        
+        # Rule would change state - check cooldown
         last_triggered = rule.get("last_triggered_at")
         if last_triggered:
             age = now - last_triggered
             cooldown_sec = rule.get("cooldown_seconds", 60)
             if age < cooldown_sec:
-                continue  # Still in cooldown, skip this rule
+                # Still in cooldown and would change state - skip this rule
+                continue
         
-        # Evaluate condition
-        condition = rule.get("condition", {})
-        if _evaluate_temperature_condition(condition, temp_data):
-            # First match wins
-            action = rule.get("action", "")
-            if action == "turn_on":
-                return ("on", rule)
-            elif action == "turn_off":
-                return ("off", rule)
+        # Rule matches and either no cooldown or cooldown expired - first match wins
+        return (rule_desired_state, rule)
     
     # No rule matched -> default to off
     return ("off", None)
@@ -1233,7 +1250,8 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
     else:
         # Auto mode: evaluate rules
         temp_data = _temp_latest.copy()
-        desired_state, matched_rule = evaluate_rules(relay_id, temp_data)
+        # Pass current_actual to evaluate_rules so cooldown only applies to state changes
+        desired_state, matched_rule = evaluate_rules(relay_id, temp_data, current_actual)
         source = "rule"
         if matched_rule:
             # Build reason string
@@ -1248,8 +1266,7 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
                     break
             temp = sensor_reading.get("temperature_c") if sensor_reading else None
             reason = f"Rule '{matched_rule.get('name')}': {sensor_name.capitalize()} temp {operator} {value}°C (current: {temp:.1f}°C)"
-            # Update rule's last_triggered_at
-            db_update_rule_last_triggered(matched_rule["id"])
+            # Don't update last_triggered_at here - only update when hardware state actually changes
         else:
             reason = "No rule matched, default to off"
     
@@ -1298,7 +1315,8 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
                 last_applied_at=now
             )
             
-            # Update rule's last_triggered_at if a rule matched
+            # Update rule's last_triggered_at only if we actually changed hardware state
+            # (cooldown was already checked in evaluate_rules, but we only update timestamp on actual state change)
             if matched_rule:
                 db_update_rule_last_triggered(matched_rule["id"])
             
