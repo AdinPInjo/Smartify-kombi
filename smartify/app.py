@@ -2568,13 +2568,31 @@ def api_relay_rules_list(
     request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    """List rules for a relay."""
+    """List rules for a relay with runtime status."""
     err = require_auth(request, x_api_key)
     if err:
         return err
     
     rules = db_list_relay_rules(relay_id)
-    return JSONResponse({"ok": True, "rules": rules})
+    
+    # Add runtime status for each rule
+    rules_with_status = []
+    for rule in rules:
+        runtime_status = evaluate_single_rule(rule, relay_id)
+        rule_with_status = dict(rule)  # Copy rule dict
+        rule_with_status["runtime_status"] = runtime_status["status"]
+        rule_with_status["runtime_message"] = runtime_status["message"]
+        rule_with_status["runtime_meta"] = {
+            "sample_count": runtime_status["sample_count"],
+            "is_ready": runtime_status["is_ready"],
+            "is_stale": runtime_status["is_stale"],
+            "cooldown_remaining": runtime_status["cooldown_remaining"],
+            "snapshot_temp": runtime_status["snapshot_temp"],
+            "sensor": runtime_status["sensor"]
+        }
+        rules_with_status.append(rule_with_status)
+    
+    return JSONResponse({"ok": True, "rules": rules_with_status})
 
 
 @app.post("/api/relays/{relay_id}/rules")

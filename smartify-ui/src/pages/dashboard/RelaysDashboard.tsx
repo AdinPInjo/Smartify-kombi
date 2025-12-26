@@ -62,6 +62,17 @@ type Rule = {
   last_triggered_at: number | null;
   created_at: number;
   updated_at: number;
+  // Runtime status (from backend)
+  runtime_status?: "waiting_sensor" | "sensor_stale" | "cooldown" | "condition_met" | "condition_not_met" | "disabled" | "error";
+  runtime_message?: string;
+  runtime_meta?: {
+    sample_count?: number;
+    is_ready?: boolean;
+    is_stale?: boolean;
+    cooldown_remaining?: number | null;
+    snapshot_temp?: number | null;
+    sensor?: string | null;
+  };
 };
 
 function RelaysDashboard() {
@@ -548,7 +559,7 @@ function RelaysDashboard() {
                     {relayRules.map((rule) => (
                       <div
                         key={rule.id}
-                        className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 p-4 backdrop-blur-sm"
+                        className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 p-4 backdrop-blur-sm relative"
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
@@ -564,16 +575,6 @@ function RelaysDashboard() {
                                 </span>
                               )}
                               <span className="text-xs text-zinc-500">Priority: {rule.priority}</span>
-                              {/* Show relay status in rule row */}
-                              {isPending && (
-                                <span className="text-xs text-amber-400 ml-auto">
-                                  {relay.pending_reason === "sensor_stale" ? "Sensor stale" :
-                                   relay.pending_reason === "sensor_warming_up" ? "Warming up" :
-                                   relay.pending_reason === "cooldown" ? `Cooldown ${cooldownRemaining}s` :
-                                   relay.pending_reason === "reconciling" ? "Reconciling" :
-                                   "Pending"}
-                                </span>
-                              )}
                             </div>
                             <p className="text-xs text-zinc-400 mb-2">{formatRuleDescription(rule)}</p>
                             <div className="flex items-center gap-3 text-xs text-zinc-500">
@@ -636,7 +637,23 @@ function RelaysDashboard() {
                             </Button>
                           </div>
                         </div>
-                    </div>
+                        {/* Rule runtime status (bottom-right) */}
+                        {rule.runtime_message && (
+                          <div className="absolute bottom-2 right-2 text-xs">
+                            <span className={
+                              rule.runtime_status === "sensor_stale" || rule.runtime_status === "error"
+                                ? "text-amber-400"
+                                : rule.runtime_status === "waiting_sensor" || rule.runtime_status === "cooldown"
+                                ? "text-zinc-400"
+                                : rule.runtime_status === "condition_met"
+                                ? "text-emerald-400"
+                                : "text-zinc-500"
+                            }>
+                              {rule.runtime_message}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 )}
