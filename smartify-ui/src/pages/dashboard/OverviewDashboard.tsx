@@ -262,6 +262,10 @@ function HeaderRelayCard() {
         manual_until: number | null;
         updated_at: number | null;
         is_enabled: boolean;
+        pending?: boolean;
+        reason?: string;
+        cooldown_remaining?: number | null;
+        source?: string;
       };
     },
     retry: 1,
@@ -325,48 +329,24 @@ function HeaderRelayCard() {
     },
   });
 
-  // Fetch rules to check cooldown status
-  const { data: rulesResponse } = useQuery({
-    queryKey: ["relay-rules-cooldown", relaysResponse?.id],
-    queryFn: async () => {
-      if (!relaysResponse?.id) return { rules: [] };
-      const r = await apiFetch(`/api/relays/${relaysResponse.id}/rules`, { cache: "no-store" });
-      if (!r.ok) return { rules: [] };
-      return await r.json();
-    },
-    enabled: !!relaysResponse?.id,
-    retry: 1,
-    refetchInterval: 5000, // Refresh every 5 seconds to check cooldown
-  });
-
-  // Check if any enabled rule is currently in cooldown
-  const rules = rulesResponse?.rules || [];
-  const now = Math.floor(Date.now() / 1000);
-  const isInCooldown = rules.some((rule: any) => {
-    if (!rule.is_enabled || !rule.last_triggered_at) return false;
-    const age = now - rule.last_triggered_at;
-    return age < rule.cooldown_seconds;
-  });
-  
-  // Get the rule in cooldown (if any) to show cooldown time remaining
-  const ruleInCooldown = rules.find((rule: any) => {
-    if (!rule.is_enabled || !rule.last_triggered_at) return false;
-    const age = now - rule.last_triggered_at;
-    return age < rule.cooldown_seconds;
-  });
-  
-  const cooldownRemaining = ruleInCooldown 
-    ? Math.max(0, ruleInCooldown.cooldown_seconds - (now - ruleInCooldown.last_triggered_at))
-    : 0;
+  // Use pending state from API response (backend calculates cooldown/reconciling/startup)
+  const isPending = relaysResponse?.pending === true;
+  const pendingReason = relaysResponse?.reason;
+  const cooldownRemaining = relaysResponse?.cooldown_remaining ?? null;
 
   // Backend stores logical state (what user wants, not hardware command)
   const isOn = relaysResponse?.state === "on";  // Logical state: "on" means relay should be ON
   const isManual = relaysResponse?.mode === "manual";
   const manualUntil = relaysResponse?.manual_until;
-  const isDisabled = isLoading || toggleMutation.isPending || setAutoMutation.isPending || !!error || isInCooldown;
+  // Disable controls when pending (cooldown/reconciling/startup) or during mutations
+  const isDisabled = isLoading || toggleMutation.isPending || setAutoMutation.isPending || !!error || isPending;
   const isUpdating = toggleMutation.isPending || setAutoMutation.isPending;
 
   const handleToggle = (checked: boolean) => {
+    // Never allow toggle when pending - backend will reject anyway
+    if (isPending) {
+      return;
+    }
     // Send logical state (user intent) - backend handles hardware inversion
     const newState: "on" | "off" = checked ? "on" : "off";
     toggleMutation.mutate(newState);
@@ -421,6 +401,9 @@ function HeaderRelayCard() {
             {isUpdating && (
               <div className="h-4 w-4 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
             )}
+            {isPending && !isUpdating && (
+              <div className="h-4 w-4 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin opacity-50" />
+            )}
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -433,13 +416,19 @@ function HeaderRelayCard() {
                     />
                   </div>
                 </TooltipTrigger>
-                {isInCooldown && (
+                {isPending && (
                   <TooltipContent>
                     <p className="text-sm">
-                      Relay is in cooldown period. Please wait {cooldownRemaining}s before manual control.
+                      {pendingReason === "cooldown" && cooldownRemaining !== null
+                        ? `Relay is waiting for cooldown to expire (${cooldownRemaining}s remaining)`
+                        : pendingReason === "reconciling"
+                        ? "Relay state is being synchronized"
+                        : pendingReason === "startup"
+                        ? "Relay is initializing after startup"
+                        : `Relay is in ${pendingReason} state`}
                     </p>
                     <p className="text-xs text-zinc-400 mt-1">
-                      Cooldown prevents rapid toggling and allows automation rules to stabilize.
+                      Manual control is disabled during this period.
                     </p>
                   </TooltipContent>
                 )}
@@ -453,7 +442,7 @@ function HeaderRelayCard() {
             variant="outline"
             className="w-full bg-zinc-800/50 border-zinc-700/50 text-zinc-300 hover:bg-zinc-700/50"
             onClick={handleReturnToAuto}
-            disabled={isDisabled}
+            disabled={isDisabled || isPending}
           >
             Return to Auto
           </Button>

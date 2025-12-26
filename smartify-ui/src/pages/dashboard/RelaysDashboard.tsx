@@ -34,6 +34,10 @@ type Relay = {
   manual_until: number | null;
   updated_at: number | null;
   is_enabled: boolean;
+  pending?: boolean;
+  reason?: string;
+  cooldown_remaining?: number | null;
+  source?: string;
 };
 
 type Rule = {
@@ -116,6 +120,7 @@ function RelaysDashboard() {
   const rules = rulesResponse?.rules || [];
 
   // Mutation to toggle relay state
+  // NEVER optimistically update - always wait for backend confirmation
   const toggleRelayMutation = useMutation({
     mutationFn: async ({ relayId, state }: { relayId: string; state: "on" | "off" }) => {
       // Send logical state (user intent) - backend will handle hardware inversion
@@ -125,11 +130,16 @@ function RelaysDashboard() {
         body: JSON.stringify({ state: state, mode: "manual" }),
         cache: "no-store",
       });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ error: "unknown" }));
-        throw new Error(err.message || `Failed to set relay: ${r.status}`);
+      
+      // Backend always returns 200, but may have ok: false for pending state
+      const result = await r.json();
+      if (!result.ok) {
+        throw new Error(result.message || "Failed to set relay state");
       }
-      return await r.json();
+      
+      // Refetch to get updated state (never update UI optimistically)
+      await queryClient.invalidateQueries({ queryKey: ["relays"] });
+      return result;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["relays"] });
@@ -139,6 +149,8 @@ function RelaysDashboard() {
       toast.error("Failed to update relay", {
         description: error instanceof Error ? error.message : "Unknown error",
       });
+      // Refetch to get current state from backend
+      queryClient.invalidateQueries({ queryKey: ["relays"] });
     },
   });
 
@@ -310,24 +322,10 @@ function RelaysDashboard() {
         const isManual = relay.mode === "manual";
         const relayRules = rules.filter((r) => r.relay_id === relay.id);
         
-        // Check if any enabled rule for this relay is in cooldown
-        const now = Math.floor(Date.now() / 1000);
-        const isInCooldown = relayRules.some((rule: Rule) => {
-          if (!rule.is_enabled || !rule.last_triggered_at) return false;
-          const age = now - rule.last_triggered_at;
-          return age < rule.cooldown_seconds;
-        });
-        
-        // Get the rule in cooldown (if any) to show cooldown time remaining
-        const ruleInCooldown = relayRules.find((rule: Rule) => {
-          if (!rule.is_enabled || !rule.last_triggered_at) return false;
-          const age = now - rule.last_triggered_at;
-          return age < rule.cooldown_seconds;
-        });
-        
-        const cooldownRemaining = ruleInCooldown 
-          ? Math.max(0, ruleInCooldown.cooldown_seconds - (now - ruleInCooldown.last_triggered_at))
-          : 0;
+        // Use pending state from API response (backend calculates cooldown/reconciling/startup)
+        const isPending = relay.pending === true;
+        const pendingReason = relay.reason;
+        const cooldownRemaining = relay.cooldown_remaining ?? null;
 
           return (
           <Card
@@ -367,6 +365,8 @@ function RelaysDashboard() {
                         : "bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-300"
                     }
                     onClick={() => {
+                      // Never allow mode change when pending
+                      if (isPending) return;
                       if (isManual) {
                         // Return to auto mode
                         setAutoMutation.mutate(relay.id);
@@ -376,7 +376,7 @@ function RelaysDashboard() {
                         toggleRelayMutation.mutate({ relayId: relay.id, state: newState });
                       }
                     }}
-                    disabled={setAutoMutation.isPending || toggleRelayMutation.isPending}
+                    disabled={setAutoMutation.isPending || toggleRelayMutation.isPending || isPending}
                     title={isManual ? "Click to return to Auto mode" : "Click to switch to Manual mode"}
                   >
                     {isManual ? "Manual" : "Auto"}
@@ -384,22 +384,35 @@ function RelaysDashboard() {
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <div>
+                        <div className="flex items-center gap-2">
+                          {isPending && !toggleRelayMutation.isPending && (
+                            <div className="h-3 w-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin opacity-50" />
+                          )}
                           <Switch
                             checked={isOn}
-                            onCheckedChange={(checked) => handleRelayToggle(relay, checked)}
-                            disabled={toggleRelayMutation.isPending || isInCooldown}
+                            onCheckedChange={(checked) => {
+                              // Never allow toggle when pending - backend will reject anyway
+                              if (isPending) return;
+                              handleRelayToggle(relay, checked);
+                            }}
+                            disabled={toggleRelayMutation.isPending || isPending}
                             className="data-[state=checked]:bg-orange-500 data-[state=unchecked]:bg-zinc-700"
                           />
                         </div>
                       </TooltipTrigger>
-                      {isInCooldown && (
+                      {isPending && (
                         <TooltipContent>
                           <p className="text-sm">
-                            Relay is in cooldown period. Please wait {cooldownRemaining}s before manual control.
+                            {pendingReason === "cooldown" && cooldownRemaining !== null
+                              ? `Relay is waiting for cooldown to expire (${cooldownRemaining}s remaining)`
+                              : pendingReason === "reconciling"
+                              ? "Relay state is being synchronized"
+                              : pendingReason === "startup"
+                              ? "Relay is initializing after startup"
+                              : `Relay is in ${pendingReason} state`}
                           </p>
                           <p className="text-xs text-zinc-400 mt-1">
-                            Cooldown prevents rapid toggling and allows automation rules to stabilize.
+                            Manual control is disabled during this period.
                           </p>
                         </TooltipContent>
                       )}

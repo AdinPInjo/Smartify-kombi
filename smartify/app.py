@@ -1733,6 +1733,69 @@ def api_network_scan(request: Request, x_api_key: Optional[str] = Header(default
 # API: Relay Automation
 # =========================
 
+def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
+    """
+    Determine if relay is in a pending/transitional state (cooldown, reconciling, startup).
+    Returns dict with pending status, reason, and cooldown info.
+    """
+    now = int(time.time())
+    pending = False
+    reason = None
+    cooldown_remaining = None
+    source = None
+    
+    # Get relay state
+    relay_state = db_get_relay_state_new(relay_id)
+    if not relay_state:
+        # State not found - could be during startup
+        return {
+            "pending": True,
+            "reason": "startup",
+            "cooldown_remaining": None,
+            "source": "startup"
+        }
+    
+    actual_state = relay_state.get("actual_state")
+    desired_state = relay_state.get("desired_state")
+    last_applied_at = relay_state.get("last_applied_at", 0)
+    mode = relay_state.get("mode", "auto")
+    
+    # Check if actual_state is unknown (startup/reconciling)
+    if actual_state is None or actual_state == "":
+        pending = True
+        reason = "reconciling"
+        source = "startup" if last_applied_at == 0 else "rule"
+    
+    # Check if desired_state differs from actual_state (reconciling)
+    elif desired_state and desired_state != actual_state:
+        pending = True
+        reason = "reconciling"
+        source = mode  # "manual" or "rule"
+    
+    # Check cooldown for AUTO mode relays
+    if mode == "auto" and not pending:
+        rules = db_list_relay_rules(relay_id)
+        enabled_rules = [r for r in rules if r.get("is_enabled", True)]
+        
+        for rule in enabled_rules:
+            last_triggered = rule.get("last_triggered_at")
+            if last_triggered:
+                age = now - last_triggered
+                cooldown_sec = rule.get("cooldown_seconds", 60)
+                if age < cooldown_sec:
+                    pending = True
+                    reason = "cooldown"
+                    cooldown_remaining = cooldown_sec - age
+                    source = "rule"
+                    break
+    
+    return {
+        "pending": pending,
+        "reason": reason,
+        "cooldown_remaining": cooldown_remaining,
+        "source": source or mode
+    }
+
 @app.get("/api/relays")
 def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     """List all relays with their current state and mode."""
@@ -1768,46 +1831,91 @@ def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=
         
         return JSONResponse({"ok": True, "relays": result})
     except Exception as e:
+        # NEVER return 500 - always return valid JSON with safe fallback
         print(f"[API] Error listing relays: {e}")
         import traceback
         traceback.print_exc()
-        return JSONResponse({"ok": False, "error": str(e), "relays": []}, status_code=500)
+        return JSONResponse({"ok": True, "relays": [], "error": "Failed to list relays"})
 
 
 @app.get("/api/relays/{relay_id}")
 def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
-    """Get relay details."""
+    """Get relay details with pending state information. NEVER returns 500."""
     err = require_auth(request, x_api_key)
     if err:
         return err
     
-    relay = db_get_relay_device(relay_id)
-    if not relay:
-        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
-    
-    state = db_get_relay_state_new(relay_id)
-    # During startup race conditions, if hardware state is unknown, return desired_state
-    # This prevents 500 errors when API is called before hardware is fully initialized
-    if state:
-        # Prefer actual_state, fallback to desired_state, then state field, then "off"
-        hardware_state = state.get("actual_state") or state.get("desired_state") or state.get("state", "off")
-    else:
-        hardware_state = "off"  # Safe default if state not found
-    
-    return JSONResponse({
-        "ok": True,
-        "relay": {
-            "id": relay["id"],
-            "name": relay["name"],
-            "pin": relay["pin"],
-            "active_low": bool(relay.get("active_low", 0)),
-            "is_enabled": bool(relay.get("is_enabled", True)),
-            "state": hardware_state,
-            "mode": state.get("mode", "auto") if state else "auto",
-            "manual_until": state.get("manual_until") if state else None,
-            "updated_at": state.get("updated_at") if state else None,
-        },
-    })
+    try:
+        relay = db_get_relay_device(relay_id)
+        if not relay:
+            # Return safe fallback instead of 404
+            return JSONResponse({
+                "ok": True,
+                "relay": {
+                    "id": relay_id,
+                    "name": "unknown",
+                    "pin": None,
+                    "active_low": False,
+                    "is_enabled": False,
+                    "state": "off",
+                    "mode": "auto",
+                    "pending": True,
+                    "reason": "not_found",
+                    "cooldown_remaining": None,
+                    "source": "system"
+                }
+            })
+        
+        state = db_get_relay_state_new(relay_id)
+        
+        # Get pending state info
+        pending_info = _get_relay_pending_state(relay_id)
+        
+        # Determine hardware state with fallback chain
+        if state:
+            hardware_state = state.get("actual_state") or state.get("desired_state") or state.get("state", "off")
+        else:
+            hardware_state = "off"  # Safe default
+        
+        return JSONResponse({
+            "ok": True,
+            "relay": {
+                "id": relay["id"],
+                "name": relay["name"],
+                "pin": relay["pin"],
+                "active_low": bool(relay.get("active_low", 0)),
+                "is_enabled": bool(relay.get("is_enabled", True)),
+                "state": hardware_state,
+                "mode": state.get("mode", "auto") if state else "auto",
+                "manual_until": state.get("manual_until") if state else None,
+                "updated_at": state.get("updated_at") if state else None,
+                "pending": pending_info["pending"],
+                "reason": pending_info["reason"],
+                "cooldown_remaining": pending_info["cooldown_remaining"],
+                "source": pending_info["source"]
+            },
+        })
+    except Exception as e:
+        # NEVER return 500 - always return valid JSON with safe fallback
+        print(f"[API] Error getting relay {relay_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({
+            "ok": True,
+            "relay": {
+                "id": relay_id,
+                "name": "unknown",
+                "pin": None,
+                "active_low": False,
+                "is_enabled": False,
+                "state": "off",
+                "mode": "auto",
+                "pending": True,
+                "reason": "error",
+                "cooldown_remaining": None,
+                "source": "system"
+            }
+        })
 
 
 @app.post("/api/relays/{relay_id}/state")
@@ -1817,52 +1925,129 @@ def api_relay_set_state(
     body: Dict[str, Any] = Body(...),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    """Set relay state manually. Sets mode to 'manual' and uses reconcile to apply."""
+    """Set relay state manually. Sets mode to 'manual' and uses reconcile to apply. NEVER returns 500."""
     err = require_auth(request, x_api_key)
     if err:
         return err
     
-    relay = db_get_relay_device(relay_id)
-    if not relay:
-        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
-    
-    state = body.get("state", "").strip().lower()
-    if state not in ("on", "off"):
-        return JSONResponse({"ok": False, "error": "invalid_state"}, status_code=400)
-    
-    mode = body.get("mode", "manual")
-    if mode not in ("auto", "manual"):
-        mode = "manual"
-    
-    duration_seconds = body.get("durationSeconds")
-    manual_until = None
-    if mode == "manual" and duration_seconds:
-        manual_until = int(time.time()) + int(duration_seconds)
-    
-    # Update database: set manual mode and manual_state, then reconcile
-    db_update_relay_state_new(
-        relay_id=relay_id,
-        mode=mode,
-        manual_state=state if mode == "manual" else None,
-        manual_until=manual_until if mode == "manual" else None
-    )
-    
-    # Reconcile will handle hardware command
-    reconcile_relay(relay_id, force=True)
-    
-    # Get updated state for response
-    updated_state = db_get_relay_state_new(relay_id)
-    if updated_state:
-        response_state = updated_state.get("actual_state") or updated_state.get("state", "off")
-    else:
-        response_state = state
-    
-    return JSONResponse({
-        "ok": True,
-        "state": response_state,
-        "mode": mode,
-        "manual_until": manual_until,
-    })
+    try:
+        # Check if relay is in pending state (cooldown/reconciling)
+        pending_info = _get_relay_pending_state(relay_id)
+        if pending_info["pending"]:
+            # Return error response but with HTTP 200 (never 500)
+            reason_msg = pending_info["reason"]
+            if reason_msg == "cooldown":
+                cooldown_msg = f" ({pending_info['cooldown_remaining']}s remaining)" if pending_info["cooldown_remaining"] else ""
+                error_msg = f"Relay is in cooldown period{cooldown_msg}"
+            elif reason_msg == "reconciling":
+                error_msg = "Relay state is being synchronized"
+            elif reason_msg == "startup":
+                error_msg = "Relay is initializing after startup"
+            else:
+                error_msg = f"Relay is in {reason_msg} state"
+            
+            # Get current state for response
+            relay_state = db_get_relay_state_new(relay_id)
+            current_state = "off"
+            if relay_state:
+                current_state = relay_state.get("actual_state") or relay_state.get("desired_state") or relay_state.get("state", "off")
+            
+            return JSONResponse({
+                "ok": False,
+                "error": "pending",
+                "message": error_msg,
+                "state": current_state,
+                "pending": True,
+                "reason": pending_info["reason"],
+                "cooldown_remaining": pending_info["cooldown_remaining"],
+                "source": pending_info["source"]
+            })
+        
+        relay = db_get_relay_device(relay_id)
+        if not relay:
+            return JSONResponse({
+                "ok": False,
+                "error": "not_found",
+                "message": "Relay device not found",
+                "state": "off",
+                "pending": False
+            })
+        
+        state = body.get("state", "").strip().lower()
+        if state not in ("on", "off"):
+            return JSONResponse({
+                "ok": False,
+                "error": "invalid_state",
+                "message": "State must be 'on' or 'off'",
+                "state": "off",
+                "pending": False
+            })
+        
+        mode = body.get("mode", "manual")
+        if mode not in ("auto", "manual"):
+            mode = "manual"
+        
+        duration_seconds = body.get("durationSeconds")
+        manual_until = None
+        if mode == "manual" and duration_seconds:
+            manual_until = int(time.time()) + int(duration_seconds)
+        
+        # Update database: set manual mode and manual_state, then reconcile
+        db_update_relay_state_new(
+            relay_id=relay_id,
+            mode=mode,
+            manual_state=state if mode == "manual" else None,
+            manual_until=manual_until if mode == "manual" else None
+        )
+        
+        # Reconcile will handle hardware command
+        reconcile_relay(relay_id, force=True)
+        
+        # Get updated state for response
+        updated_state = db_get_relay_state_new(relay_id)
+        if updated_state:
+            response_state = updated_state.get("actual_state") or updated_state.get("desired_state") or updated_state.get("state", "off")
+        else:
+            response_state = state
+        
+        # Get updated pending info
+        updated_pending = _get_relay_pending_state(relay_id)
+        
+        return JSONResponse({
+            "ok": True,
+            "state": response_state,
+            "mode": mode,
+            "manual_until": manual_until,
+            "pending": updated_pending["pending"],
+            "reason": updated_pending["reason"],
+            "cooldown_remaining": updated_pending["cooldown_remaining"],
+            "source": updated_pending["source"]
+        })
+    except Exception as e:
+        # NEVER return 500 - always return valid JSON with safe fallback
+        print(f"[API] Error setting relay {relay_id} state: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Try to get current state for fallback
+        try:
+            relay_state = db_get_relay_state_new(relay_id)
+            fallback_state = "off"
+            if relay_state:
+                fallback_state = relay_state.get("actual_state") or relay_state.get("desired_state") or relay_state.get("state", "off")
+        except:
+            fallback_state = "off"
+        
+        return JSONResponse({
+            "ok": False,
+            "error": "exception",
+            "message": "Failed to set relay state",
+            "state": fallback_state,
+            "pending": True,
+            "reason": "error",
+            "cooldown_remaining": None,
+            "source": "system"
+        })
 
 
 @app.post("/api/relays/{relay_id}/auto")
