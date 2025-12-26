@@ -5,6 +5,7 @@ import threading
 import subprocess
 import uuid
 import json
+from collections import deque
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -250,6 +251,39 @@ def db_init() -> None:
         );
         """
     )
+    # Temperature snapshot tables for stable readings
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sensor_snapshot (
+            sensor_name TEXT PRIMARY KEY,
+            avg_temp REAL,
+            avg_humidity REAL,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            window_start INTEGER,
+            window_end INTEGER,
+            last_good_at INTEGER,
+            updated_at INTEGER NOT NULL
+        );
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sensor_samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sensor_name TEXT NOT NULL,
+            temp REAL,
+            humidity REAL,
+            ok INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sensor_samples_name_time 
+        ON sensor_samples(sensor_name, created_at);
+        """
+    )
     
     # Initialize default heater relay device if it doesn't exist
     cur.execute("SELECT COUNT(*) FROM relay_devices WHERE name = 'heater'")
@@ -283,6 +317,66 @@ def db_insert_temp(ts: int, sensor_index: int, t: Optional[float], h: Optional[f
     )
     conn.commit()
     conn.close()
+
+
+def db_insert_sensor_sample(sensor_name: str, temp: Optional[float], humidity: Optional[float], ok: bool, created_at: int) -> None:
+    """Insert a raw sensor sample (optional, for debugging)."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO sensor_samples (sensor_name, temp, humidity, ok, created_at) VALUES (?, ?, ?, ?, ?)",
+        (sensor_name, temp, humidity, 1 if ok else 0, created_at),
+    )
+    conn.commit()
+    conn.close()
+    
+    # Keep only last 15 minutes of samples to prevent DB growth
+    cutoff = created_at - (15 * 60)
+    cur.execute("DELETE FROM sensor_samples WHERE created_at < ?", (cutoff,))
+    conn.commit()
+    conn.close()
+
+
+def db_update_sensor_snapshot(
+    sensor_name: str,
+    avg_temp: Optional[float],
+    avg_humidity: Optional[float],
+    sample_count: int,
+    window_start: int,
+    window_end: int,
+    last_good_at: int,
+    updated_at: int
+) -> None:
+    """Update or insert sensor snapshot."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO sensor_snapshot 
+           (sensor_name, avg_temp, avg_humidity, sample_count, window_start, window_end, last_good_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(sensor_name) DO UPDATE SET
+           avg_temp = excluded.avg_temp,
+           avg_humidity = excluded.avg_humidity,
+           sample_count = excluded.sample_count,
+           window_start = excluded.window_start,
+           window_end = excluded.window_end,
+           last_good_at = excluded.last_good_at,
+           updated_at = excluded.updated_at""",
+        (sensor_name, avg_temp, avg_humidity, sample_count, window_start, window_end, last_good_at, updated_at),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_sensor_snapshot(sensor_name: str) -> Optional[Dict[str, Any]]:
+    """Get sensor snapshot."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def db_insert_gps(ts: int, lat: Optional[float], lon: Optional[float], speed_kmh: Optional[float],
@@ -676,6 +770,14 @@ _temp_latest: Dict[str, Any] = {
     "sensors": [],
 }
 
+# Temperature snapshot system for stable readings
+_sensor_samples: Dict[str, deque] = {}  # sensor_name -> deque of (temp, humidity, timestamp, ok)
+_sensor_samples_lock = threading.Lock()
+SENSOR_SAMPLE_INTERVAL = 5  # Sample every 5 seconds
+SENSOR_SNAPSHOT_INTERVAL = 60  # Update snapshot every 60 seconds
+SENSOR_STALE_THRESHOLD = 600  # 10 minutes without valid samples = stale
+SENSOR_WARMUP_SAMPLES = 6  # Need at least 6 samples (30s) before snapshot is "ready"
+
 def read_dht22_all() -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     try:
@@ -758,6 +860,106 @@ def _dht22_poller_thread() -> None:
         
         # Poll every SENSOR_LOG_INTERVAL seconds (default 30s)
         time.sleep(SENSOR_LOG_INTERVAL)
+
+
+def _sensor_sampler_thread() -> None:
+    """
+    Background thread that samples DHT22 sensors every 5 seconds,
+    accumulates samples in memory, and updates snapshot every 60 seconds.
+    """
+    global _sensor_samples
+    
+    # Map sensor_index to sensor_name (kombi=0, garaza=1)
+    sensor_name_map = {0: "kombi", 1: "garaza"}
+    
+    # Initialize deques for each sensor
+    with _sensor_samples_lock:
+        for idx in range(len(DHT22_PINS)):
+            sensor_name = sensor_name_map.get(idx, f"sensor_{idx}")
+            if sensor_name not in _sensor_samples:
+                _sensor_samples[sensor_name] = deque(maxlen=15)  # Keep last 15 samples (75s max)
+    
+    last_snapshot_time = int(time.time())
+    last_snapshot_time = (last_snapshot_time // SENSOR_SNAPSHOT_INTERVAL) * SENSOR_SNAPSHOT_INTERVAL  # Align to minute boundary
+    
+    while True:
+        try:
+            now = int(time.time())
+            
+            # Read all sensors
+            results = read_dht22_all()
+            
+            # Store samples in memory
+            with _sensor_samples_lock:
+                for result in results:
+                    sensor_idx = result.get("sensor_index", -1)
+                    sensor_name = sensor_name_map.get(sensor_idx)
+                    if not sensor_name:
+                        continue
+                    
+                    temp = result.get("temperature_c")
+                    humidity = result.get("humidity")
+                    ok = result.get("ok", False)
+                    
+                    # Store sample (temp, humidity, timestamp, ok)
+                    if sensor_name not in _sensor_samples:
+                        _sensor_samples[sensor_name] = deque(maxlen=15)
+                    _sensor_samples[sensor_name].append((temp, humidity, now, ok))
+                    
+                    # Optionally store in DB for debugging (can be disabled for performance)
+                    # db_insert_sensor_sample(sensor_name, temp, humidity, ok, now)
+            
+            # Check if it's time to update snapshot (every 60 seconds, aligned to minute boundary)
+            current_window = (now // SENSOR_SNAPSHOT_INTERVAL) * SENSOR_SNAPSHOT_INTERVAL
+            if current_window > last_snapshot_time:
+                # Time to compute and store snapshot
+                window_start = last_snapshot_time
+                window_end = current_window
+                
+                with _sensor_samples_lock:
+                    for sensor_name, samples in _sensor_samples.items():
+                        # Get valid samples from the last 60-second window
+                        valid_samples = [
+                            (t, h) for t, h, ts, ok in samples
+                            if ok and t is not None and h is not None and ts >= window_start and ts < window_end
+                        ]
+                        
+                        if valid_samples:
+                            # Compute average
+                            avg_temp = sum(t for t, h in valid_samples) / len(valid_samples)
+                            avg_humidity = sum(h for t, h in valid_samples) / len(valid_samples)
+                            sample_count = len(valid_samples)
+                            last_good_at = now
+                            
+                            # Update snapshot
+                            db_update_sensor_snapshot(
+                                sensor_name=sensor_name,
+                                avg_temp=avg_temp,
+                                avg_humidity=avg_humidity,
+                                sample_count=sample_count,
+                                window_start=window_start,
+                                window_end=window_end,
+                                last_good_at=last_good_at,
+                                updated_at=now
+                            )
+                            print(f"[Sensor Snapshot] Updated {sensor_name}: {avg_temp:.1f}°C (from {sample_count} samples)")
+                        else:
+                            # No valid samples in this window - keep previous snapshot (do NOT overwrite)
+                            existing = db_get_sensor_snapshot(sensor_name)
+                            if existing:
+                                print(f"[Sensor Snapshot] No valid samples for {sensor_name} in window, keeping previous snapshot")
+                            # If no existing snapshot, we don't create one (will be marked as stale)
+                
+                last_snapshot_time = current_window
+            
+            # Sample every 5 seconds
+            time.sleep(SENSOR_SAMPLE_INTERVAL)
+            
+        except Exception as e:
+            print(f"[Sensor Sampler] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(SENSOR_SAMPLE_INTERVAL)
 
 
 # =========================
@@ -1057,9 +1259,12 @@ def on_startup() -> None:
     # Start GPS reader thread
     t_gps = threading.Thread(target=_gps_reader_thread, daemon=True)
     t_gps.start()
-    # Start DHT22 poller thread
+    # Start DHT22 poller thread (for legacy API compatibility)
     t_dht = threading.Thread(target=_dht22_poller_thread, daemon=True)
     t_dht.start()
+    # Start sensor sampler thread (for snapshot system)
+    t_sampler = threading.Thread(target=_sensor_sampler_thread, daemon=True)
+    t_sampler.start()
     # Start rule evaluator thread
     t_rules = threading.Thread(target=_rule_evaluator_thread, daemon=True)
     t_rules.start()
@@ -1102,11 +1307,46 @@ def api_me(request: Request, x_api_key: Optional[str] = Header(default=None, ali
 
 @app.get("/api/temperature/latest")
 def api_temperature_latest(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    """Return RAW latest sensor readings (for UI/graphs). Old behavior preserved."""
     err = require_auth(request, x_api_key)
     if err:
         return err
-    # Return cached values immediately (no blocking sensor reads)
+    # Return cached raw values immediately (no blocking sensor reads)
     return JSONResponse(_temp_latest)
+
+
+@app.get("/api/temperature/snapshot/latest")
+def api_temperature_snapshot_latest(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    """Return snapshot data (1-minute averages) for relay/rule engine use."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    # Return snapshot data for each sensor
+    kombi_snapshot = get_sensor_snapshot("kombi")
+    garaza_snapshot = get_sensor_snapshot("garaza")
+    
+    # Build response with snapshot data
+    sensors = []
+    for idx, sensor_name in enumerate(["kombi", "garaza"]):
+        snapshot = kombi_snapshot if sensor_name == "kombi" else garaza_snapshot
+        sensors.append({
+            "sensor_index": idx,
+            "sensor_name": sensor_name,
+            "avg_temp": snapshot.get("avg_temp"),
+            "avg_humidity": snapshot.get("avg_humidity"),
+            "sample_count": snapshot.get("sample_count"),
+            "updated_at": snapshot.get("updated_at"),
+            "last_good_at": snapshot.get("last_good_at"),
+            "age_seconds": snapshot.get("age_seconds"),
+            "is_stale": snapshot.get("is_stale"),
+            "is_ready": snapshot.get("is_ready"),
+        })
+    
+    return JSONResponse({
+        "ts": int(time.time()),
+        "sensors": sensors,
+    })
 
 
 @app.get("/api/temperature/history")
@@ -1232,78 +1472,109 @@ def api_gps_track(
 
 RULE_EVAL_INTERVAL = 5  # Evaluate rules every 5 seconds
 
-def _evaluate_temperature_condition(condition: Dict[str, Any], temp_data: Dict[str, Any]) -> bool:
-    """Evaluate a temperature condition. Returns True if condition matches."""
+
+def get_sensor_snapshot(sensor_name: str) -> Dict[str, Any]:
+    """
+    Get sensor snapshot with stale detection.
+    Returns: value, updated_at, last_good_at, is_stale, age_seconds, is_ready
+    """
+    now = int(time.time())
+    snapshot = db_get_sensor_snapshot(sensor_name)
+    
+    if not snapshot:
+        return {
+            "sensor_name": sensor_name,
+            "avg_temp": None,
+            "avg_humidity": None,
+            "sample_count": 0,
+            "updated_at": None,
+            "last_good_at": None,
+            "is_stale": True,
+            "age_seconds": None,
+            "is_ready": False,
+        }
+    
+    last_good_at = snapshot.get("last_good_at", 0)
+    updated_at = snapshot.get("updated_at", 0)
+    sample_count = snapshot.get("sample_count", 0)
+    age_seconds = now - last_good_at if last_good_at else None
+    
+    # Stale if no valid samples for 10 minutes
+    is_stale = age_seconds is not None and age_seconds > SENSOR_STALE_THRESHOLD
+    
+    # Ready if we have at least N samples (warmup requirement)
+    is_ready = sample_count >= SENSOR_WARMUP_SAMPLES
+    
+    return {
+        "sensor_name": sensor_name,
+        "avg_temp": snapshot.get("avg_temp"),
+        "avg_humidity": snapshot.get("avg_humidity"),
+        "sample_count": sample_count,
+        "updated_at": updated_at,
+        "last_good_at": last_good_at,
+        "is_stale": is_stale,
+        "age_seconds": age_seconds,
+        "is_ready": is_ready,
+    }
+
+def _evaluate_temperature_condition(condition: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """
+    Evaluate a temperature condition using snapshot data.
+    Returns: (result: bool, reason: Optional[str])
+    If sensor is stale or not ready, returns (False, reason) to force OFF.
+    """
     if condition.get("type") != "temperature":
-        print(f"[Rule Engine] Condition type mismatch: {condition.get('type')} != 'temperature'")
-        return False
+        return (False, f"Condition type mismatch: {condition.get('type')} != 'temperature'")
     
     sensor_name = condition.get("sensor", "")
     operator = condition.get("operator", "")
     value = condition.get("value")
+    uses_snapshot = condition.get("uses_snapshot", True)  # Default to True for new rules
     
     if value is None:
-        print(f"[Rule Engine] Condition value is None")
-        return False
+        return (False, "Condition value is None")
     
-    # Map sensor names to indices: kombi=0, garaza=1
-    sensor_map = {"kombi": 0, "garaza": 1}
-    sensor_idx = sensor_map.get(sensor_name, -1)
-    if sensor_idx < 0:
-        print(f"[Rule Engine] Invalid sensor name: {sensor_name}")
-        return False
+    if not sensor_name:
+        return (False, "Sensor name not specified")
     
-    # Find sensor reading
-    sensor_readings = temp_data.get("sensors", [])
-    sensor_reading = None
-    for sr in sensor_readings:
-        if sr.get("sensor_index") == sensor_idx:
-            sensor_reading = sr
-            break
+    # Get snapshot (always use snapshot, never raw sensor reads)
+    snapshot = get_sensor_snapshot(sensor_name)
     
-    if not sensor_reading:
-        print(f"[Rule Engine] Sensor reading not found for {sensor_name} (index {sensor_idx})")
-        return False
+    # Check if sensor is stale (no valid samples for 10 minutes)
+    if snapshot.get("is_stale"):
+        age_min = snapshot.get("age_seconds", 0) // 60
+        return (False, f"sensor_stale(>{age_min}m)")
     
-    if not sensor_reading.get("ok"):
-        print(f"[Rule Engine] Sensor {sensor_name} is not OK: {sensor_reading.get('error')}")
-        return False  # Sensor offline/invalid
+    # Check if sensor is not ready (warmup period)
+    if not snapshot.get("is_ready"):
+        sample_count = snapshot.get("sample_count", 0)
+        return (False, f"sensor_warming_up({sample_count}/{SENSOR_WARMUP_SAMPLES} samples)")
     
-    temp = sensor_reading.get("temperature_c")
+    # Get temperature from snapshot
+    temp = snapshot.get("avg_temp")
     if temp is None:
-        print(f"[Rule Engine] Temperature is None for sensor {sensor_name}")
-        return False
-    
-    # Check if reading is stale (older than 60 seconds)
-    ts = temp_data.get("ts")
-    if ts:
-        age = time.time() - ts
-        if age > 60:
-            print(f"[Rule Engine] Temperature data is stale: {age:.1f}s old")
-            return False  # Stale data
+        return (False, f"sensor_no_data")
     
     # Evaluate condition
-    result = False
     if operator == "below":
         result = temp < value
-        print(f"[Rule Engine] Evaluating: {temp}°C < {value}°C = {result}")
     elif operator == "above":
         result = temp > value
-        print(f"[Rule Engine] Evaluating: {temp}°C > {value}°C = {result}")
     else:
-        print(f"[Rule Engine] Unknown operator: {operator}")
-        return False
+        return (False, f"Invalid operator: {operator}")
     
-    return result
+    print(f"[Rule Engine] Evaluating snapshot {sensor_name}: {temp:.1f}°C {operator} {value}°C = {result}")
+    return (result, None)
 
 
-def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Optional[str] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool]:
+def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, current_state: Optional[str] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool, Optional[str]]:
     """
-    Deterministically evaluate enabled rules for a relay.
-    Returns (desired_state, matched_rule, sensor_data_available) tuple.
+    Deterministically evaluate enabled rules for a relay using snapshot data.
+    Returns (desired_state, matched_rule, sensor_data_available, reason) tuple.
     desired_state is "on" or "off" based on first matching rule, or None if sensor data unavailable.
     matched_rule is the rule dict that matched, or None if no rule matched.
     sensor_data_available is False if sensor data is unavailable (should preserve current state).
+    reason is a string explaining why state was set (e.g., "sensor_stale", "sensor_warming_up").
     
     Cooldown only prevents triggering a state CHANGE, not maintaining the current state.
     """
@@ -1311,21 +1582,7 @@ def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Opti
     enabled_rules = [r for r in rules if r.get("is_enabled", True)]
     
     if not enabled_rules:
-        return ("off", None, True)  # No enabled rules -> default to off (sensor data not needed)
-    
-    # Check if we have valid sensor data
-    sensors = temp_data.get("sensors", [])
-    if not sensors:
-        # No sensor data available - return None to preserve current state
-        print(f"[Rule Engine] No sensor data available, preserving current state")
-        return (None, None, False)
-    
-    # Check if any sensor readings are OK
-    has_valid_data = any(s.get("ok", False) for s in sensors)
-    if not has_valid_data:
-        # No valid sensor data - return None to preserve current state
-        print(f"[Rule Engine] No valid sensor data available, preserving current state")
-        return (None, None, False)
+        return ("off", None, True, "no_rules")  # No enabled rules -> default to off
     
     # Sort by priority (lower number = higher priority), then by creation time
     enabled_rules.sort(key=lambda x: (x.get("priority", 100), x.get("created_at", 0)))
@@ -1333,10 +1590,18 @@ def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Opti
     # Evaluate each rule in priority order
     now = int(time.time())
     for rule in enabled_rules:
-        # Evaluate condition first
+        # Evaluate condition using snapshot (not raw temp_data)
         condition = rule.get("condition", {})
-        if not _evaluate_temperature_condition(condition, temp_data):
-            continue  # Condition doesn't match, skip this rule
+        condition_result, reason = _evaluate_temperature_condition(condition)
+        
+        # If condition evaluation failed due to sensor issues (stale/warming), force OFF
+        if not condition_result and reason and ("sensor_stale" in reason or "sensor_warming_up" in reason or "sensor_no_data" in reason):
+            print(f"[Rule Engine] Sensor issue for rule '{rule.get('name')}': {reason}")
+            return ("off", None, False, reason)
+        
+        # If condition doesn't match, continue to next rule
+        if not condition_result:
+            continue
         
         # Condition matches - determine desired state
         action = rule.get("action", "")
@@ -1352,7 +1617,7 @@ def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Opti
         # If it would maintain current state, cooldown doesn't apply
         if current_state is not None and rule_desired_state == current_state:
             # Rule wants same state as current - cooldown doesn't apply, rule matches
-            return (rule_desired_state, rule, True)
+            return (rule_desired_state, rule, True, None)
         
         # Rule would change state - check cooldown
         last_triggered = rule.get("last_triggered_at")
@@ -1364,10 +1629,10 @@ def evaluate_rules(relay_id: str, temp_data: Dict[str, Any], current_state: Opti
                 continue
         
         # Rule matches and either no cooldown or cooldown expired - first match wins
-        return (rule_desired_state, rule, True)
+        return (rule_desired_state, rule, True, None)
     
-    # No rule matched -> default to off (but only if we have valid sensor data)
-    return ("off", None, True)
+    # No rule matched -> default to off
+    return ("off", None, True, "no_match")
 
 
 def reconcile_relay(relay_id: str, force: bool = False) -> bool:
@@ -1422,39 +1687,35 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         source = "manual"
         reason = "Manual override"
     else:
-        # Auto mode: evaluate rules
-        temp_data = _temp_latest.copy()
+        # Auto mode: evaluate rules using snapshot (not raw temp_data)
         # Pass current_actual to evaluate_rules so cooldown only applies to state changes
-        desired_state_result, matched_rule, sensor_data_available = evaluate_rules(relay_id, temp_data, current_actual)
+        desired_state_result, matched_rule, sensor_data_available, reason_str = evaluate_rules(relay_id, None, current_actual)
         
         if not sensor_data_available:
-            # Sensor data unavailable - preserve current desired_state
-            # Don't change desired_state, keep it as is
-            print(f"[Reconcile] Sensor data unavailable, preserving current desired_state: {current_desired}")
-            desired_state = current_desired  # Keep current desired_state
+            # Sensor data unavailable (stale/warming) - force OFF
+            print(f"[Reconcile] Sensor data unavailable ({reason_str}), forcing OFF")
+            desired_state = "off"
             source = "rule"
-            reason = "Sensor data unavailable, preserving current state"
-            matched_rule = None  # No rule matched due to sensor failure
+            reason = f"Sensor unavailable: {reason_str}"
+            matched_rule = None
         else:
             # Sensor data available - use the result
             desired_state = desired_state_result
             source = "rule"
             if matched_rule:
-                # Build reason string
+                # Build reason string using snapshot data
                 condition = matched_rule.get("condition", {})
                 sensor_name = condition.get("sensor", "")
                 operator = condition.get("operator", "")
                 value = condition.get("value")
-                sensor_reading = None
-                for sr in temp_data.get("sensors", []):
-                    if sr.get("sensor_index") == (0 if sensor_name == "kombi" else 1):
-                        sensor_reading = sr
-                        break
-                temp = sensor_reading.get("temperature_c") if sensor_reading else None
-                reason = f"Rule '{matched_rule.get('name')}': {sensor_name.capitalize()} temp {operator} {value}°C (current: {temp:.1f}°C)"
-                # Don't update last_triggered_at here - only update when hardware state actually changes
+                snapshot = get_sensor_snapshot(sensor_name)
+                temp = snapshot.get("avg_temp")
+                if temp is not None:
+                    reason = f"Rule '{matched_rule.get('name')}': {sensor_name.capitalize()} temp {operator} {value}°C (snapshot: {temp:.1f}°C)"
+                else:
+                    reason = f"Rule '{matched_rule.get('name')}' matched"
             else:
-                reason = "No rule matched, default to off"
+                reason = reason_str or "No rule matched, default to off"
     
     # Step 3: Update desired_state in database (only if it changed)
     if desired_state is not None and desired_state != current_desired:
@@ -1735,7 +1996,7 @@ def api_network_scan(request: Request, x_api_key: Optional[str] = Header(default
 
 def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
     """
-    Determine if relay is in a pending/transitional state (cooldown, reconciling, startup).
+    Determine if relay is in a pending/transitional state (cooldown, reconciling, startup, sensor issues).
     Returns dict with pending status, reason, and cooldown info.
     """
     now = int(time.time())
@@ -1772,22 +2033,43 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
         reason = "reconciling"
         source = mode  # "manual" or "rule"
     
-    # Check cooldown for AUTO mode relays
+    # Check sensor status for AUTO mode relays (if rules depend on sensors)
     if mode == "auto" and not pending:
         rules = db_list_relay_rules(relay_id)
         enabled_rules = [r for r in rules if r.get("is_enabled", True)]
         
+        # Check if any rule depends on a sensor that is stale or warming up
         for rule in enabled_rules:
-            last_triggered = rule.get("last_triggered_at")
-            if last_triggered:
-                age = now - last_triggered
-                cooldown_sec = rule.get("cooldown_seconds", 60)
-                if age < cooldown_sec:
-                    pending = True
-                    reason = "cooldown"
-                    cooldown_remaining = cooldown_sec - age
-                    source = "rule"
-                    break
+            condition = rule.get("condition", {})
+            if condition.get("type") == "temperature":
+                sensor_name = condition.get("sensor", "")
+                if sensor_name:
+                    snapshot = get_sensor_snapshot(sensor_name)
+                    if snapshot.get("is_stale"):
+                        pending = True
+                        age_min = snapshot.get("age_seconds", 0) // 60
+                        reason = f"sensor_stale"
+                        source = "sensor"
+                        break
+                    elif not snapshot.get("is_ready"):
+                        pending = True
+                        reason = f"sensor_warming_up"
+                        source = "sensor"
+                        break
+        
+        # Check cooldown (only if sensor is OK)
+        if not pending:
+            for rule in enabled_rules:
+                last_triggered = rule.get("last_triggered_at")
+                if last_triggered:
+                    age = now - last_triggered
+                    cooldown_sec = rule.get("cooldown_seconds", 60)
+                    if age < cooldown_sec:
+                        pending = True
+                        reason = "cooldown"
+                        cooldown_remaining = cooldown_sec - age
+                        source = "rule"
+                        break
     
     return {
         "pending": pending,
