@@ -263,13 +263,23 @@ function HeaderRelayCard() {
         updated_at: number | null;
         is_enabled: boolean;
         pending?: boolean;
-        reason?: string;
+        pending_reason?: string;
+        pending_message?: string;
         cooldown_remaining?: number | null;
+        sensor_age_seconds?: number | null;
+        sensor_sample_count?: number | null;
+        sensor_is_ready?: boolean | null;
+        sensor_is_stale?: boolean | null;
         source?: string;
       };
     },
     retry: 1,
-    refetchInterval: 5000, // Refresh every 5 seconds
+    refetchInterval: (query) => {
+      // Poll more frequently (1.5s) when relay is pending, otherwise 5s
+      const heater = query.state.data;
+      const hasPending = heater?.pending === true;
+      return hasPending ? 1500 : 5000;
+    },
   });
 
   // Mutation to toggle relay state (manual mode)
@@ -331,8 +341,9 @@ function HeaderRelayCard() {
 
   // Use pending state from API response (backend calculates cooldown/reconciling/startup)
   const isPending = relaysResponse?.pending === true;
-  const pendingReason = relaysResponse?.reason;
+  const pendingMessage = relaysResponse?.pending_message || "Relay is in pending state";
   const cooldownRemaining = relaysResponse?.cooldown_remaining ?? null;
+  const sensorSampleCount = relaysResponse?.sensor_sample_count ?? null;
 
   // Backend stores logical state (what user wants, not hardware command)
   const isOn = relaysResponse?.state === "on";  // Logical state: "on" means relay should be ON
@@ -418,15 +429,17 @@ function HeaderRelayCard() {
                 </TooltipTrigger>
                 {isPending && (
                   <TooltipContent>
-                    <p className="text-sm">
-                      {pendingReason === "cooldown" && cooldownRemaining !== null
-                        ? `Relay is waiting for cooldown to expire (${cooldownRemaining}s remaining)`
-                        : pendingReason === "reconciling"
-                        ? "Relay state is being synchronized"
-                        : pendingReason === "startup"
-                        ? "Relay is initializing after startup"
-                        : `Relay is in ${pendingReason} state`}
+                    <p className="text-sm font-medium">
+                      {pendingMessage}
+                      {cooldownRemaining !== null && cooldownRemaining > 0 && (
+                        <span className="ml-1 text-orange-400">({cooldownRemaining}s)</span>
+                      )}
                     </p>
+                    {sensorSampleCount !== null && relaysResponse?.sensor_sample_count !== undefined && (
+                      <p className="text-xs text-zinc-400 mt-1">
+                        Progress: {sensorSampleCount}/6 samples collected
+                      </p>
+                    )}
                     <p className="text-xs text-zinc-400 mt-1">
                       Manual control is disabled during this period.
                     </p>
@@ -898,7 +911,7 @@ export default function OverviewDashboard() {
 
         {/* Header ON-OFF Card */}
         <HeaderRelayCard />
-      </div>
+            </div>
 
       {/* Relay Rules + GPS Map Section */}
       <div className="grid gap-6 lg:grid-cols-2">
@@ -913,7 +926,7 @@ export default function OverviewDashboard() {
               <div>
                 <CardTitle className="text-lg font-semibold text-zinc-200">GPS Map & Track</CardTitle>
                 <p className="text-sm text-zinc-400 mt-1">Last 24 hours location history</p>
-              </div>
+            </div>
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800/50 border border-zinc-700/50">
                 <Activity className="h-4 w-4 text-blue-400" />
                 <span className="text-xs font-medium text-zinc-300">Live</span>
