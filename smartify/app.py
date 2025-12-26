@@ -6,7 +6,7 @@ import subprocess
 import uuid
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 from fastapi import FastAPI, Request, Form, Header, Body
 from fastapi.responses import JSONResponse, FileResponse
@@ -83,6 +83,9 @@ if STATIC_DIR.exists():
 
 def db_init() -> None:
     conn = sqlite3.connect(DB_PATH)
+    # Enable WAL mode for better concurrency and prevent database locked errors
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     cur = conn.cursor()
     cur.execute(
         """
@@ -143,6 +146,35 @@ def db_init() -> None:
         );
         """
     )
+    
+    # Migration: Add new columns if they don't exist
+    try:
+        cur.execute("ALTER TABLE relay_state_new ADD COLUMN desired_state TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
+    try:
+        cur.execute("ALTER TABLE relay_state_new ADD COLUMN actual_state TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
+    try:
+        cur.execute("ALTER TABLE relay_state_new ADD COLUMN manual_state TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
+    try:
+        cur.execute("ALTER TABLE relay_state_new ADD COLUMN last_applied_at INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
+    # Migrate existing data: copy state to actual_state and desired_state if they're NULL
+    cur.execute("""
+        UPDATE relay_state_new 
+        SET actual_state = state, 
+            desired_state = state
+        WHERE actual_state IS NULL OR desired_state IS NULL
+    """)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS relay_rules (
@@ -190,9 +222,9 @@ def db_init() -> None:
         # Initialize relay state
         now = int(time.time())
         cur.execute(
-            """INSERT INTO relay_state_new (relay_id, state, mode, manual_until, updated_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (heater_id, "off", "auto", None, now)
+            """INSERT INTO relay_state_new (relay_id, state, mode, manual_until, updated_at, actual_state, desired_state, manual_state, last_applied_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (heater_id, "off", "auto", None, now, "off", "off", None, now)
         )
     
     conn.commit()
@@ -320,24 +352,94 @@ def db_list_relay_devices() -> List[Dict[str, Any]]:
 def db_get_relay_state_new(relay_id: str) -> Optional[Dict[str, Any]]:
     """Get relay state (new table)."""
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("SELECT * FROM relay_state_new WHERE relay_id = ?", (relay_id,))
     row = cur.fetchone()
     conn.close()
-    return dict(row) if row else None
+    if row:
+        state_dict = dict(row)
+        # Ensure backward compatibility: if new columns are NULL, use old 'state' field
+        if state_dict.get("actual_state") is None:
+            state_dict["actual_state"] = state_dict.get("state", "off")
+        if state_dict.get("desired_state") is None:
+            state_dict["desired_state"] = state_dict.get("state", "off")
+        return state_dict
+    return None
 
 
 def db_set_relay_state_new(relay_id: str, state: str, mode: str, manual_until: Optional[int] = None) -> None:
-    """Set relay state (new table)."""
+    """Set relay state (new table). DEPRECATED: Use db_update_relay_state_new instead."""
+    db_update_relay_state_new(
+        relay_id=relay_id,
+        actual_state=state,
+        desired_state=state,
+        mode=mode,
+        manual_until=manual_until
+    )
+
+
+def db_update_relay_state_new(
+    relay_id: str,
+    actual_state: Optional[str] = None,
+    desired_state: Optional[str] = None,
+    mode: Optional[str] = None,
+    manual_state: Optional[str] = None,
+    manual_until: Optional[int] = None,
+    last_applied_at: Optional[int] = None
+) -> None:
+    """Update relay state fields. Only updates provided fields."""
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA busy_timeout=5000")
     cur = conn.cursor()
     now = int(time.time())
-    cur.execute(
-        """INSERT OR REPLACE INTO relay_state_new (relay_id, state, mode, manual_until, updated_at)
-           VALUES (?, ?, ?, ?, ?)""",
-        (relay_id, state, mode, manual_until, now),
-    )
+    
+    # Build dynamic UPDATE query
+    updates = []
+    params = []
+    
+    if actual_state is not None:
+        updates.append("actual_state = ?")
+        updates.append("state = ?")  # Keep old 'state' field in sync for backward compat
+        params.append(actual_state)
+        params.append(actual_state)
+    
+    if desired_state is not None:
+        updates.append("desired_state = ?")
+        params.append(desired_state)
+    
+    # Handle mode: when switching to auto, always clear manual fields
+    if mode is not None:
+        updates.append("mode = ?")
+        params.append(mode)
+        if mode == "auto":
+            # Always clear manual fields when switching to auto (unless explicitly set below)
+            updates.append("manual_state = NULL")
+            updates.append("manual_until = NULL")
+    
+    # Only set manual_state/manual_until if mode is not being set to auto
+    # (if mode is auto, they were already cleared above)
+    if manual_state is not None and mode != "auto":
+        updates.append("manual_state = ?")
+        params.append(manual_state)
+    
+    if manual_until is not None and mode != "auto":
+        updates.append("manual_until = ?")
+        params.append(manual_until)
+    
+    if last_applied_at is not None:
+        updates.append("last_applied_at = ?")
+        params.append(last_applied_at)
+    
+    updates.append("updated_at = ?")
+    params.append(now)
+    params.append(relay_id)
+    
+    if updates:
+        query = f"UPDATE relay_state_new SET {', '.join(updates)} WHERE relay_id = ?"
+        cur.execute(query, params)
+    
     conn.commit()
     conn.close()
 
@@ -1036,16 +1138,218 @@ def _evaluate_temperature_condition(condition: Dict[str, Any], temp_data: Dict[s
     return result
 
 
-def _evaluate_relay_rules() -> None:
-    """Evaluate all enabled rules and apply actions. Called by background thread."""
-    try:
-        # Get latest temperature data
+def evaluate_rules(relay_id: str, temp_data: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Deterministically evaluate enabled rules for a relay.
+    Returns (desired_state, matched_rule) tuple.
+    desired_state is "on" or "off" based on first matching rule, or "off" if no rule matches.
+    matched_rule is the rule dict that matched, or None if no rule matched.
+    """
+    rules = db_list_relay_rules(relay_id)
+    enabled_rules = [r for r in rules if r.get("is_enabled", True)]
+    
+    if not enabled_rules:
+        return ("off", None)  # No enabled rules -> default to off
+    
+    # Sort by priority (lower number = higher priority), then by creation time
+    enabled_rules.sort(key=lambda x: (x.get("priority", 100), x.get("created_at", 0)))
+    
+    # Check cooldown and evaluate each rule in priority order
+    now = int(time.time())
+    for rule in enabled_rules:
+        # Check cooldown
+        last_triggered = rule.get("last_triggered_at")
+        if last_triggered:
+            age = now - last_triggered
+            cooldown_sec = rule.get("cooldown_seconds", 60)
+            if age < cooldown_sec:
+                continue  # Still in cooldown, skip this rule
+        
+        # Evaluate condition
+        condition = rule.get("condition", {})
+        if _evaluate_temperature_condition(condition, temp_data):
+            # First match wins
+            action = rule.get("action", "")
+            if action == "turn_on":
+                return ("on", rule)
+            elif action == "turn_off":
+                return ("off", rule)
+    
+    # No rule matched -> default to off
+    return ("off", None)
+
+
+def reconcile_relay(relay_id: str, force: bool = False) -> bool:
+    """
+    Core state machine: Reconcile desired state with actual hardware state.
+    
+    This is the single source of truth for relay state:
+    1. Determines desired_state based on mode (auto/manual) and rules
+    2. Compares desired_state with actual_state
+    3. If different, applies hardware command and updates actual_state
+    
+    Args:
+        relay_id: Relay device ID
+        force: If True, bypass rate limiting (2s cooldown)
+    
+    Returns:
+        True if hardware state was changed, False otherwise
+    """
+    now = int(time.time())
+    
+    # Get current relay state
+    relay_state = db_get_relay_state_new(relay_id)
+    if not relay_state:
+        print(f"[Reconcile] Relay {relay_id} not found")
+        return False
+    
+    device = db_get_relay_device(relay_id)
+    if not device:
+        print(f"[Reconcile] Relay device {relay_id} not found")
+        return False
+    
+    mode = relay_state.get("mode", "auto")
+    current_actual = relay_state.get("actual_state") or relay_state.get("state", "off")
+    current_desired = relay_state.get("desired_state")
+    last_applied = relay_state.get("last_applied_at", 0)
+    manual_until = relay_state.get("manual_until")
+    
+    # Step 1: Handle manual mode expiration
+    if mode == "manual" and manual_until is not None:
+        if now > manual_until:
+            # Manual mode expired, switch to auto
+            print(f"[Reconcile] Manual mode expired for relay {relay_id}, switching to auto")
+            db_update_relay_state_new(relay_id, mode="auto")
+            mode = "auto"
+    
+    # Step 2: Determine desired_state
+    if mode == "manual":
+        # Manual mode: desired_state = manual_state
+        desired_state = relay_state.get("manual_state")
+        if desired_state not in ("on", "off"):
+            desired_state = current_actual  # Fallback to current state
+        source = "manual"
+        reason = "Manual override"
+    else:
+        # Auto mode: evaluate rules
         temp_data = _temp_latest.copy()
+        desired_state, matched_rule = evaluate_rules(relay_id, temp_data)
+        source = "rule"
+        if matched_rule:
+            # Build reason string
+            condition = matched_rule.get("condition", {})
+            sensor_name = condition.get("sensor", "")
+            operator = condition.get("operator", "")
+            value = condition.get("value")
+            sensor_reading = None
+            for sr in temp_data.get("sensors", []):
+                if sr.get("sensor_index") == (0 if sensor_name == "kombi" else 1):
+                    sensor_reading = sr
+                    break
+            temp = sensor_reading.get("temperature_c") if sensor_reading else None
+            reason = f"Rule '{matched_rule.get('name')}': {sensor_name.capitalize()} temp {operator} {value}°C (current: {temp:.1f}°C)"
+            # Update rule's last_triggered_at
+            db_update_rule_last_triggered(matched_rule["id"])
+        else:
+            reason = "No rule matched, default to off"
+    
+    # Step 3: Update desired_state in database
+    if desired_state != current_desired:
+        db_update_relay_state_new(relay_id, desired_state=desired_state)
+        print(f"[Reconcile] Updated desired_state for relay {relay_id}: {current_desired} -> {desired_state} ({reason})")
+    
+    # Step 4: Check if hardware needs to be updated
+    if desired_state == current_actual:
+        # Already in desired state, nothing to do
+        return False
+    
+    # Step 5: Rate limiting - avoid flapping
+    if not force and (now - last_applied) < 2:
+        print(f"[Reconcile] Rate limit: last_applied {now - last_applied}s ago, skipping hardware update")
+        return False
+    
+    # Step 6: Apply hardware command
+    print(f"[Reconcile] Applying hardware command: relay {relay_id} {current_actual} -> {desired_state}")
+    
+    # Hardware is inverted: to turn relay ON, we call relay27.py off
+    # So when desired_state is "on", we use command_off, and vice versa
+    cmd_script = device.get("command_off" if desired_state == "on" else "command_on", "")
+    
+    if not cmd_script:
+        print(f"[Reconcile] No command script found for relay {relay_id}")
+        return False
+    
+    try:
+        parts = cmd_script.split()
+        cmd = ["sudo"] + parts
         
-        if not temp_data or not temp_data.get("sensors"):
-            print("[Rule Engine] No temperature data available")
-            return
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         
+        if proc.returncode == 0:
+            # Success: update actual_state
+            db_update_relay_state_new(
+                relay_id,
+                actual_state=desired_state,
+                last_applied_at=now
+            )
+            
+            # Update rule's last_triggered_at if a rule matched
+            if matched_rule:
+                db_update_rule_last_triggered(matched_rule["id"])
+            
+            # Log event
+            rule_id = matched_rule.get("id") if matched_rule else None
+            db_log_relay_event(
+                relay_id,
+                source,
+                current_actual,
+                desired_state,
+                reason,
+                rule_id
+            )
+            
+            print(f"[Reconcile] Successfully updated relay {relay_id} to {desired_state}")
+            return True
+        else:
+            # Command failed
+            error_msg = f"Command failed: {proc.stderr.strip()}"
+            print(f"[Reconcile] {error_msg}")
+            db_log_relay_event(
+                relay_id,
+                source,
+                current_actual,
+                current_actual,  # State didn't change
+                error_msg,
+                None
+            )
+            return False
+    except Exception as e:
+        error_msg = f"Exception: {str(e)}"
+        print(f"[Reconcile] {error_msg}")
+        import traceback
+        traceback.print_exc()
+        db_log_relay_event(
+            relay_id,
+            source,
+            current_actual,
+            current_actual,
+            error_msg,
+            None
+        )
+        return False
+
+
+def _evaluate_relay_rules() -> None:
+    """
+    Background thread: Reconcile all relays periodically.
+    This ensures desired_state stays in sync with actual_state.
+    """
+    try:
         # Get all enabled relay devices
         relays = db_list_relay_devices()
         
@@ -1054,141 +1358,10 @@ def _evaluate_relay_rules() -> None:
                 continue
             
             relay_id = relay["id"]
-            
-            # Get current relay state
-            relay_state = db_get_relay_state_new(relay_id)
-            if not relay_state:
-                print(f"[Rule Engine] No relay state found for {relay_id}")
-                continue
-            
-            # Check if in manual mode (and not expired)
-            if relay_state.get("mode") == "manual":
-                manual_until = relay_state.get("manual_until")
-                if manual_until is None or manual_until > int(time.time()):
-                    print(f"[Rule Engine] Relay {relay_id} is in manual mode, skipping rule evaluation")
-                    continue  # Skip rule evaluation, manual mode active
-            
-            # Get enabled rules for this relay
-            rules = db_list_relay_rules(relay_id)
-            enabled_rules = [r for r in rules if r.get("is_enabled", True)]
-            
-            if not enabled_rules:
-                print(f"[Rule Engine] No enabled rules for relay {relay_id}")
-                continue  # No enabled rules
-            
-            print(f"[Rule Engine] Evaluating {len(enabled_rules)} enabled rule(s) for relay {relay_id}")
-            
-            # Sort by priority (lower number = higher priority)
-            enabled_rules.sort(key=lambda x: (x.get("priority", 100), x.get("created_at", 0)))
-            
-            # Evaluate rules in priority order
-            current_state = relay_state.get("state", "off")
-            current_mode = relay_state.get("mode", "auto")
-            print(f"[Rule Engine] Relay {relay_id} current state: {current_state}, mode: {current_mode}")
-            desired_state = None
-            matched_rule = None
-            reason = None
-            
-            for rule in enabled_rules:
-                rule_name = rule.get("name", "unnamed")
-                print(f"[Rule Engine] Checking rule: {rule_name}")
-                
-                # Check cooldown
-                last_triggered = rule.get("last_triggered_at")
-                if last_triggered:
-                    age = int(time.time()) - last_triggered
-                    cooldown_sec = rule.get("cooldown_seconds", 60)
-                    if age < cooldown_sec:
-                        print(f"[Rule Engine] Rule '{rule_name}' still in cooldown ({age}s < {cooldown_sec}s)")
-                        continue  # Still in cooldown
-                
-                # Evaluate condition
-                condition = rule.get("condition", {})
-                print(f"[Rule Engine] Rule '{rule_name}': condition={condition}")
-                if _evaluate_temperature_condition(condition, temp_data):
-                    # Condition matches!
-                    action = rule.get("action", "")
-                    if action == "turn_on":
-                        desired_state = "on"
-                    elif action == "turn_off":
-                        desired_state = "off"
-                    matched_rule = rule
-                    
-                    # Build reason string
-                    sensor_name = condition.get("sensor", "")
-                    operator = condition.get("operator", "")
-                    value = condition.get("value")
-                    sensor_reading = None
-                    for sr in temp_data.get("sensors", []):
-                        if sr.get("sensor_index") == (0 if sensor_name == "kombi" else 1):
-                            sensor_reading = sr
-                            break
-                    temp = sensor_reading.get("temperature_c") if sensor_reading else None
-                    reason = f"{sensor_name.capitalize()} temp {operator} {value}°C (current: {temp:.1f}°C)"
-                    print(f"[Rule Engine] Rule '{rule.get('name')}' matched: {reason}")
-                    break  # First match wins
-            
-            # Apply action if state should change
-            if desired_state:
-                if desired_state == current_state:
-                    print(f"[Rule Engine] WARNING: Relay {relay_id} database shows state={current_state}, but rule wants {desired_state}. State mismatch? Physical relay may be in different state.")
-                else:
-                    print(f"[Rule Engine] Changing relay {relay_id} from {current_state} to {desired_state} (reason: {reason})")
-            else:
-                print(f"[Rule Engine] No rule matched for relay {relay_id} (current state: {current_state})")
-            
-            if desired_state and desired_state != current_state:
-                # Execute hardware command
-                # NOTE: Hardware is inverted - to turn relay ON, we call relay27.py off
-                # So when desired_state is "on", we use command_off, and vice versa
-                device = db_get_relay_device(relay_id)
-                if device:
-                    # Invert: desired_state "on" → use command_off, desired_state "off" → use command_on
-                    cmd_script = device.get("command_off" if desired_state == "on" else "command_on", "")
-                    print(f"[Rule Engine] Using command: {cmd_script} (desired_state={desired_state}, hardware inverted)")
-                    if cmd_script:
-                        try:
-                            # Extract command and args
-                            parts = cmd_script.split()
-                            cmd = ["sudo"] + parts
-                            
-                            proc = subprocess.run(
-                                cmd,
-                                capture_output=True,
-                                text=True,
-                                timeout=5,
-                            )
-                            
-                            if proc.returncode == 0:
-                                # Success: update state
-                                print(f"[Rule Engine] Command succeeded, updating database state from {current_state} to {desired_state}")
-                                db_set_relay_state_new(relay_id, desired_state, "auto")
-                                db_log_relay_event(
-                                    relay_id, "rule", current_state, desired_state,
-                                    reason, matched_rule.get("id") if matched_rule else None
-                                )
-                                if matched_rule:
-                                    db_update_rule_last_triggered(matched_rule["id"])
-                                print(f"[Rule Engine] State updated successfully")
-                            else:
-                                # Command failed
-                                error_msg = f"Command failed: {proc.stderr.strip()}"
-                                print(f"[Rule Engine] {error_msg}")
-                                db_log_relay_event(
-                                    relay_id, "rule", current_state, current_state,
-                                    error_msg, matched_rule.get("id") if matched_rule else None
-                                )
-                        except Exception as e:
-                            error_msg = f"Exception: {str(e)}"
-                            print(f"[Rule Engine] {error_msg}")
-                            import traceback
-                            traceback.print_exc()
-                            db_log_relay_event(
-                                relay_id, "rule", current_state, current_state,
-                                error_msg, matched_rule.get("id") if matched_rule else None
-                            )
-            elif desired_state == current_state:
-                print(f"[Rule Engine] Relay {relay_id} already in desired state {desired_state}, no action needed")
+            try:
+                reconcile_relay(relay_id, force=False)
+            except Exception as e:
+                print(f"[Rule Engine] Error reconciling relay {relay_id}: {e}")
     
     except Exception as e:
         # Log error but don't crash
@@ -1337,7 +1510,7 @@ def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=
                 "id": relay_id,
                 "name": relay["name"],
                 "pin": relay["pin"],
-                "state": state.get("state", "off") if state else "off",
+                "state": state.get("actual_state") or state.get("state", "off") if state else "off",
                 "mode": state.get("mode", "auto") if state else "auto",
                 "manual_until": state.get("manual_until") if state else None,
                 "updated_at": state.get("updated_at") if state else None,
@@ -1373,7 +1546,7 @@ def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = He
             "command_on": relay["command_on"],
             "command_off": relay["command_off"],
             "is_enabled": bool(relay.get("is_enabled", True)),
-            "state": state.get("state", "off") if state else "off",
+            "state": state.get("actual_state") or state.get("state", "off") if state else "off",
             "mode": state.get("mode", "auto") if state else "auto",
             "manual_until": state.get("manual_until") if state else None,
             "updated_at": state.get("updated_at") if state else None,
@@ -1388,7 +1561,7 @@ def api_relay_set_state(
     body: Dict[str, Any] = Body(...),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    """Set relay state manually. Sets mode to 'manual'."""
+    """Set relay state manually. Sets mode to 'manual' and uses reconcile to apply."""
     err = require_auth(request, x_api_key)
     if err:
         return err
@@ -1410,37 +1583,27 @@ def api_relay_set_state(
     if mode == "manual" and duration_seconds:
         manual_until = int(time.time()) + int(duration_seconds)
     
-    # Get current state
-    current_state = db_get_relay_state_new(relay_id)
-    old_state = current_state.get("state", "off") if current_state else "off"
+    # Update database: set manual mode and manual_state, then reconcile
+    db_update_relay_state_new(
+        relay_id=relay_id,
+        mode=mode,
+        manual_state=state if mode == "manual" else None,
+        manual_until=manual_until if mode == "manual" else None
+    )
     
-    # Execute hardware command
-    cmd_script = relay.get("command_on" if state == "on" else "command_off", "")
-    if cmd_script:
-        parts = cmd_script.split()
-        cmd = ["sudo"] + parts
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            if proc.returncode != 0:
-                return JSONResponse({
-                    "ok": False,
-                    "error": "command_failed",
-                    "message": proc.stderr.strip(),
-                }, status_code=500)
-        except Exception as e:
-            return JSONResponse({
-                "ok": False,
-                "error": "exception",
-                "message": str(e),
-            }, status_code=500)
+    # Reconcile will handle hardware command
+    reconcile_relay(relay_id, force=True)
     
-    # Update state
-    db_set_relay_state_new(relay_id, state, mode, manual_until)
-    db_log_relay_event(relay_id, "manual", old_state, state, "Manual override")
+    # Get updated state for response
+    updated_state = db_get_relay_state_new(relay_id)
+    if updated_state:
+        response_state = updated_state.get("actual_state") or updated_state.get("state", "off")
+    else:
+        response_state = state
     
     return JSONResponse({
         "ok": True,
-        "state": state,
+        "state": response_state,
         "mode": mode,
         "manual_until": manual_until,
     })
@@ -1452,7 +1615,7 @@ def api_relay_set_auto(
     request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    """Set relay mode to auto (resume automation)."""
+    """Set relay mode to auto (resume automation). Clears manual fields and reconciles immediately."""
     err = require_auth(request, x_api_key)
     if err:
         return err
@@ -1461,13 +1624,11 @@ def api_relay_set_auto(
     if not relay:
         return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
     
-    current_state = db_get_relay_state_new(relay_id)
-    state = current_state.get("state", "off") if current_state else "off"
+    # Switch to auto mode (will automatically clear manual fields)
+    db_update_relay_state_new(relay_id=relay_id, mode="auto")
     
-    db_set_relay_state_new(relay_id, state, "auto", None)
-    
-    # Trigger immediate rule evaluation
-    _evaluate_relay_rules()
+    # Immediately reconcile to apply rules
+    reconcile_relay(relay_id, force=True)
     
     return JSONResponse({"ok": True, "mode": "auto"})
 
@@ -1522,6 +1683,9 @@ def api_relay_rule_create(
     rule_id = db_create_relay_rule(relay_id, name, condition, action, priority, cooldown_seconds, is_enabled)
     rule = db_get_relay_rule(rule_id)
     
+    # Reconcile relay to apply new rule immediately
+    reconcile_relay(relay_id, force=True)
+    
     return JSONResponse({"ok": True, "rule": rule}, status_code=201)
 
 
@@ -1559,6 +1723,11 @@ def api_rule_update(
         return JSONResponse({"ok": False, "error": "update_failed"}, status_code=400)
     
     rule = db_get_relay_rule(rule_id)
+    relay_id = rule.get("relay_id") if rule else None
+    if relay_id:
+        # Reconcile relay to apply updated rule immediately
+        reconcile_relay(relay_id, force=True)
+    
     return JSONResponse({"ok": True, "rule": rule})
 
 
@@ -1573,9 +1742,17 @@ def api_rule_delete(
     if err:
         return err
     
+    # Get relay_id before deleting
+    rule = db_get_relay_rule(rule_id)
+    relay_id = rule.get("relay_id") if rule else None
+    
     deleted = db_delete_relay_rule(rule_id)
     if not deleted:
         return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    
+    if relay_id:
+        # Reconcile relay to apply deletion immediately (may turn relay off if no other rules match)
+        reconcile_relay(relay_id, force=True)
     
     return JSONResponse({"ok": True})
 
@@ -1596,11 +1773,23 @@ def api_rule_toggle(
     if not isinstance(is_enabled, bool):
         return JSONResponse({"ok": False, "error": "invalid_is_enabled"}, status_code=400)
     
-    updated = db_update_relay_rule(rule_id, is_enabled=is_enabled)
-    if not updated:
+    # Get relay_id before updating
+    rule = db_get_relay_rule(rule_id)
+    if not rule:
         return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
     
+    relay_id = rule.get("relay_id")
+    
+    updated = db_update_relay_rule(rule_id, is_enabled=is_enabled)
+    if not updated:
+        return JSONResponse({"ok": False, "error": "update_failed"}, status_code=400)
+    
     rule = db_get_relay_rule(rule_id)
+    
+    if relay_id:
+        # Reconcile relay immediately when rule is enabled/disabled
+        reconcile_relay(relay_id, force=True)
+    
     return JSONResponse({"ok": True, "rule": rule})
 
 
@@ -1638,7 +1827,7 @@ def api_relay_header_get(request: Request, x_api_key: Optional[str] = Header(def
         if state_data:
             # Return state in inverted format for legacy compatibility
             # Backend stores actual hardware state, but UI expects inverted
-            actual_state = state_data.get("state", "off")
+            actual_state = state_data.get("actual_state") or state_data.get("state", "off")
             return JSONResponse({
                 "ok": True,
                 "name": HEADER_RELAY_NAME,
