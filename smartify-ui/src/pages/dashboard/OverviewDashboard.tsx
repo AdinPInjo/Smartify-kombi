@@ -470,6 +470,67 @@ function HeaderRelayCard() {
   );
 }
 
+type WaterLevelPayload = {
+  ok: boolean;
+  level_percent: number | null;
+  avg_voltage: number | null;
+  status: "ok" | "stale" | "error" | "calibrating" | "unknown";
+  age_seconds: number;
+  message: string;
+};
+
+function WaterLevelCard() {
+  const { data: waterData, isLoading } = useQuery<WaterLevelPayload>({
+    queryKey: ["water-level"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/water/level/latest", { cache: "no-store" });
+      if (!r.ok) throw new Error(`Water level API returned ${r.status}`);
+      const data = await r.json();
+      return data;
+    },
+    refetchInterval: 10000, // Poll every 10 seconds
+    retry: 2,
+  });
+
+  const levelPercent = waterData?.level_percent ?? null;
+  const status = waterData?.status ?? "unknown";
+  const message = waterData?.message ?? "—";
+
+  // Determine status text color based on status
+  const statusColorClass =
+    status === "error" || status === "stale"
+      ? "text-amber-400"
+      : status === "ok"
+      ? "text-zinc-200"
+      : "text-zinc-400";
+
+  return (
+    <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-blue-950/30 to-blue-900/20 backdrop-blur-sm transition-all duration-300 hover:border-blue-700/50 hover:shadow-xl hover:shadow-blue-900/20 flex-1">
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+      <CardHeader className="pb-3 relative z-10">
+        <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+          <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+            <Droplet className="h-4 w-4 text-blue-400" />
+          </div>
+          Water Level
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm py-2 relative z-10">
+        <div className="flex items-center justify-between">
+          <span className="text-zinc-400">Level</span>
+          <span className="font-semibold text-zinc-200">
+            {levelPercent !== null ? `${levelPercent}%` : "—"}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-zinc-400">Status</span>
+          <span className={`font-semibold ${statusColorClass}`}>{message}</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function RelayRulesWidget() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -863,27 +924,7 @@ export default function OverviewDashboard() {
         </Card>
 
           {/* Water Level Card */}
-          <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-blue-950/30 to-blue-900/20 backdrop-blur-sm transition-all duration-300 hover:border-blue-700/50 hover:shadow-xl hover:shadow-blue-900/20 flex-1">
-            <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-            <CardHeader className="pb-3 relative z-10">
-              <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-                <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                  <Droplet className="h-4 w-4 text-blue-400" />
-                </div>
-                Water Level
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm py-2 relative z-10">
-              <div className="flex items-center justify-between">
-                <span className="text-zinc-400">Level</span>
-                <span className="font-semibold text-zinc-200">— %</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-zinc-400">Status</span>
-                <span className="font-semibold text-zinc-200">—</span>
-              </div>
-            </CardContent>
-          </Card>
+          <WaterLevelCard />
         </div>
 
         {/* Battery Card */}
