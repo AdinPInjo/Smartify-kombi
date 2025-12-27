@@ -1411,9 +1411,28 @@ def read_ads1115_voltage(busnum: int = 1, address: Optional[int] = None, channel
     Returns voltage on AIN{channel} as float volts, or None on error.
     """
     try:
-        from smartify.ads1115 import ads_detect, ads_read_voltage
-    except ImportError:
-        print("[Water Level] Error: Failed to import ads1115 module")
+        import ads1115
+        # Debug: log which file is imported (once at startup)
+        if not hasattr(read_ads1115_voltage, '_import_logged'):
+            print(f"[Water Level] Imported ads1115 module from: {ads1115.__file__}")
+            read_ads1115_voltage._import_logged = True
+        # Use functions from the imported module
+        ads_detect = ads1115.ads_detect
+        ads_read_voltage = ads1115.ads_read_voltage
+    except ImportError as e:
+        print(f"[Water Level] Error: Failed to import ads1115 module: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    except AttributeError as e:
+        print(f"[Water Level] Error: ads1115 module missing required functions: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    except Exception as e:
+        print(f"[Water Level] Unexpected error importing ads1115: {e}")
+        import traceback
+        traceback.print_exc()
         return None
     
     addresses_to_try = [0x48, 0x49, 0x4A, 0x4B] if address is None else [address]
@@ -1514,6 +1533,19 @@ def _water_level_thread() -> None:
     global _water_level_latest
     
     print("[Water Level] Background thread started")
+    
+    # Debug: Try to import and log ads1115 module location at startup
+    try:
+        import ads1115
+        print(f"[Water Level] ads1115 module imported from: {ads1115.__file__}")
+    except ImportError as e:
+        print(f"[Water Level] Warning: Could not import ads1115 at thread start: {e}")
+        import traceback
+        traceback.print_exc()
+    except Exception as e:
+        print(f"[Water Level] Warning: Unexpected error importing ads1115: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Initial delay to allow other systems to start
     time.sleep(5)
@@ -1721,13 +1753,29 @@ def api_ads1115_read(
         }, status_code=400)
     
     try:
-        # Try to import ads1115 module
-        from smartify.ads1115 import ads_detect, ads_read_voltage, ads_read_raw_single_ended
+        # Import ads1115 module (same directory)
+        import ads1115
+        ads_detect = ads1115.ads_detect
+        ads_read_voltage = ads1115.ads_read_voltage
+        ads_read_raw_single_ended = ads1115.ads_read_raw_single_ended
     except ImportError as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"[API] Error importing ads1115: {e}\n{error_detail}")
         return JSONResponse({
             "ok": False,
             "error": "module_error",
             "reason": f"Failed to import ads1115 module: {e}",
+            "channel": channel
+        })
+    except AttributeError as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"[API] Error: ads1115 module missing required functions: {e}\n{error_detail}")
+        return JSONResponse({
+            "ok": False,
+            "error": "module_error",
+            "reason": f"ads1115 module missing required functions: {e}",
             "channel": channel
         })
     
@@ -1785,12 +1833,29 @@ def api_ads1115_detect(
         return err
     
     try:
-        from smartify.ads1115 import ads_detect
+        # Import ads1115 module (same directory)
+        import ads1115
+        ads_detect = ads1115.ads_detect
     except ImportError as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"[API] Error importing ads1115: {e}\n{error_detail}")
         return JSONResponse({
             "ok": False,
             "error": "module_error",
             "reason": f"Failed to import ads1115 module: {e}",
+            "detected": False,
+            "bus": bus,
+            "addr": f"0x{addr:02X}"
+        })
+    except AttributeError as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"[API] Error: ads1115 module missing required functions: {e}\n{error_detail}")
+        return JSONResponse({
+            "ok": False,
+            "error": "module_error",
+            "reason": f"ads1115 module missing required functions: {e}",
             "detected": False,
             "bus": bus,
             "addr": f"0x{addr:02X}"
