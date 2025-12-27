@@ -284,6 +284,22 @@ def db_init() -> None:
         ON sensor_samples(sensor_name, created_at);
         """
     )
+    # Water level snapshot table
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS water_level_snapshot (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            avg_voltage REAL NOT NULL,
+            level_percent INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            message TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        """
+    )
+    # Keep only the latest snapshot (upsert pattern: delete old, insert new)
+    # We'll handle this in the code by deleting old rows before inserting
     
     # Initialize default heater relay device if it doesn't exist
     cur.execute("SELECT COUNT(*) FROM relay_devices WHERE name = 'heater'")
@@ -1332,6 +1348,9 @@ def on_startup() -> None:
     # Start rule evaluator thread
     t_rules = threading.Thread(target=_rule_evaluator_thread, daemon=True)
     t_rules.start()
+    # Start water level thread
+    t_water = threading.Thread(target=_water_level_thread, daemon=True)
+    t_water.start()
 
 
 # =========================
@@ -1362,6 +1381,428 @@ def api_me(request: Request, x_api_key: Optional[str] = Header(default=None, ali
         "require_auth": SMARTIFY_REQUIRE_AUTH,
         "api_key_enabled": bool(SMARTIFY_API_KEY),
         "trusted_localhost": SMARTIFY_TRUST_LOCALHOST,
+    })
+
+
+# =========================
+# Water Level (ADS1115)
+# =========================
+
+# Water level calibration constants
+WATER_LEVEL_FULL_V = 0.331  # Volts at 100% (full tank)
+WATER_LEVEL_EMPTY_V = 1.487  # Volts at 0% (empty tank)
+
+# In-memory cache for latest water level snapshot
+_water_level_latest: Dict[str, Any] = {
+    "level_percent": None,
+    "avg_voltage": None,
+    "status": "unknown",
+    "message": "Initializing...",
+    "updated_at": 0,
+    "age_seconds": 0
+}
+
+
+def read_ads1115_voltage(busnum: int = 1, address: Optional[int] = None, channel: int = 0) -> Optional[float]:
+    """
+    Read voltage from ADS1115 using smbus2 directly.
+    
+    Tries addresses [0x48, 0x49, 0x4A, 0x4B] if address is None.
+    Returns voltage on AIN{channel} as float volts, or None on error.
+    """
+    try:
+        from smartify.ads1115 import ads_detect, ads_read_voltage
+    except ImportError:
+        print("[Water Level] Error: Failed to import ads1115 module")
+        return None
+    
+    addresses_to_try = [0x48, 0x49, 0x4A, 0x4B] if address is None else [address]
+    
+    for addr in addresses_to_try:
+        # Detect ADS1115
+        if ads_detect(bus=busnum, addr=addr, retries=1):
+            # Read voltage from channel
+            voltage = ads_read_voltage(channel, bus=busnum, addr=addr, pga=4.096, sps=128, retries=3)
+            if voltage is not None:
+                return voltage
+            # If detection succeeded but read failed, continue to next address
+            continue
+    
+    # No ADS1115 found or all reads failed
+    return None
+
+
+def voltage_to_percent(voltage: float) -> Tuple[int, str, str]:
+    """
+    Convert voltage to water level percent using linear calibration.
+    
+    Args:
+        voltage: Voltage reading in volts
+    
+    Returns:
+        Tuple of (level_percent, status, message)
+        - level_percent: Integer 0-100
+        - status: "ok", "calibrating", or "error"
+        - message: Human-readable status message
+    """
+    # Check calibration validity
+    if WATER_LEVEL_FULL_V >= WATER_LEVEL_EMPTY_V:
+        return (0, "calibrating", "Calibration invalid (FULL_V >= EMPTY_V)")
+    
+    # Clamp to calibration range
+    if voltage <= WATER_LEVEL_FULL_V:
+        percent = 100
+    elif voltage >= WATER_LEVEL_EMPTY_V:
+        percent = 0
+    else:
+        # Linear interpolation (inverted: lower voltage = higher level)
+        # percent = 100 * (EMPTY_V - voltage) / (EMPTY_V - FULL_V)
+        voltage_range = WATER_LEVEL_EMPTY_V - WATER_LEVEL_FULL_V
+        percent = 100.0 * (WATER_LEVEL_EMPTY_V - voltage) / voltage_range
+        percent = max(0, min(100, percent))  # Clamp to 0-100
+    
+    return (int(round(percent)), "ok", "Reading stable")
+
+
+def db_get_water_level_snapshot() -> Optional[Dict[str, Any]]:
+    """Get the latest water level snapshot from database."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM water_level_snapshot ORDER BY updated_at DESC LIMIT 1"
+    )
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def db_upsert_water_level_snapshot(
+    avg_voltage: float,
+    level_percent: int,
+    status: str,
+    message: str,
+    updated_at: int
+) -> None:
+    """Store water level snapshot (delete old, insert new)."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    
+    # Get previous snapshot's created_at before deleting
+    created_at = updated_at  # Default: use current time
+    cur.execute("SELECT created_at FROM water_level_snapshot ORDER BY updated_at DESC LIMIT 1")
+    prev_row = cur.fetchone()
+    if prev_row:
+        created_at = prev_row[0]
+    
+    # Delete old snapshots (keep only latest)
+    cur.execute("DELETE FROM water_level_snapshot")
+    
+    # Insert new snapshot
+    cur.execute(
+        """INSERT INTO water_level_snapshot 
+           (avg_voltage, level_percent, status, message, updated_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (avg_voltage, level_percent, status, message, updated_at, created_at)
+    )
+    conn.commit()
+    conn.close()
+
+
+def _water_level_thread() -> None:
+    """Background thread that samples water level every 60 seconds."""
+    global _water_level_latest
+    
+    print("[Water Level] Background thread started")
+    
+    # Initial delay to allow other systems to start
+    time.sleep(5)
+    
+    while True:
+        try:
+            now = int(time.time())
+            
+            # Take 3 samples with 100-200ms spacing
+            samples = []
+            for i in range(3):
+                voltage = read_ads1115_voltage(busnum=1, address=None, channel=0)
+                if voltage is not None:
+                    samples.append(voltage)
+                if i < 2:  # Don't sleep after last sample
+                    time.sleep(0.15)  # 150ms between samples
+            
+            if len(samples) >= 1:
+                # Compute average voltage
+                avg_voltage = sum(samples) / len(samples)
+                
+                # Convert to percent
+                level_percent, status, message = voltage_to_percent(avg_voltage)
+                
+                # Store snapshot
+                db_upsert_water_level_snapshot(
+                    avg_voltage=avg_voltage,
+                    level_percent=level_percent,
+                    status=status,
+                    message=message,
+                    updated_at=now
+                )
+                
+                # Update in-memory cache
+                _water_level_latest.update({
+                    "level_percent": level_percent,
+                    "avg_voltage": avg_voltage,
+                    "status": status,
+                    "message": message,
+                    "updated_at": now,
+                    "age_seconds": 0
+                })
+                
+                print(f"[Water Level] Updated: {level_percent}% ({avg_voltage:.3f}V) - {message}")
+            else:
+                # No successful samples
+                # Keep previous snapshot but mark as error
+                prev_snapshot = db_get_water_level_snapshot()
+                if prev_snapshot:
+                    # Keep previous percent but mark as error
+                    db_upsert_water_level_snapshot(
+                        avg_voltage=prev_snapshot.get("avg_voltage", 0.0),
+                        level_percent=prev_snapshot.get("level_percent", 0),
+                        status="error",
+                        message="I2C read error (ADS1115)",
+                        updated_at=now
+                    )
+                    _water_level_latest.update({
+                        "level_percent": prev_snapshot.get("level_percent"),
+                        "avg_voltage": prev_snapshot.get("avg_voltage"),
+                        "status": "error",
+                        "message": "I2C read error (ADS1115)",
+                        "updated_at": prev_snapshot.get("updated_at", now),
+                        "age_seconds": now - prev_snapshot.get("updated_at", now)
+                    })
+                else:
+                    # No previous snapshot - create error snapshot
+                    db_upsert_water_level_snapshot(
+                        avg_voltage=0.0,
+                        level_percent=0,
+                        status="error",
+                        message="I2C read error (ADS1115)",
+                        updated_at=now
+                    )
+                    _water_level_latest.update({
+                        "level_percent": 0,
+                        "avg_voltage": 0.0,
+                        "status": "error",
+                        "message": "I2C read error (ADS1115)",
+                        "updated_at": now,
+                        "age_seconds": 0
+                    })
+                
+                print(f"[Water Level] Error: Failed to read ADS1115")
+        
+        except Exception as e:
+            print(f"[Water Level] Exception in background thread: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continue running - don't crash the thread
+        
+        # Wait 60 seconds before next sample
+        time.sleep(60)
+
+
+# =========================
+# API: Water Level
+# =========================
+
+@app.get("/api/water/level/latest")
+def api_water_level_latest(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """
+    Get latest water level snapshot.
+    
+    Returns JSON with level_percent, avg_voltage, status, age_seconds, message.
+    Never returns 500 - always returns HTTP 200 with ok:false on error.
+    """
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    try:
+        now = int(time.time())
+        
+        # Get snapshot from database
+        snapshot = db_get_water_level_snapshot()
+        
+        if not snapshot:
+            # No snapshot yet - return initializing state
+            return JSONResponse({
+                "ok": True,
+                "level_percent": None,
+                "avg_voltage": None,
+                "status": "unknown",
+                "age_seconds": 0,
+                "message": "No water level data available yet"
+            })
+        
+        updated_at = snapshot.get("updated_at", 0)
+        age_seconds = max(0, now - updated_at) if updated_at > 0 else 0
+        
+        status = snapshot.get("status", "unknown")
+        message = snapshot.get("message", "Unknown status")
+        
+        # Check if stale (> 10 minutes = 600 seconds)
+        if age_seconds > 600 and status == "ok":
+            status = "stale"
+            age_minutes = age_seconds // 60
+            message = f"No valid water level reading for {age_minutes} minutes — showing last known value"
+        
+        return JSONResponse({
+            "ok": True,
+            "level_percent": snapshot.get("level_percent"),
+            "avg_voltage": snapshot.get("avg_voltage"),
+            "status": status,
+            "age_seconds": int(age_seconds),
+            "message": message
+        })
+    
+    except Exception as e:
+        # Never return 500 - always return valid JSON
+        print(f"[API] Error in /api/water/level/latest: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({
+            "ok": False,
+            "error": "internal_error",
+            "level_percent": None,
+            "avg_voltage": None,
+            "status": "error",
+            "age_seconds": 0,
+            "message": f"Internal error: {str(e)}"
+        })
+
+
+# =========================
+# API: ADS1115 ADC
+# =========================
+
+@app.get("/api/ads1115/read")
+def api_ads1115_read(
+    request: Request,
+    channel: int = 0,
+    bus: int = 1,
+    addr: int = 0x48,
+    pga: float = 4.096,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """
+    Read voltage from ADS1115 ADC channel.
+    
+    Args:
+        channel: Channel number (0-3)
+        bus: I2C bus number (default 1)
+        addr: I2C address (default 0x48)
+        pga: PGA voltage range (default 4.096V)
+    
+    Returns:
+        JSON with ok, voltage, raw_value, channel, or error/reason
+    """
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    # Validate channel
+    if channel not in (0, 1, 2, 3):
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_channel",
+            "reason": "Channel must be 0-3",
+            "channel": channel
+        }, status_code=400)
+    
+    try:
+        # Try to import ads1115 module
+        from smartify.ads1115 import ads_detect, ads_read_voltage, ads_read_raw_single_ended
+    except ImportError as e:
+        return JSONResponse({
+            "ok": False,
+            "error": "module_error",
+            "reason": f"Failed to import ads1115 module: {e}",
+            "channel": channel
+        })
+    
+    # Detect ADS1115
+    if not ads_detect(bus=bus, addr=addr):
+        return JSONResponse({
+            "ok": False,
+            "error": "ads_not_found",
+            "reason": f"ADS1115 not found at address 0x{addr:02X} on bus {bus}",
+            "channel": channel,
+            "bus": bus,
+            "addr": f"0x{addr:02X}"
+        })
+    
+    # Read voltage
+    voltage = ads_read_voltage(channel, bus=bus, addr=addr, pga=pga, sps=128, retries=3)
+    raw_value = ads_read_raw_single_ended(channel, bus=bus, addr=addr, pga=pga, sps=128, retries=3)
+    
+    if voltage is None or raw_value is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "read_failed",
+            "reason": "Failed to read from ADS1115 channel (I/O error or timeout)",
+            "channel": channel,
+            "bus": bus,
+            "addr": f"0x{addr:02X}"
+        })
+    
+    return JSONResponse({
+        "ok": True,
+        "channel": channel,
+        "voltage": voltage,
+        "raw_value": raw_value,
+        "pga": pga,
+        "bus": bus,
+        "addr": f"0x{addr:02X}"
+    })
+
+
+@app.get("/api/ads1115/detect")
+def api_ads1115_detect(
+    request: Request,
+    bus: int = 1,
+    addr: int = 0x48,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """
+    Detect if ADS1115 is present on I2C bus.
+    
+    Returns:
+        JSON with ok, detected, bus, addr
+    """
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    try:
+        from smartify.ads1115 import ads_detect
+    except ImportError as e:
+        return JSONResponse({
+            "ok": False,
+            "error": "module_error",
+            "reason": f"Failed to import ads1115 module: {e}",
+            "detected": False,
+            "bus": bus,
+            "addr": f"0x{addr:02X}"
+        })
+    
+    detected = ads_detect(bus=bus, addr=addr)
+    
+    return JSONResponse({
+        "ok": True,
+        "detected": detected,
+        "bus": bus,
+        "addr": f"0x{addr:02X}"
     })
 
 
