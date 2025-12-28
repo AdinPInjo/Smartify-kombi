@@ -301,6 +301,29 @@ def db_init() -> None:
     # Keep only the latest snapshot (upsert pattern: delete old, insert new)
     # We'll handle this in the code by deleting old rows before inserting
     
+    # Water level settings table (calibration)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS water_level_settings (
+            id TEXT PRIMARY KEY DEFAULT 'default',
+            full_voltage REAL NOT NULL,
+            empty_voltage REAL NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        """
+    )
+    # Initialize default calibration if not exists
+    cur.execute("SELECT COUNT(*) FROM water_level_settings WHERE id = 'default'")
+    if cur.fetchone()[0] == 0:
+        now = int(time.time())
+        # Use new discovered calibration values (full=0.497, empty=2.230)
+        cur.execute(
+            """INSERT INTO water_level_settings (id, full_voltage, empty_voltage, updated_at)
+               VALUES (?, ?, ?, ?)""",
+            ("default", 0.497, 2.230, now)
+        )
+        print(f"[DB] Initialized water_level_settings with defaults: full=0.497V, empty=2.230V")
+    
     # Initialize default heater relay device if it doesn't exist
     cur.execute("SELECT COUNT(*) FROM relay_devices WHERE name = 'heater'")
     if cur.fetchone()[0] == 0:
@@ -1451,34 +1474,99 @@ def read_ads1115_voltage(busnum: int = 1, address: Optional[int] = None, channel
     return None
 
 
-def voltage_to_percent(voltage: float) -> Tuple[int, str, str]:
+def db_get_water_level_settings() -> Dict[str, Any]:
+    """Get water level calibration settings from database."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM water_level_settings WHERE id = 'default'")
+    row = cur.fetchone()
+    conn.close()
+    
+    if row:
+        return dict(row)
+    else:
+        # Return defaults if not found (shouldn't happen after init, but safe fallback)
+        now = int(time.time())
+        return {
+            "id": "default",
+            "full_voltage": WATER_LEVEL_FULL_V_DEFAULT,
+            "empty_voltage": WATER_LEVEL_EMPTY_V_DEFAULT,
+            "updated_at": now
+        }
+
+
+def db_update_water_level_settings(full_voltage: float, empty_voltage: float) -> None:
+    """Update water level calibration settings in database."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    now = int(time.time())
+    cur.execute(
+        """INSERT OR REPLACE INTO water_level_settings (id, full_voltage, empty_voltage, updated_at)
+           VALUES (?, ?, ?, ?)""",
+        ("default", full_voltage, empty_voltage, now)
+    )
+    conn.commit()
+    conn.close()
+    print(f"[Water Level] Updated calibration: full={full_voltage}V, empty={empty_voltage}V")
+
+
+def voltage_to_percent(voltage: float, full_v: Optional[float] = None, empty_v: Optional[float] = None) -> Tuple[int, str, str]:
     """
     Convert voltage to water level percent using linear calibration.
     
     Args:
         voltage: Voltage reading in volts
+        full_v: Full tank voltage (if None, loads from DB)
+        empty_v: Empty tank voltage (if None, loads from DB)
     
     Returns:
         Tuple of (level_percent, status, message)
-        - level_percent: Integer 0-100
-        - status: "ok", "calibrating", or "error"
+        - level_percent: Integer 0-100, or None if calibration invalid
+        - status: "ok", "error"
         - message: Human-readable status message
     """
-    # Check calibration validity
-    if WATER_LEVEL_FULL_V >= WATER_LEVEL_EMPTY_V:
-        return (0, "calibrating", "Calibration invalid (FULL_V >= EMPTY_V)")
+    # Load calibration from DB if not provided
+    if full_v is None or empty_v is None:
+        settings = db_get_water_level_settings()
+        full_v = settings.get("full_voltage", WATER_LEVEL_FULL_V_DEFAULT)
+        empty_v = settings.get("empty_voltage", WATER_LEVEL_EMPTY_V_DEFAULT)
+    
+    # Validate calibration
+    EPSILON = 0.001  # Minimum voltage difference
+    if full_v <= 0 or empty_v <= 0:
+        return (0, "error", "Invalid calibration settings (voltages must be positive)")
+    
+    if abs(full_v - empty_v) < EPSILON:
+        return (0, "error", "Invalid calibration settings (full and empty voltages too close)")
+    
+    # Determine which direction: if full_v < empty_v, it's inverted (lower voltage = higher level)
+    # If full_v > empty_v, it's normal (higher voltage = higher level)
+    # The formula handles both cases correctly
     
     # Clamp to calibration range
-    if voltage <= WATER_LEVEL_FULL_V:
-        percent = 100
-    elif voltage >= WATER_LEVEL_EMPTY_V:
-        percent = 0
+    if full_v < empty_v:
+        # Inverted mapping (lower voltage = higher level)
+        if voltage <= full_v:
+            percent = 100
+        elif voltage >= empty_v:
+            percent = 0
+        else:
+            # Linear interpolation
+            voltage_range = empty_v - full_v
+            percent = 100.0 * (empty_v - voltage) / voltage_range
+            percent = max(0, min(100, percent))  # Clamp to 0-100
     else:
-        # Linear interpolation (inverted: lower voltage = higher level)
-        # percent = 100 * (EMPTY_V - voltage) / (EMPTY_V - FULL_V)
-        voltage_range = WATER_LEVEL_EMPTY_V - WATER_LEVEL_FULL_V
-        percent = 100.0 * (WATER_LEVEL_EMPTY_V - voltage) / voltage_range
-        percent = max(0, min(100, percent))  # Clamp to 0-100
+        # Normal mapping (higher voltage = higher level)
+        if voltage >= full_v:
+            percent = 100
+        elif voltage <= empty_v:
+            percent = 0
+        else:
+            # Linear interpolation
+            voltage_range = full_v - empty_v
+            percent = 100.0 * (voltage - empty_v) / voltage_range
+            percent = max(0, min(100, percent))  # Clamp to 0-100
     
     return (int(round(percent)), "ok", "Reading stable")
 
@@ -1645,6 +1733,194 @@ def _water_level_thread() -> None:
 # API: Water Level
 # =========================
 
+@app.get("/api/water/settings")
+def api_water_settings_get(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """
+    Get water level calibration settings.
+    
+    Returns JSON with full_voltage, empty_voltage, updated_at.
+    Always HTTP 200, never crashes.
+    """
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    try:
+        settings = db_get_water_level_settings()
+        return JSONResponse({
+            "ok": True,
+            "full_voltage": settings.get("full_voltage"),
+            "empty_voltage": settings.get("empty_voltage"),
+            "updated_at": settings.get("updated_at", 0)
+        })
+    except Exception as e:
+        print(f"[API] Error in /api/water/settings GET: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return defaults on error
+        return JSONResponse({
+            "ok": False,
+            "error": "internal_error",
+            "full_voltage": WATER_LEVEL_FULL_V_DEFAULT,
+            "empty_voltage": WATER_LEVEL_EMPTY_V_DEFAULT,
+            "updated_at": 0,
+            "message": f"Internal error: {str(e)}"
+        })
+
+
+@app.post("/api/water/settings")
+def api_water_settings_post(
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """
+    Update water level calibration settings.
+    
+    Accepts JSON: { full_voltage: number, empty_voltage: number }
+    Validates and stores to DB.
+    Always HTTP 200 with {ok:true} or {ok:false,error,message}.
+    """
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    try:
+        full_voltage = body.get("full_voltage")
+        empty_voltage = body.get("empty_voltage")
+        
+        # Validate inputs
+        if full_voltage is None or empty_voltage is None:
+            return JSONResponse({
+                "ok": False,
+                "error": "missing_fields",
+                "message": "Both full_voltage and empty_voltage are required"
+            })
+        
+        try:
+            full_voltage = float(full_voltage)
+            empty_voltage = float(empty_voltage)
+        except (ValueError, TypeError):
+            return JSONResponse({
+                "ok": False,
+                "error": "invalid_type",
+                "message": "full_voltage and empty_voltage must be numbers"
+            })
+        
+        # Validate values
+        EPSILON = 0.001
+        if full_voltage <= 0 or empty_voltage <= 0:
+            return JSONResponse({
+                "ok": False,
+                "error": "invalid_value",
+                "message": "Voltages must be positive numbers"
+            })
+        
+        if abs(full_voltage - empty_voltage) < EPSILON:
+            return JSONResponse({
+                "ok": False,
+                "error": "invalid_value",
+                "message": "Full and empty voltages must be different"
+            })
+        
+        # Save to DB
+        db_update_water_level_settings(full_voltage, empty_voltage)
+        
+        # Return saved values
+        settings = db_get_water_level_settings()
+        return JSONResponse({
+            "ok": True,
+            "full_voltage": settings.get("full_voltage"),
+            "empty_voltage": settings.get("empty_voltage"),
+            "updated_at": settings.get("updated_at", 0)
+        })
+    
+    except Exception as e:
+        print(f"[API] Error in /api/water/settings POST: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({
+            "ok": False,
+            "error": "internal_error",
+            "message": f"Internal error: {str(e)}"
+        })
+
+
+@app.get("/api/water/level/live")
+def api_water_level_live(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """
+    Get live voltage reading from ADS1115 A0 (single read, not from snapshot).
+    
+    Takes 3 quick reads and averages them for stability.
+    Returns JSON with voltage, raw, address, message.
+    No 500s - always HTTP 200.
+    """
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    try:
+        # Take 3 quick samples
+        samples = []
+        detected_address = None
+        
+        for i in range(3):
+            voltage = read_ads1115_voltage(busnum=1, address=None, channel=0)
+            if voltage is not None:
+                samples.append(voltage)
+                # Try to detect which address worked (for reporting)
+                if detected_address is None:
+                    # Check addresses to find which one works
+                    for addr in [0x48, 0x49, 0x4A, 0x4B]:
+                        try:
+                            import ads1115
+                            if ads1115.ads_detect(bus=1, addr=addr, retries=1):
+                                detected_address = f"0x{addr:02X}"
+                                break
+                        except:
+                            pass
+            if i < 2:  # Don't sleep after last sample
+                time.sleep(0.1)  # 100ms between samples
+        
+        if len(samples) >= 1:
+            avg_voltage = sum(samples) / len(samples)
+            return JSONResponse({
+                "ok": True,
+                "voltage": avg_voltage,
+                "raw": None,  # We don't track raw in read_ads1115_voltage, but could add if needed
+                "address": detected_address or "0x48",
+                "message": "ok"
+            })
+        else:
+            return JSONResponse({
+                "ok": False,
+                "error": "read_failed",
+                "voltage": None,
+                "raw": None,
+                "address": None,
+                "message": "I2C read error (ADS1115)"
+            })
+    
+    except Exception as e:
+        print(f"[API] Error in /api/water/level/live: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({
+            "ok": False,
+            "error": "internal_error",
+            "voltage": None,
+            "raw": None,
+            "address": None,
+            "message": f"Internal error: {str(e)}"
+        })
+
+
 @app.get("/api/water/level/latest")
 def api_water_level_latest(
     request: Request,
@@ -1689,13 +1965,18 @@ def api_water_level_latest(
             age_minutes = age_seconds // 60
             message = f"No valid water level reading for {age_minutes} minutes — showing last known value"
         
+        # Get calibration settings for response
+        calibration_settings = db_get_water_level_settings()
+        
         return JSONResponse({
             "ok": True,
             "level_percent": snapshot.get("level_percent"),
             "avg_voltage": snapshot.get("avg_voltage"),
             "status": status,
             "age_seconds": int(age_seconds),
-            "message": message
+            "message": message,
+            "calibration_full_voltage": calibration_settings.get("full_voltage"),
+            "calibration_empty_voltage": calibration_settings.get("empty_voltage")
         })
     
     except Exception as e:

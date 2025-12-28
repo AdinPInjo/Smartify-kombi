@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { apiFetch } from "@/lib/utils";
+import { toast } from "sonner";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 type NetItem = { ssid: string; signal: number | null; security: string };
 type NetStatus = { ssid: string | null; ip: string | null };
@@ -130,8 +133,227 @@ const SettingsDashboard = () => {
           {msg && <div className="text-sm">{msg}</div>}
         </CardContent>
       </Card>
+
+      {/* Water Level Calibration Card */}
+      <WaterLevelSettingsCard />
     </div>
   );
 };
+
+type WaterLevelSettings = {
+  ok: boolean;
+  full_voltage: number;
+  empty_voltage: number;
+  updated_at: number;
+};
+
+type WaterLevelLive = {
+  ok: boolean;
+  voltage: number | null;
+  raw: number | null;
+  address: string | null;
+  message: string;
+};
+
+type WaterLevelLatest = {
+  ok: boolean;
+  level_percent: number | null;
+  avg_voltage: number | null;
+  status: string;
+  age_seconds: number;
+  message: string;
+  calibration_full_voltage?: number | null;
+  calibration_empty_voltage?: number | null;
+};
+
+function WaterLevelSettingsCard() {
+  const queryClient = useQueryClient();
+  const [fullVoltage, setFullVoltage] = useState<string>("");
+  const [emptyVoltage, setEmptyVoltage] = useState<string>("");
+  const [liveVoltage, setLiveVoltage] = useState<number | null>(null);
+  const [loadingLive, setLoadingLive] = useState(false);
+
+  // Fetch current settings
+  const { data: settings, isLoading: loadingSettings } = useQuery<WaterLevelSettings>({
+    queryKey: ["water-level-settings"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/water/settings");
+      if (!r.ok) throw new Error(`Settings API returned ${r.status}`);
+      return await r.json();
+    },
+  });
+
+  // Fetch snapshot data (for showing current snapshot voltage)
+  const { data: snapshotData } = useQuery<WaterLevelLatest>({
+    queryKey: ["water-level"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/water/level/latest");
+      if (!r.ok) throw new Error(`Water level API returned ${r.status}`);
+      return await r.json();
+    },
+    refetchInterval: 10000, // Poll every 10 seconds
+  });
+
+  // Initialize form with current settings
+  useEffect(() => {
+    if (settings && settings.ok) {
+      setFullVoltage(settings.full_voltage?.toFixed(3) || "");
+      setEmptyVoltage(settings.empty_voltage?.toFixed(3) || "");
+    }
+  }, [settings]);
+
+  // Save settings mutation
+  const saveMutation = useMutation({
+    mutationFn: async (data: { full_voltage: number; empty_voltage: number }) => {
+      const r = await apiFetch("/api/water/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!r.ok) {
+        const errorData = await r.json().catch(() => ({}));
+        throw new Error(errorData.message || errorData.error || "Failed to save settings");
+      }
+      return await r.json();
+    },
+    onSuccess: () => {
+      toast.success("Water level calibration saved successfully");
+      queryClient.invalidateQueries({ queryKey: ["water-level-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["water-level"] }); // Refresh overview card
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to save settings: ${error.message}`);
+    },
+  });
+
+  // Fetch live voltage
+  const fetchLiveVoltage = async () => {
+    setLoadingLive(true);
+    try {
+      const r = await apiFetch("/api/water/level/live");
+      if (!r.ok) throw new Error("Failed to read live voltage");
+      const data: WaterLevelLive = await r.json();
+      if (data.ok && data.voltage !== null) {
+        setLiveVoltage(data.voltage);
+        toast.success(`Live voltage: ${data.voltage.toFixed(3)} V`);
+      } else {
+        toast.error(data.message || "Failed to read live voltage");
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Failed to read live voltage");
+    } finally {
+      setLoadingLive(false);
+    }
+  };
+
+  const handleSave = () => {
+    const full = parseFloat(fullVoltage);
+    const empty = parseFloat(emptyVoltage);
+
+    // Validate
+    if (isNaN(full) || isNaN(empty)) {
+      toast.error("Both voltages must be valid numbers");
+      return;
+    }
+
+    if (full <= 0 || empty <= 0) {
+      toast.error("Voltages must be positive numbers");
+      return;
+    }
+
+    if (Math.abs(full - empty) < 0.001) {
+      toast.error("Full and empty voltages must be different");
+      return;
+    }
+
+    saveMutation.mutate({ full_voltage: full, empty_voltage: empty });
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Water Level Calibration</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="text-sm text-zinc-400">
+          Tip: Set FULL when tank is physically full and note the live voltage; same for EMPTY.
+        </div>
+
+        {/* Current Readings */}
+        <div className="space-y-2 p-3 bg-zinc-900/50 rounded-lg border border-zinc-800/50">
+          <div className="text-sm font-medium text-zinc-300">Current Readings</div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-zinc-400">Live Voltage:</span>{" "}
+              <span className="font-semibold text-zinc-200">
+                {liveVoltage !== null ? `${liveVoltage.toFixed(3)} V` : "—"}
+              </span>
+            </div>
+            <div>
+              <span className="text-zinc-400">Snapshot Voltage:</span>{" "}
+              <span className="font-semibold text-zinc-200">
+                {snapshotData?.avg_voltage != null
+                  ? `${snapshotData.avg_voltage.toFixed(3)} V`
+                  : "—"}
+              </span>
+            </div>
+            {snapshotData?.age_seconds != null && (
+              <div className="col-span-2 text-xs text-zinc-500">
+                Snapshot age: {snapshotData.age_seconds}s
+              </div>
+            )}
+          </div>
+          <Button
+            onClick={fetchLiveVoltage}
+            disabled={loadingLive}
+            variant="outline"
+            size="sm"
+            className="w-full"
+          >
+            {loadingLive ? "Reading..." : "Refresh Live Voltage"}
+          </Button>
+        </div>
+
+        {/* Calibration Settings */}
+        <div className="space-y-3">
+          <div className="text-sm font-medium text-zinc-300">Calibration Settings</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="full-voltage">Full Tank Voltage (V)</Label>
+              <Input
+                id="full-voltage"
+                type="number"
+                step="0.001"
+                value={fullVoltage}
+                onChange={(e) => setFullVoltage(e.target.value)}
+                placeholder="0.497"
+                disabled={loadingSettings || saveMutation.isPending}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="empty-voltage">Empty Tank Voltage (V)</Label>
+              <Input
+                id="empty-voltage"
+                type="number"
+                step="0.001"
+                value={emptyVoltage}
+                onChange={(e) => setEmptyVoltage(e.target.value)}
+                placeholder="2.230"
+                disabled={loadingSettings || saveMutation.isPending}
+              />
+            </div>
+          </div>
+          <Button
+            onClick={handleSave}
+            disabled={loadingSettings || saveMutation.isPending}
+            className="w-full"
+          >
+            {saveMutation.isPending ? "Saving..." : "Save Calibration"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default SettingsDashboard;
