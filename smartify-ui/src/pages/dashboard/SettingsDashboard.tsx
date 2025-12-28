@@ -235,20 +235,26 @@ function WaterLevelSettingsCard() {
     setLoadingLive(true);
     try {
       const r = await apiFetch("/api/water/level/live");
-      if (!r.ok) throw new Error("Failed to read live data");
+      if (!r.ok) {
+        const errorData = await r.json().catch(() => ({}));
+        throw new Error(errorData.message || errorData.error || "Failed to read live data");
+      }
       const data: WaterLevelLive = await r.json();
       if (data.ok) {
         setLiveData(data);
-        if (data.signal_voltage !== null) {
-          toast.success(`Live read: Signal=${data.signal_voltage.toFixed(3)}V, Supply=${data.supply_voltage_est?.toFixed(2) ?? "—"}V`);
+        if (data.signal_voltage != null) {
+          const supplyText = data.supply_voltage_est != null ? data.supply_voltage_est.toFixed(2) : "—";
+          toast.success(`Live read: Signal=${data.signal_voltage.toFixed(3)}V, Supply=${supplyText}V`);
         } else {
-          toast.error(data.message || "Failed to read live data");
+          toast.error(data.message || "Live data read but signal voltage is missing");
         }
       } else {
         toast.error(data.message || "Failed to read live data");
+        setLiveData(null); // Clear invalid data
       }
     } catch (error: any) {
       toast.error(error.message || "Failed to read live data");
+      setLiveData(null); // Clear on error
     } finally {
       setLoadingLive(false);
     }
@@ -256,31 +262,47 @@ function WaterLevelSettingsCard() {
 
   // Helper: Set FULL calibration from current live reading
   const setFullFromLive = () => {
-    if (!liveData || liveData.ratio === null) {
+    if (!liveData || !liveData.ok) {
       toast.error("No live data available. Please refresh first.");
       return;
     }
-    if (useNormalization && liveData.ratio !== null) {
-      setFullRatio(liveData.ratio.toFixed(6));
-      toast.success(`Set FULL ratio to ${liveData.ratio.toFixed(6)}`);
-    } else if (liveData.signal_voltage !== null) {
-      setFullVoltage(liveData.signal_voltage.toFixed(3));
-      toast.success(`Set FULL voltage to ${liveData.signal_voltage.toFixed(3)}V`);
+    if (useNormalization) {
+      if (liveData.ratio != null && liveData.ratio > 0) {
+        setFullRatio(liveData.ratio.toFixed(6));
+        toast.success(`Set FULL ratio to ${liveData.ratio.toFixed(6)}`);
+      } else {
+        toast.error("Live ratio data not available");
+      }
+    } else {
+      if (liveData.signal_voltage != null && liveData.signal_voltage > 0) {
+        setFullVoltage(liveData.signal_voltage.toFixed(3));
+        toast.success(`Set FULL voltage to ${liveData.signal_voltage.toFixed(3)}V`);
+      } else {
+        toast.error("Live signal voltage data not available");
+      }
     }
   };
 
   // Helper: Set EMPTY calibration from current live reading
   const setEmptyFromLive = () => {
-    if (!liveData || liveData.ratio === null) {
+    if (!liveData || !liveData.ok) {
       toast.error("No live data available. Please refresh first.");
       return;
     }
-    if (useNormalization && liveData.ratio !== null) {
-      setEmptyRatio(liveData.ratio.toFixed(6));
-      toast.success(`Set EMPTY ratio to ${liveData.ratio.toFixed(6)}`);
-    } else if (liveData.signal_voltage !== null) {
-      setEmptyVoltage(liveData.signal_voltage.toFixed(3));
-      toast.success(`Set EMPTY voltage to ${liveData.signal_voltage.toFixed(3)}V`);
+    if (useNormalization) {
+      if (liveData.ratio != null && liveData.ratio > 0) {
+        setEmptyRatio(liveData.ratio.toFixed(6));
+        toast.success(`Set EMPTY ratio to ${liveData.ratio.toFixed(6)}`);
+      } else {
+        toast.error("Live ratio data not available");
+      }
+    } else {
+      if (liveData.signal_voltage != null && liveData.signal_voltage > 0) {
+        setEmptyVoltage(liveData.signal_voltage.toFixed(3));
+        toast.success(`Set EMPTY voltage to ${liveData.signal_voltage.toFixed(3)}V`);
+      } else {
+        toast.error("Live signal voltage data not available");
+      }
     }
   };
 
@@ -398,19 +420,49 @@ function WaterLevelSettingsCard() {
           <div className="text-sm font-medium text-zinc-300">Current Readings</div>
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
-              <span className="text-zinc-400">Live Voltage:</span>{" "}
+              <span className="text-zinc-400">Signal (A0):</span>{" "}
               <span className="font-semibold text-zinc-200">
-                {liveVoltage !== null ? `${liveVoltage.toFixed(3)} V` : "—"}
-              </span>
-            </div>
-            <div>
-              <span className="text-zinc-400">Snapshot Voltage:</span>{" "}
-              <span className="font-semibold text-zinc-200">
-                {snapshotData?.avg_voltage != null
-                  ? `${snapshotData.avg_voltage.toFixed(3)} V`
+                {liveData?.signal_voltage != null
+                  ? `${liveData.signal_voltage.toFixed(3)} V`
+                  : snapshotData?.signal_voltage != null
+                  ? `${snapshotData.signal_voltage.toFixed(3)} V`
                   : "—"}
               </span>
             </div>
+            <div>
+              <span className="text-zinc-400">Supply:</span>{" "}
+              <span className="font-semibold text-zinc-200">
+                {liveData?.supply_voltage_est != null
+                  ? `${liveData.supply_voltage_est.toFixed(2)} V`
+                  : snapshotData?.supply_voltage_est != null
+                  ? `${snapshotData.supply_voltage_est.toFixed(2)} V`
+                  : "—"}
+              </span>
+            </div>
+            {useNormalization && (
+              <>
+                <div>
+                  <span className="text-zinc-400">Ratio:</span>{" "}
+                  <span className="font-semibold text-zinc-200">
+                    {liveData?.ratio != null
+                      ? liveData.ratio.toFixed(6)
+                      : snapshotData?.ratio != null
+                      ? snapshotData.ratio.toFixed(6)
+                      : "—"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-zinc-400">Level:</span>{" "}
+                  <span className="font-semibold text-zinc-200">
+                    {liveData?.level_percent != null
+                      ? `${liveData.level_percent}%`
+                      : snapshotData?.level_percent != null
+                      ? `${snapshotData.level_percent}%`
+                      : "—"}
+                  </span>
+                </div>
+              </>
+            )}
             <div>
               <span className="text-zinc-400">Status:</span>{" "}
               <span
