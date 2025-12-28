@@ -275,6 +275,87 @@ def ads_read_voltage(
     return voltage
 
 
+def _read_raw_with_smbus(
+    i2c,
+    addr: int,
+    channel: int,
+    pga: float,
+    sps: int
+) -> Optional[int]:
+    """
+    Helper: Read raw ADC value using the proven 6-step pattern from ads_read_raw_single_ended.
+    
+    This function performs the exact same sequence as ads_read_raw_single_ended, but accepts
+    an existing SMBus instance so it can be called multiple times within one session.
+    
+    Args:
+        i2c: Active SMBus instance
+        addr: I2C address
+        channel: Channel number (0-3)
+        pga: PGA voltage range
+        sps: Samples per second
+    
+    Returns:
+        Raw 16-bit signed ADC value, or None on error
+    """
+    if channel not in (0, 1, 2, 3):
+        print(f"[ADS1115] Invalid channel: {channel}. Must be 0-3.")
+        return None
+    
+    mux = CHANNEL_MUX[channel]
+    pga_value = _get_pga_value(pga)
+    sps_value = _get_sps_value(sps)
+    
+    # Config: OS (start) | MUX | PGA | MODE (single-shot) | DR | COMP_QUE (disable)
+    config = (
+        ADS1115_OS_SINGLE |  # Start single-shot conversion
+        mux |                # Channel selection
+        pga_value |          # PGA setting
+        ADS1115_MODE_SINGLE |  # Single-shot mode
+        sps_value |          # Data rate
+        0x0003               # Comparator queue (disable)
+    )
+    
+    try:
+        # Step 1: Write config register to set channel and start conversion
+        config_bytes = [(config >> 8) & 0xFF, config & 0xFF]  # Big-endian
+        i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+        
+        # Step 2: Wait 3-5ms for MUX to settle
+        time.sleep(0.004)  # 4ms settle time
+        
+        # Step 3: Read conversion once and discard (throwaway to clear stale data)
+        try:
+            _ = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
+        except:
+            pass  # Ignore errors on throwaway read
+        
+        # Step 4: Trigger a fresh conversion by writing config again
+        i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+        
+        # Step 5: Wait for conversion to complete: max(0.03, 2*(1/sps))
+        conversion_time = 1.0 / sps
+        sleep_time = max(0.03, 2 * conversion_time)
+        time.sleep(sleep_time)
+        
+        # Step 6: Read conversion register (16-bit, big-endian) - this is the value we use
+        data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
+        if len(data) >= 2:
+            # Convert from big-endian to signed 16-bit integer
+            raw_value = (data[0] << 8) | data[1]
+            # Convert unsigned 16-bit to signed 16-bit
+            if raw_value > 32767:
+                raw_value = raw_value - 65536
+            return raw_value
+        else:
+            print(f"[ADS1115] Invalid response length: {len(data)}")
+            return None
+            
+    except Exception as e:
+        print(f"[ADS1115] Error in _read_raw_with_smbus for channel {channel}: {e}")
+        return None
+
+
 def ads_read_voltage_pair(
     channel0: int,
     channel1: int,
@@ -286,8 +367,8 @@ def ads_read_voltage_pair(
     """
     Read voltages from two single-ended channels in one SMBus session.
     
-    Uses simple single-shot read approach for each channel to avoid stale conversion
-    register issues after MUX switching.
+    Uses the same proven 6-step pattern as ads_read_raw_single_ended for each channel.
+    Both channels are read within a single I2C_LOCK critical section.
     
     Args:
         channel0: First channel number (0-3)
@@ -312,15 +393,6 @@ def ads_read_voltage_pair(
     if SMBus is None:
         return (None, None)
     
-    # Calculate conversion time based on SPS
-    # For 128 SPS: 1/128 = 7.8ms per conversion, use 10ms to be safe
-    conversion_time = 1.0 / sps
-    wait_time = max(0.010, conversion_time * 1.5)  # At least 10ms, or 1.5x conversion time
-    
-    # Get PGA and SPS register values once
-    pga_value = _get_pga_value(pga)
-    sps_value = _get_sps_value(sps)
-    
     # Retry entire pair read up to 3 times on I/O errors
     for attempt in range(3):
         try:
@@ -330,44 +402,16 @@ def ads_read_voltage_pair(
                     channels = [channel0, channel1]
                     
                     for idx, ch in enumerate(channels):
-                        try:
-                            # Build config for this channel with correct MUX setting
-                            mux = CHANNEL_MUX[ch]
-                            config = (
-                                ADS1115_OS_SINGLE |  # Start single-shot conversion
-                                mux |                # Select channel
-                                pga_value |          # Set gain
-                                ADS1115_MODE_SINGLE | # Single-shot mode
-                                sps_value |          # Set sample rate
-                                0x0003               # Disable comparator
-                            )
-                            
-                            config_bytes = [(config >> 8) & 0xFF, config & 0xFF]
-                            
-                            # Single-shot read approach:
-                            # 1. Write config to start conversion with this channel's MUX
-                            i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
-                            
-                            # 2. Wait for conversion to complete (based on SPS)
-                            time.sleep(wait_time)
-                            
-                            # 3. Read conversion result
-                            data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
-                            
-                            if len(data) >= 2:
-                                # Convert to signed 16-bit value
-                                raw_value = (data[0] << 8) | data[1]
-                                if raw_value > 32767:
-                                    raw_value = raw_value - 65536
-                                voltage = (raw_value / 32767.0) * pga
-                                voltages[idx] = voltage
-                                print(f"[ADS1115] Channel {ch}: raw={raw_value}, voltage={voltage:.6f}V")
-                            else:
-                                print(f"[ADS1115] Channel {ch}: insufficient data read")
-                                voltages[idx] = None
-                                
-                        except Exception as e:
-                            print(f"[ADS1115] Error reading channel {ch}: {e}")
+                        # Use the same 6-step pattern as ads_read_raw_single_ended
+                        raw_value = _read_raw_with_smbus(i2c, addr, ch, pga, sps)
+                        
+                        if raw_value is not None:
+                            # Convert raw value to voltage
+                            voltage = (raw_value / 32767.0) * pga
+                            voltages[idx] = voltage
+                            print(f"[ADS1115] Channel {ch}: raw={raw_value}, voltage={voltage:.6f}V")
+                        else:
+                            print(f"[ADS1115] Channel {ch}: read failed (None)")
                             voltages[idx] = None
                     
                     # Verify channels are distinct
