@@ -339,6 +339,9 @@ def _create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[st
             r_top = float(settings.get("divider_r_top", 47000.0))
             r_bottom = float(settings.get("divider_r_bottom", 10000.0))
             
+            # DIAGNOSTIC: Log channel configuration
+            print(f"[Water Level Live] CONFIG: adc_channel_signal=A{channel_signal}, adc_channel_supply=A{channel_supply}, use_normalization={use_normalization}")
+            
             # Defensive check
             if channel_signal == channel_supply:
                 result = {
@@ -373,9 +376,10 @@ def _create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[st
                 if addr:
                     detected_address = addr
                 
-                # Debug: log first sample to verify channels
-                if i == 0 and signal_v is not None and supply_div_v is not None:
-                    print(f"[Water Level Live] Raw read: A{channel_signal}={signal_v:.6f}V, A{channel_supply}={supply_div_v:.6f}V")
+                # DIAGNOSTIC: Log raw tuple from ads_read_voltage_pair
+                if i == 0:
+                    print(f"[Water Level Live] RAW TUPLE from ads_read_voltage_pair(ch0={channel_signal}, ch1={channel_supply}): "
+                          f"v0={signal_v}, v1={supply_div_v}, addr={addr}")
                 
                 if signal_v is not None:
                     signal_samples.append(signal_v)
@@ -428,6 +432,11 @@ def _create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[st
                         "status": status,
                         "message": message
                     }
+                    # DIAGNOSTIC: Log final JSON response values
+                    print(f"[Water Level Live] RESPONSE: signal_voltage={result['signal_voltage']:.6f}V, "
+                          f"supply_div_voltage={result['supply_div_voltage']:.6f}V, "
+                          f"ratio={result['ratio']:.4f}, level_percent={result['level_percent']}%, "
+                          f"ok={result['ok']}, status={result['status']}")
                 else:
                     # Fallback: signal only
                     conn = sqlite3.connect(db_path)
@@ -437,9 +446,14 @@ def _create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[st
                     empty_v = float(settings.get("empty_voltage", 2.230))
                     level_percent, status, message = calibration.voltage_to_percent(avg_signal, full_v, empty_v)
                     
+                    # CRITICAL: Verify no silent substitution
+                    # avg_signal is RAW ADC voltage from channel, NOT calibration value
+                    assert avg_signal != full_v and avg_signal != empty_v, \
+                        f"BUG: signal_voltage={avg_signal} matches calibration value (full={full_v}, empty={empty_v})"
+                    
                     result = {
                         "ok": True,
-                        "signal_voltage": avg_signal,
+                        "signal_voltage": avg_signal,  # MUST be raw ADC reading
                         "supply_div_voltage": None,
                         "supply_voltage_est": None,
                         "ratio": None,
@@ -448,6 +462,9 @@ def _create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[st
                         "status": status,
                         "message": message
                     }
+                    # DIAGNOSTIC: Log final JSON response values
+                    print(f"[Water Level Live] RESPONSE (no normalization): signal_voltage={result['signal_voltage']:.6f}V, "
+                          f"level_percent={result['level_percent']}%, ok={result['ok']}, status={result['status']}")
                 
                 # Cache result
                 _live_read_cache = result
