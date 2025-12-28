@@ -45,8 +45,15 @@ def read_ads_pair(
         print("[Water Level Reader] Error: ads1115 module not available (import failed at module load)")
         return (None, None, None)
     
+    # Guard: Channels must be different
+    if signal_ch == supply_ch:
+        print(f"[Water Level Reader] ERROR: signal_ch and supply_ch are both {signal_ch}. They must be different!")
+        return (None, None, None)
+    
     if addr_candidates is None:
         addr_candidates = [0x48, 0x49, 0x4A, 0x4B]
+    
+    print(f"[Water Level Reader] Reading channels: signal_ch={signal_ch} (A{signal_ch}), supply_ch={supply_ch} (A{supply_ch})")
     
     for addr in addr_candidates:
         try:
@@ -56,6 +63,7 @@ def read_ads_pair(
             
             # Read voltage pair from channels
             # ads_read_voltage_pair should handle retries internally
+            print(f"[Water Level Reader] Calling ads_read_voltage_pair(channel0={signal_ch}, channel1={supply_ch}, addr=0x{addr:02X})")
             v0, v1 = ads1115.ads_read_voltage_pair(
                 channel0=signal_ch,
                 channel1=supply_ch,
@@ -64,6 +72,14 @@ def read_ads_pair(
                 pga=pga,
                 sps=sps
             )
+            
+            print(f"[Water Level Reader] Result: v0={v0}, v1={v1} (from channels {signal_ch}, {supply_ch})")
+            
+            # Verify channels are distinct
+            if v0 is not None and v1 is not None:
+                diff = abs(v0 - v1)
+                if diff < 0.001:
+                    print(f"[Water Level Reader] WARNING: Channels appear mirrored! v0={v0:.6f}V, v1={v1:.6f}V, diff={diff:.6f}V")
             
             if v0 is not None or v1 is not None:
                 return (v0, v1, f"0x{addr:02X}")
