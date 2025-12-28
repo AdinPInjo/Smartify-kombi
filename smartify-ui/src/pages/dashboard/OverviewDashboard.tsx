@@ -488,14 +488,22 @@ type WaterLevelPayload = {
 
 function WaterLevelCard() {
   const { data: waterData, isLoading } = useQuery<WaterLevelPayload>({
-    queryKey: ["water-level"],
+    queryKey: ["water-level-live"],
     queryFn: async () => {
-      const r = await apiFetch("/api/water/level/latest", { cache: "no-store" });
+      const r = await apiFetch("/api/water/level/live", { cache: "no-store" });
       if (!r.ok) throw new Error(`Water level API returned ${r.status}`);
       const data = await r.json();
-      return data;
+      // Transform live response to match expected payload format
+      return {
+        ok: data.ok,
+        level_percent: data.level_percent ?? null,
+        status: data.status || (data.ok ? "ok" : "error"),
+        message: data.message || (data.ok ? "Reading stable" : "Error"),
+        age_seconds: 0, // Live data is always current
+      };
     },
-    refetchInterval: 10000, // Poll every 10 seconds
+    refetchInterval: 4000, // Poll every 4 seconds for fast updates
+    placeholderData: (previousData) => previousData, // Keep previous data during refetch
     retry: 2,
   });
 
