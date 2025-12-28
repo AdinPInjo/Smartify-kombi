@@ -297,8 +297,22 @@ function WaterLevelSettingsCard() {
                   : "—"}
               </span>
             </div>
+            <div>
+              <span className="text-zinc-400">Status:</span>{" "}
+              <span
+                className={`font-semibold ${
+                  snapshotData?.status === "error" || snapshotData?.status === "stale"
+                    ? "text-amber-400"
+                    : snapshotData?.status === "ok"
+                    ? "text-zinc-200"
+                    : "text-zinc-400"
+                }`}
+              >
+                {snapshotData?.message ?? "—"}
+              </span>
+            </div>
             {snapshotData?.age_seconds != null && (
-              <div className="col-span-2 text-xs text-zinc-500">
+              <div className="text-xs text-zinc-500">
                 Snapshot age: {snapshotData.age_seconds}s
               </div>
             )}

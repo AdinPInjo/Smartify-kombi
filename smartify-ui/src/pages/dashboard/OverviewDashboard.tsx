@@ -495,16 +495,6 @@ function WaterLevelCard() {
   });
 
   const levelPercent = waterData?.level_percent ?? null;
-  const status = waterData?.status ?? "unknown";
-  const message = waterData?.message ?? "—";
-
-  // Determine status text color based on status
-  const statusColorClass =
-    status === "error" || status === "stale"
-      ? "text-amber-400"
-      : status === "ok"
-      ? "text-zinc-200"
-      : "text-zinc-400";
 
   return (
     <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-blue-950/30 to-blue-900/20 backdrop-blur-sm transition-all duration-300 hover:border-blue-700/50 hover:shadow-xl hover:shadow-blue-900/20 flex-1">
@@ -529,10 +519,6 @@ function WaterLevelCard() {
           <span className="font-semibold text-zinc-200">
             {waterData?.avg_voltage != null ? `${waterData.avg_voltage.toFixed(3)} V` : "—"}
           </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-zinc-400">Status</span>
-          <span className={`font-semibold ${statusColorClass}`}>{message}</span>
         </div>
       </CardContent>
     </Card>
