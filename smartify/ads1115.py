@@ -46,12 +46,13 @@ ADS1115_DR_3300SPS = 0x00C0   # 3300 SPS
 # OS (bit 15): Operational status / single-shot start
 ADS1115_OS_SINGLE = 0x8000    # Start single-shot conversion
 
-# Channel to MUX mapping
+# Channel to MUX mapping (single-ended mode: AINx vs GND)
+# MUX bits 14-12: 100=AIN0, 101=AIN1, 110=AIN2, 111=AIN3
 CHANNEL_MUX = {
-    0: ADS1115_MUX_AIN0_GND,
-    1: ADS1115_MUX_AIN1_GND,
-    2: ADS1115_MUX_AIN2_GND,
-    3: ADS1115_MUX_AIN3_GND,
+    0: ADS1115_MUX_AIN0_GND,  # 0x4000 = 0100 0000 0000 0000
+    1: ADS1115_MUX_AIN1_GND,  # 0x5000 = 0101 0000 0000 0000
+    2: ADS1115_MUX_AIN2_GND,  # 0x6000 = 0110 0000 0000 0000
+    3: ADS1115_MUX_AIN3_GND,  # 0x7000 = 0111 0000 0000 0000
 }
 
 # PGA to voltage range mapping (full-scale range)
@@ -138,7 +139,15 @@ def ads_read_raw_single_ended(
     retries: int = 3
 ) -> Optional[int]:
     """
-    Read raw ADC value from a single-ended channel.
+    Read raw ADC value from a single-ended channel with robust channel switching.
+    
+    Uses a throwaway read pattern to ensure proper MUX switching:
+    1. Write config for target channel
+    2. Wait 3-5ms for MUX to settle
+    3. Perform one throwaway conversion read (discard)
+    4. Trigger fresh conversion
+    5. Wait for conversion time
+    6. Read final conversion value
     
     Args:
         channel: Channel number (0-3)
@@ -169,7 +178,7 @@ def ads_read_raw_single_ended(
     # Config: OS (start) | MUX | PGA | MODE (single-shot) | DR | COMP_QUE (disable)
     config = (
         ADS1115_OS_SINGLE |  # Start single-shot conversion
-        mux |                # Channel selection
+        mux |                # Channel selection (verified: 0x4000, 0x5000, 0x6000, 0x7000)
         pga_value |          # PGA setting
         ADS1115_MODE_SINGLE |  # Single-shot mode
         sps_value |          # Data rate
@@ -179,26 +188,28 @@ def ads_read_raw_single_ended(
     for attempt in range(retries):
         try:
             with SMBus(bus) as i2c:
-                # Write config register to start conversion for target channel
+                # Step 1: Write config register to set channel and start conversion
                 config_bytes = [(config >> 8) & 0xFF, config & 0xFF]  # Big-endian
                 i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
                 
-                # Wait 2-5ms for MUX to switch
-                time.sleep(0.003)  # 3ms
+                # Step 2: Wait 3-5ms for MUX to switch
+                time.sleep(0.004)  # 4ms settle time
                 
-                # Read conversion once and discard (throwaway read to clear stale data)
+                # Step 3: Read conversion once and discard (throwaway to clear stale data)
                 try:
-                    throwaway_data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
-                    # Trigger a new conversion by writing config again
-                    i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+                    _ = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
                 except:
                     pass  # Ignore errors on throwaway read
                 
-                # Wait 20-30ms for conversion to complete
+                # Step 4: Trigger a fresh conversion by writing config again
+                i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+                
+                # Step 5: Wait for conversion to complete (worst case: 1/sps seconds + margin)
+                # For 128 SPS: ~8ms per sample, wait 25ms to be safe
                 conversion_time = 1.0 / sps
                 time.sleep(max(0.025, conversion_time * 2))  # At least 25ms, or 2x conversion time
                 
-                # Read conversion register (16-bit, big-endian) - this is the value we use
+                # Step 6: Read conversion register (16-bit, big-endian) - this is the value we use
                 data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
                 if len(data) >= 2:
                     # Convert from big-endian to signed 16-bit integer
