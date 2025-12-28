@@ -286,9 +286,8 @@ def ads_read_voltage_pair(
     """
     Read voltages from two single-ended channels in one SMBus session.
     
-    This function opens a single SMBus connection and reads both channels sequentially
-    using a robust pattern. Whole pair read is retried up to 3 times on OSError/IOError
-    with backoff (50/100/150ms).
+    Uses simple single-shot read approach for each channel to avoid stale conversion
+    register issues after MUX switching.
     
     Args:
         channel0: First channel number (0-3)
@@ -313,6 +312,15 @@ def ads_read_voltage_pair(
     if SMBus is None:
         return (None, None)
     
+    # Calculate conversion time based on SPS
+    # For 128 SPS: 1/128 = 7.8ms per conversion, use 10ms to be safe
+    conversion_time = 1.0 / sps
+    wait_time = max(0.010, conversion_time * 1.5)  # At least 10ms, or 1.5x conversion time
+    
+    # Get PGA and SPS register values once
+    pga_value = _get_pga_value(pga)
+    sps_value = _get_sps_value(sps)
+    
     # Retry entire pair read up to 3 times on I/O errors
     for attempt in range(3):
         try:
@@ -323,54 +331,50 @@ def ads_read_voltage_pair(
                     
                     for idx, ch in enumerate(channels):
                         try:
-                            # Build config for this channel
+                            # Build config for this channel with correct MUX setting
                             mux = CHANNEL_MUX[ch]
-                            pga_value = _get_pga_value(pga)
-                            sps_value = _get_sps_value(sps)
-                            
                             config = (
-                                ADS1115_OS_SINGLE |
-                                mux |
-                                pga_value |
-                                ADS1115_MODE_SINGLE |
-                                sps_value |
-                                0x0003
+                                ADS1115_OS_SINGLE |  # Start single-shot conversion
+                                mux |                # Select channel
+                                pga_value |          # Set gain
+                                ADS1115_MODE_SINGLE | # Single-shot mode
+                                sps_value |          # Set sample rate
+                                0x0003               # Disable comparator
                             )
                             
-                            # Robust channel read pattern
                             config_bytes = [(config >> 8) & 0xFF, config & 0xFF]
                             
-                            # Step 1: Write config
+                            # Single-shot read approach:
+                            # 1. Write config to start conversion with this channel's MUX
                             i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
                             
-                            # Step 2: Wait for MUX to settle
-                            time.sleep(0.004)  # 4ms
+                            # 2. Wait for conversion to complete (based on SPS)
+                            time.sleep(wait_time)
                             
-                            # Step 3: Throwaway read
-                            try:
-                                _ = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
-                            except:
-                                pass
-                            
-                            # Step 4: Write config again to trigger fresh conversion
-                            i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
-                            
-                            # Step 5: Wait for conversion: max(0.03, 2*(1/sps))
-                            conversion_time = 1.0 / sps
-                            sleep_time = max(0.03, 2 * conversion_time)
-                            time.sleep(sleep_time)
-                            
-                            # Step 6: Read final conversion value
+                            # 3. Read conversion result
                             data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
+                            
                             if len(data) >= 2:
+                                # Convert to signed 16-bit value
                                 raw_value = (data[0] << 8) | data[1]
                                 if raw_value > 32767:
                                     raw_value = raw_value - 65536
                                 voltage = (raw_value / 32767.0) * pga
                                 voltages[idx] = voltage
+                                print(f"[ADS1115] Channel {ch}: raw={raw_value}, voltage={voltage:.6f}V")
+                            else:
+                                print(f"[ADS1115] Channel {ch}: insufficient data read")
+                                voltages[idx] = None
+                                
                         except Exception as e:
-                            print(f"[ADS1115] Error reading channel {ch} in pair: {e}")
+                            print(f"[ADS1115] Error reading channel {ch}: {e}")
                             voltages[idx] = None
+                    
+                    # Verify channels are distinct
+                    if voltages[0] is not None and voltages[1] is not None:
+                        diff = abs(voltages[0] - voltages[1])
+                        if diff < 0.001:
+                            print(f"[ADS1115] WARNING: Channels {channel0} and {channel1} returned same value: {voltages[0]:.6f}V")
                     
                     # Return both voltages (may be None if read failed)
                     return (voltages[0], voltages[1])
@@ -384,6 +388,8 @@ def ads_read_voltage_pair(
             return (None, None)
         except Exception as e:
             print(f"[ADS1115] Unexpected error reading channel pair ({channel0}, {channel1}): {e}")
+            import traceback
+            traceback.print_exc()
             return (None, None)
     
     return (None, None)
