@@ -33,11 +33,11 @@ def db_init_water_level(conn: sqlite3.Connection) -> None:
     """
     cur = conn.cursor()
     
-    # Water level snapshot table
+    # Water level snapshot table (single-row upsert pattern)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS water_level_snapshot (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER PRIMARY KEY CHECK(id=1),
             avg_voltage REAL NOT NULL,
             level_percent INTEGER NOT NULL,
             status TEXT NOT NULL,
@@ -51,6 +51,13 @@ def db_init_water_level(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    
+    # Enable WAL mode for better concurrency (run once at init)
+    try:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+    except sqlite3.OperationalError as e:
+        print(f"[DB] Warning: Could not set WAL mode or busy_timeout: {e}")
     
     # Water level settings table (calibration)
     cur.execute(
@@ -255,39 +262,48 @@ def db_update_water_level_settings(
 
 
 def db_get_water_level_snapshot(conn: sqlite3.Connection) -> Optional[WaterLevelSnapshot]:
-    """Get the latest water level snapshot from database."""
+    """Get the latest water level snapshot from database (single row with id=1)."""
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute(
-        "SELECT * FROM water_level_snapshot ORDER BY updated_at DESC LIMIT 1"
+        "SELECT * FROM water_level_snapshot WHERE id = 1"
     )
     row = cur.fetchone()
     return dict(row) if row else None  # type: ignore
 
 
-def db_insert_water_snapshot(
+def db_upsert_water_snapshot(
     conn: sqlite3.Connection,
     snapshot: Dict[str, Any]
 ) -> None:
     """
-    Insert or update water level snapshot in database.
+    Insert or update water level snapshot in database using single-row upsert.
     
-    Uses upsert pattern: delete old rows, then insert new one.
+    This eliminates DELETE+INSERT which causes database locks.
+    Uses single-row pattern with id=1 constraint.
     """
     cur = conn.cursor()
     
-    # Delete old snapshots (keep only latest)
-    cur.execute("DELETE FROM water_level_snapshot")
-    
-    # Insert new snapshot
     now = int(time.time())
     created_at = snapshot.get("created_at", now)
     
+    # Single upsert operation (no delete needed)
     cur.execute(
         """INSERT INTO water_level_snapshot 
-           (avg_voltage, level_percent, status, message, updated_at, created_at,
+           (id, avg_voltage, level_percent, status, message, updated_at, created_at,
             avg_signal_voltage, avg_supply_div_voltage, supply_voltage_est, ratio)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+               avg_voltage = excluded.avg_voltage,
+               level_percent = excluded.level_percent,
+               status = excluded.status,
+               message = excluded.message,
+               updated_at = excluded.updated_at,
+               avg_signal_voltage = excluded.avg_signal_voltage,
+               avg_supply_div_voltage = excluded.avg_supply_div_voltage,
+               supply_voltage_est = excluded.supply_voltage_est,
+               ratio = excluded.ratio
+        """,
         (
             snapshot.get("avg_voltage", 0.0),
             snapshot.get("level_percent", 0),
@@ -302,4 +318,8 @@ def db_insert_water_snapshot(
         )
     )
     conn.commit()
+
+
+# Backward compatibility alias
+db_insert_water_snapshot = db_upsert_water_snapshot
 

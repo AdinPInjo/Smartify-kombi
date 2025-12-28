@@ -10,6 +10,12 @@ from . import reader
 from . import calibration
 from .models import WaterLevelSnapshot
 
+# Check if ads1115 is available (for better error messages)
+try:
+    from smartify import ads1115
+except ImportError:
+    ads1115 = None
+
 
 def start_water_level_thread(db_path: Path, app_state: Optional[Dict[str, Any]] = None) -> None:
     """
@@ -40,10 +46,13 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
     # Initial delay to allow other systems to start
     time.sleep(5)
     
+    # In-memory last good snapshot for fallback
+    last_good_snapshot: Optional[Dict[str, Any]] = None
+    
     while True:
         try:
             now = int(time.time())
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(str(db_path), timeout=5.0)
             
             # Load settings
             settings = water_db.db_get_water_level_settings(conn)
@@ -63,7 +72,20 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                     "message": f"Invalid configuration: signal and supply channels are both A{channel_signal}",
                     "updated_at": now
                 }
-                water_db.db_insert_water_snapshot(conn, snapshot)
+                
+                # Write to DB with retry
+                for retry in range(3):
+                    try:
+                        conn2 = sqlite3.connect(str(db_path), timeout=5.0)
+                        water_db.db_upsert_water_snapshot(conn2, snapshot)
+                        conn2.close()
+                        break
+                    except sqlite3.OperationalError as e:
+                        if "database is locked" in str(e) and retry < 2:
+                            time.sleep(0.5 * (retry + 1))
+                        else:
+                            print(f"[Water Level] DB write failed: {e}")
+                
                 conn.close()
                 
                 if app_state:
@@ -152,9 +174,22 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                     "supply_voltage_est": supply_voltage_est,
                     "ratio": ratio
                 }
-                conn = sqlite3.connect(db_path)
-                water_db.db_insert_water_snapshot(conn, snapshot)
-                conn.close()
+                
+                # Write to DB with retry on lock
+                for retry in range(3):
+                    try:
+                        conn = sqlite3.connect(str(db_path), timeout=5.0)
+                        water_db.db_upsert_water_snapshot(conn, snapshot)
+                        conn.close()
+                        last_good_snapshot = snapshot.copy()
+                        break
+                    except sqlite3.OperationalError as e:
+                        if "database is locked" in str(e) and retry < 2:
+                            print(f"[Water Level] DB locked, retry {retry+1}/3...")
+                            time.sleep(0.5 * (retry + 1))
+                        else:
+                            print(f"[Water Level] DB write failed after retries: {e}")
+                            # Continue with in-memory snapshot only
                 
                 # Update in-memory cache if app_state provided
                 if app_state:
@@ -193,9 +228,22 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                     "message": message,
                     "updated_at": now
                 }
-                conn = sqlite3.connect(db_path)
-                water_db.db_insert_water_snapshot(conn, snapshot)
-                conn.close()
+                
+                # Write to DB with retry on lock
+                for retry in range(3):
+                    try:
+                        conn = sqlite3.connect(str(db_path), timeout=5.0)
+                        water_db.db_upsert_water_snapshot(conn, snapshot)
+                        conn.close()
+                        last_good_snapshot = snapshot.copy()
+                        break
+                    except sqlite3.OperationalError as e:
+                        if "database is locked" in str(e) and retry < 2:
+                            print(f"[Water Level] DB locked, retry {retry+1}/3...")
+                            time.sleep(0.5 * (retry + 1))
+                        else:
+                            print(f"[Water Level] DB write failed after retries: {e}")
+                            # Continue with in-memory snapshot only
                 
                 # Update in-memory cache if app_state provided
                 if app_state:
@@ -211,10 +259,15 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                 print(f"[Water Level] Updated (voltage-only): {level_percent}% ({avg_voltage:.3f}V) - {message}")
             else:
                 # No successful samples
-                # Keep previous snapshot but mark as error
-                conn = sqlite3.connect(db_path)
-                prev_snapshot = water_db.db_get_water_level_snapshot(conn)
-                conn.close()
+                # Use last good snapshot from memory or DB
+                prev_snapshot = last_good_snapshot
+                if not prev_snapshot:
+                    try:
+                        conn = sqlite3.connect(str(db_path), timeout=5.0)
+                        prev_snapshot = water_db.db_get_water_level_snapshot(conn)
+                        conn.close()
+                    except Exception as e:
+                        print(f"[Water Level] Failed to read prev snapshot: {e}")
                 
                 if prev_snapshot:
                     # Keep previous percent but mark as error
@@ -222,16 +275,27 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                         "avg_voltage": prev_snapshot.get("avg_voltage", 0.0),
                         "level_percent": prev_snapshot.get("level_percent", 0),
                         "status": "error",
-                        "message": "I2C read error (ADS1115)",
+                        "message": "I2C read error (ADS1115)" if ads1115 is not None else "ADS1115 module not available",
                         "updated_at": now,
                         "avg_signal_voltage": prev_snapshot.get("avg_signal_voltage"),
                         "avg_supply_div_voltage": prev_snapshot.get("avg_supply_div_voltage"),
                         "supply_voltage_est": prev_snapshot.get("supply_voltage_est"),
                         "ratio": prev_snapshot.get("ratio")
                     }
-                    conn = sqlite3.connect(db_path)
-                    water_db.db_insert_water_snapshot(conn, snapshot)
-                    conn.close()
+                    
+                    # Write to DB with retry
+                    for retry in range(3):
+                        try:
+                            conn = sqlite3.connect(str(db_path), timeout=5.0)
+                            water_db.db_upsert_water_snapshot(conn, snapshot)
+                            conn.close()
+                            break
+                        except sqlite3.OperationalError as e:
+                            if "database is locked" in str(e) and retry < 2:
+                                print(f"[Water Level] DB locked, retry {retry+1}/3...")
+                                time.sleep(0.5 * (retry + 1))
+                            else:
+                                print(f"[Water Level] DB write failed: {e}")
                     
                     if app_state:
                         app_state["water_level_latest"] = {
@@ -248,12 +312,23 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                         "avg_voltage": 0.0,
                         "level_percent": 0,
                         "status": "error",
-                        "message": "I2C read error (ADS1115)",
+                        "message": "I2C read error (ADS1115)" if ads1115 is not None else "ADS1115 module not available",
                         "updated_at": now
                     }
-                    conn = sqlite3.connect(db_path)
-                    water_db.db_insert_water_snapshot(conn, snapshot)
-                    conn.close()
+                    
+                    # Write to DB with retry
+                    for retry in range(3):
+                        try:
+                            conn = sqlite3.connect(str(db_path), timeout=5.0)
+                            water_db.db_upsert_water_snapshot(conn, snapshot)
+                            conn.close()
+                            break
+                        except sqlite3.OperationalError as e:
+                            if "database is locked" in str(e) and retry < 2:
+                                print(f"[Water Level] DB locked, retry {retry+1}/3...")
+                                time.sleep(0.5 * (retry + 1))
+                            else:
+                                print(f"[Water Level] DB write failed: {e}")
                     
                     if app_state:
                         app_state["water_level_latest"] = {
