@@ -140,17 +140,28 @@ def db_init_water_level(conn: sqlite3.Connection) -> None:
         print(f"[DB] Initialized water_level_settings with defaults: full=0.497V, empty=2.230V, normalization enabled")
 
 
+_pragma_logged = False  # Log PRAGMA verification only once
+
 def _set_connection_pragmas(conn: sqlite3.Connection) -> None:
-    """Set recommended PRAGMA settings for a connection."""
+    """Set recommended PRAGMA settings for a connection and verify."""
+    global _pragma_logged
     cur = conn.cursor()
+    
+    # Set PRAGMAs
     cur.execute("PRAGMA journal_mode=WAL")
     cur.execute("PRAGMA busy_timeout=5000")
     cur.execute("PRAGMA synchronous=NORMAL")
-    # Verify settings were applied
-    cur.execute("PRAGMA busy_timeout")
-    timeout = cur.fetchone()[0]
-    if timeout != 5000:
-        print(f"[DB] Warning: busy_timeout is {timeout}, expected 5000")
+    
+    # Verify settings were applied (log once at startup)
+    if not _pragma_logged:
+        cur.execute("PRAGMA journal_mode")
+        journal_mode = cur.fetchone()[0]
+        cur.execute("PRAGMA busy_timeout")
+        busy_timeout = cur.fetchone()[0]
+        cur.execute("PRAGMA synchronous")
+        synchronous = cur.fetchone()[0]
+        print(f"[DB] PRAGMA verified: journal_mode={journal_mode}, busy_timeout={busy_timeout}, synchronous={synchronous}")
+        _pragma_logged = True
 
 
 def db_get_water_level_settings(conn: sqlite3.Connection) -> WaterLevelSettings:
