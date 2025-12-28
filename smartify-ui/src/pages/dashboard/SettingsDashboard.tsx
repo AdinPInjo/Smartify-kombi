@@ -144,14 +144,27 @@ type WaterLevelSettings = {
   ok: boolean;
   full_voltage: number;
   empty_voltage: number;
+  use_supply_normalization?: boolean;
+  adc_channel_signal?: number;
+  adc_channel_supply?: number;
+  divider_r_top?: number;
+  divider_r_bottom?: number;
+  full_ratio?: number | null;
+  empty_ratio?: number | null;
+  full_supply_voltage?: number | null;
+  empty_supply_voltage?: number | null;
   updated_at: number;
 };
 
 type WaterLevelLive = {
   ok: boolean;
-  voltage: number | null;
-  raw: number | null;
+  signal_voltage: number | null;
+  supply_div_voltage: number | null;
+  supply_voltage_est: number | null;
+  ratio: number | null;
+  level_percent: number | null;
   address: string | null;
+  status: string;
   message: string;
 };
 
@@ -159,18 +172,28 @@ type WaterLevelLatest = {
   ok: boolean;
   level_percent: number | null;
   avg_voltage: number | null;
+  signal_voltage?: number | null;
+  supply_div_voltage?: number | null;
+  supply_voltage_est?: number | null;
+  ratio?: number | null;
   status: string;
   age_seconds: number;
   message: string;
   calibration_full_voltage?: number | null;
   calibration_empty_voltage?: number | null;
+  use_supply_normalization?: boolean;
 };
 
 function WaterLevelSettingsCard() {
   const queryClient = useQueryClient();
   const [fullVoltage, setFullVoltage] = useState<string>("");
   const [emptyVoltage, setEmptyVoltage] = useState<string>("");
-  const [liveVoltage, setLiveVoltage] = useState<number | null>(null);
+  const [fullRatio, setFullRatio] = useState<string>("");
+  const [emptyRatio, setEmptyRatio] = useState<string>("");
+  const [useNormalization, setUseNormalization] = useState<boolean>(true);
+  const [dividerRTop, setDividerRTop] = useState<string>("47000");
+  const [dividerRBottom, setDividerRBottom] = useState<string>("10000");
+  const [liveData, setLiveData] = useState<WaterLevelLive | null>(null);
   const [loadingLive, setLoadingLive] = useState(false);
 
   // Fetch current settings
@@ -199,12 +222,79 @@ function WaterLevelSettingsCard() {
     if (settings && settings.ok) {
       setFullVoltage(settings.full_voltage?.toFixed(3) || "");
       setEmptyVoltage(settings.empty_voltage?.toFixed(3) || "");
+      setFullRatio(settings.full_ratio?.toFixed(6) || "");
+      setEmptyRatio(settings.empty_ratio?.toFixed(6) || "");
+      setUseNormalization(settings.use_supply_normalization ?? true);
+      setDividerRTop(settings.divider_r_top?.toString() || "47000");
+      setDividerRBottom(settings.divider_r_bottom?.toString() || "10000");
     }
   }, [settings]);
 
+  // Fetch live data
+  const fetchLiveData = async () => {
+    setLoadingLive(true);
+    try {
+      const r = await apiFetch("/api/water/level/live");
+      if (!r.ok) throw new Error("Failed to read live data");
+      const data: WaterLevelLive = await r.json();
+      if (data.ok) {
+        setLiveData(data);
+        if (data.signal_voltage !== null) {
+          toast.success(`Live read: Signal=${data.signal_voltage.toFixed(3)}V, Supply=${data.supply_voltage_est?.toFixed(2) ?? "—"}V`);
+        } else {
+          toast.error(data.message || "Failed to read live data");
+        }
+      } else {
+        toast.error(data.message || "Failed to read live data");
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Failed to read live data");
+    } finally {
+      setLoadingLive(false);
+    }
+  };
+
+  // Helper: Set FULL calibration from current live reading
+  const setFullFromLive = () => {
+    if (!liveData || liveData.ratio === null) {
+      toast.error("No live data available. Please refresh first.");
+      return;
+    }
+    if (useNormalization && liveData.ratio !== null) {
+      setFullRatio(liveData.ratio.toFixed(6));
+      toast.success(`Set FULL ratio to ${liveData.ratio.toFixed(6)}`);
+    } else if (liveData.signal_voltage !== null) {
+      setFullVoltage(liveData.signal_voltage.toFixed(3));
+      toast.success(`Set FULL voltage to ${liveData.signal_voltage.toFixed(3)}V`);
+    }
+  };
+
+  // Helper: Set EMPTY calibration from current live reading
+  const setEmptyFromLive = () => {
+    if (!liveData || liveData.ratio === null) {
+      toast.error("No live data available. Please refresh first.");
+      return;
+    }
+    if (useNormalization && liveData.ratio !== null) {
+      setEmptyRatio(liveData.ratio.toFixed(6));
+      toast.success(`Set EMPTY ratio to ${liveData.ratio.toFixed(6)}`);
+    } else if (liveData.signal_voltage !== null) {
+      setEmptyVoltage(liveData.signal_voltage.toFixed(3));
+      toast.success(`Set EMPTY voltage to ${liveData.signal_voltage.toFixed(3)}V`);
+    }
+  };
+
   // Save settings mutation
   const saveMutation = useMutation({
-    mutationFn: async (data: { full_voltage: number; empty_voltage: number }) => {
+    mutationFn: async (data: {
+      full_voltage?: number;
+      empty_voltage?: number;
+      full_ratio?: number;
+      empty_ratio?: number;
+      use_supply_normalization?: boolean;
+      divider_r_top?: number;
+      divider_r_bottom?: number;
+    }) => {
       const r = await apiFetch("/api/water/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -226,47 +316,71 @@ function WaterLevelSettingsCard() {
     },
   });
 
-  // Fetch live voltage
-  const fetchLiveVoltage = async () => {
-    setLoadingLive(true);
-    try {
-      const r = await apiFetch("/api/water/level/live");
-      if (!r.ok) throw new Error("Failed to read live voltage");
-      const data: WaterLevelLive = await r.json();
-      if (data.ok && data.voltage !== null) {
-        setLiveVoltage(data.voltage);
-        toast.success(`Live voltage: ${data.voltage.toFixed(3)} V`);
-      } else {
-        toast.error(data.message || "Failed to read live voltage");
-      }
-    } catch (error: any) {
-      toast.error(error.message || "Failed to read live voltage");
-    } finally {
-      setLoadingLive(false);
-    }
-  };
-
   const handleSave = () => {
-    const full = parseFloat(fullVoltage);
-    const empty = parseFloat(emptyVoltage);
+    const updateData: any = {
+      use_supply_normalization: useNormalization,
+      divider_r_top: parseFloat(dividerRTop),
+      divider_r_bottom: parseFloat(dividerRBottom),
+    };
 
-    // Validate
-    if (isNaN(full) || isNaN(empty)) {
-      toast.error("Both voltages must be valid numbers");
+    // Validate divider values
+    if (isNaN(updateData.divider_r_top) || isNaN(updateData.divider_r_bottom)) {
+      toast.error("Divider resistor values must be valid numbers");
       return;
     }
 
-    if (full <= 0 || empty <= 0) {
-      toast.error("Voltages must be positive numbers");
+    if (updateData.divider_r_top <= 0 || updateData.divider_r_bottom <= 0) {
+      toast.error("Divider resistor values must be positive");
       return;
     }
 
-    if (Math.abs(full - empty) < 0.001) {
-      toast.error("Full and empty voltages must be different");
-      return;
+    if (useNormalization) {
+      // Ratio-based calibration
+      const full = parseFloat(fullRatio);
+      const empty = parseFloat(emptyRatio);
+
+      if (isNaN(full) || isNaN(empty)) {
+        toast.error("Both ratios must be valid numbers");
+        return;
+      }
+
+      if (full <= 0 || empty <= 0) {
+        toast.error("Ratios must be positive numbers");
+        return;
+      }
+
+      if (Math.abs(full - empty) < 0.0001) {
+        toast.error("Full and empty ratios must be different");
+        return;
+      }
+
+      updateData.full_ratio = full;
+      updateData.empty_ratio = empty;
+    } else {
+      // Voltage-based calibration (backward compatibility)
+      const full = parseFloat(fullVoltage);
+      const empty = parseFloat(emptyVoltage);
+
+      if (isNaN(full) || isNaN(empty)) {
+        toast.error("Both voltages must be valid numbers");
+        return;
+      }
+
+      if (full <= 0 || empty <= 0) {
+        toast.error("Voltages must be positive numbers");
+        return;
+      }
+
+      if (Math.abs(full - empty) < 0.001) {
+        toast.error("Full and empty voltages must be different");
+        return;
+      }
+
+      updateData.full_voltage = full;
+      updateData.empty_voltage = empty;
     }
 
-    saveMutation.mutate({ full_voltage: full, empty_voltage: empty });
+    saveMutation.mutate(updateData);
   };
 
   return (
@@ -318,45 +432,158 @@ function WaterLevelSettingsCard() {
             )}
           </div>
           <Button
-            onClick={fetchLiveVoltage}
+            onClick={fetchLiveData}
             disabled={loadingLive}
             variant="outline"
             size="sm"
             className="w-full"
           >
-            {loadingLive ? "Reading..." : "Refresh Live Voltage"}
+            {loadingLive ? "Reading..." : "Refresh Live Data"}
           </Button>
         </div>
 
         {/* Calibration Settings */}
         <div className="space-y-3">
-          <div className="text-sm font-medium text-zinc-300">Calibration Settings</div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2">
-              <Label htmlFor="full-voltage">Full Tank Voltage (V)</Label>
-              <Input
-                id="full-voltage"
-                type="number"
-                step="0.001"
-                value={fullVoltage}
-                onChange={(e) => setFullVoltage(e.target.value)}
-                placeholder="0.497"
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium text-zinc-300">Calibration Settings</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="use-normalization"
+                checked={useNormalization}
+                onChange={(e) => setUseNormalization(e.target.checked)}
                 disabled={loadingSettings || saveMutation.isPending}
+                className="rounded"
               />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="empty-voltage">Empty Tank Voltage (V)</Label>
-              <Input
-                id="empty-voltage"
-                type="number"
-                step="0.001"
-                value={emptyVoltage}
-                onChange={(e) => setEmptyVoltage(e.target.value)}
-                placeholder="2.230"
-                disabled={loadingSettings || saveMutation.isPending}
-              />
+              <Label htmlFor="use-normalization" className="text-xs cursor-pointer">
+                Use supply normalization
+              </Label>
             </div>
           </div>
+
+          {useNormalization ? (
+            <>
+              {/* Ratio-based calibration */}
+              <div className="space-y-2 p-3 bg-zinc-900/30 rounded-lg border border-zinc-800/30">
+                <div className="text-xs text-zinc-400 mb-2">Ratio Calibration (Signal/Supply)</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="full-ratio" className="text-xs">Full Ratio</Label>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={setFullFromLive}
+                        disabled={!liveData || loadingLive}
+                        className="h-6 text-xs px-2"
+                      >
+                        Set from live
+                      </Button>
+                    </div>
+                    <Input
+                      id="full-ratio"
+                      type="number"
+                      step="0.000001"
+                      value={fullRatio}
+                      onChange={(e) => setFullRatio(e.target.value)}
+                      placeholder="0.512"
+                      disabled={loadingSettings || saveMutation.isPending}
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="empty-ratio" className="text-xs">Empty Ratio</Label>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={setEmptyFromLive}
+                        disabled={!liveData || loadingLive}
+                        className="h-6 text-xs px-2"
+                      >
+                        Set from live
+                      </Button>
+                    </div>
+                    <Input
+                      id="empty-ratio"
+                      type="number"
+                      step="0.000001"
+                      value={emptyRatio}
+                      onChange={(e) => setEmptyRatio(e.target.value)}
+                      placeholder="0.693"
+                      disabled={loadingSettings || saveMutation.isPending}
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Voltage-based calibration (backward compatibility) */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="full-voltage">Full Tank Voltage (V)</Label>
+                  <Input
+                    id="full-voltage"
+                    type="number"
+                    step="0.001"
+                    value={fullVoltage}
+                    onChange={(e) => setFullVoltage(e.target.value)}
+                    placeholder="0.497"
+                    disabled={loadingSettings || saveMutation.isPending}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="empty-voltage">Empty Tank Voltage (V)</Label>
+                  <Input
+                    id="empty-voltage"
+                    type="number"
+                    step="0.001"
+                    value={emptyVoltage}
+                    onChange={(e) => setEmptyVoltage(e.target.value)}
+                    placeholder="2.230"
+                    disabled={loadingSettings || saveMutation.isPending}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Divider settings (only shown when normalization enabled) */}
+          {useNormalization && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="divider-r-top" className="text-xs">Divider R_top (Ω)</Label>
+                <Input
+                  id="divider-r-top"
+                  type="number"
+                  step="100"
+                  value={dividerRTop}
+                  onChange={(e) => setDividerRTop(e.target.value)}
+                  placeholder="47000"
+                  disabled={loadingSettings || saveMutation.isPending}
+                  className="h-8 text-sm"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="divider-r-bottom" className="text-xs">Divider R_bottom (Ω)</Label>
+                <Input
+                  id="divider-r-bottom"
+                  type="number"
+                  step="100"
+                  value={dividerRBottom}
+                  onChange={(e) => setDividerRBottom(e.target.value)}
+                  placeholder="10000"
+                  disabled={loadingSettings || saveMutation.isPending}
+                  className="h-8 text-sm"
+                />
+              </div>
+            </div>
+          )}
+
           <Button
             onClick={handleSave}
             disabled={loadingSettings || saveMutation.isPending}
