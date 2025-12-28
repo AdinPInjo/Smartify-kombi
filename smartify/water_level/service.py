@@ -109,13 +109,17 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
             supply_samples = []
             
             for i in range(3):
-                signal_v, supply_div_v, _ = reader.read_ads_pair(
+                signal_v, supply_div_v, detected_addr = reader.read_ads_pair(
                     signal_ch=channel_signal,
                     supply_ch=channel_supply,
                     bus=1,
                     pga=4.096,
                     sps=128
                 )
+                
+                # Debug log first sample to verify channels are not mirrored
+                if i == 0:
+                    print(f"[Water Level] ADS1115 raw sample: A{channel_signal}={signal_v:.6f}V, A{channel_supply}={supply_div_v:.6f}V, addr={detected_addr}")
                 
                 if signal_v is not None:
                     signal_samples.append(signal_v)
@@ -156,11 +160,11 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                     status = "error"
                     message = "Ratio calibration not configured"
                 
-                # Debug log once per minute
-                print(f"[Water Level] Channels: A{channel_signal}(signal)={avg_signal:.4f}V, "
-                      f"A{channel_supply}(supply_div)={avg_supply_div:.4f}V, "
-                      f"supply_est={supply_voltage_est:.2f}V, ratio={ratio:.6f}, "
-                      f"calib(full={full_ratio_calib}, empty={empty_ratio_calib}), computed={level_percent}%")
+                # Debug log once per minute - show actual values to verify no mirroring
+                print(f"[Water Level] Result: A{channel_signal}(signal)={avg_signal:.6f}V, "
+                      f"A{channel_supply}(supply_div)={avg_supply_div:.6f}V, "
+                      f"diff={abs(avg_signal-avg_supply_div):.6f}V, "
+                      f"supply_est={supply_voltage_est:.2f}V, ratio={ratio:.6f}, level={level_percent}%")
                 
                 # For backward compatibility, avg_voltage is signal voltage
                 avg_voltage = avg_signal

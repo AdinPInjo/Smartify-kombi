@@ -373,6 +373,10 @@ def _create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[st
                 if addr:
                     detected_address = addr
                 
+                # Debug: log first sample to verify channels
+                if i == 0 and signal_v is not None and supply_div_v is not None:
+                    print(f"[Water Level Live] Raw read: A{channel_signal}={signal_v:.6f}V, A{channel_supply}={supply_div_v:.6f}V")
+                
                 if signal_v is not None:
                     signal_samples.append(signal_v)
                 if supply_div_v is not None:
@@ -565,6 +569,80 @@ def _create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[st
                 "status": "error",
                 "age_seconds": 0,
                 "message": f"Internal error: {str(e)}"
+            })
+    
+    @router.get("/level/snapshot")
+    def api_water_level_snapshot(
+        request: Request,
+        x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    ):
+        """Get latest water level snapshot (alias for /latest). Always returns JSON."""
+        return api_water_level_latest(request, x_api_key)
+    
+    @router.get("/diagnostics")
+    def api_water_diagnostics(
+        request: Request,
+        x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    ):
+        """Get water level system diagnostics."""
+        err = require_auth_func(request, x_api_key)
+        if err:
+            return err
+        
+        try:
+            # Check SQLite PRAGMA settings
+            conn = sqlite3.connect(db_path, timeout=5.0)
+            water_db._set_connection_pragmas(conn)
+            cur = conn.cursor()
+            
+            cur.execute("PRAGMA journal_mode")
+            journal_mode = cur.fetchone()[0]
+            cur.execute("PRAGMA busy_timeout")
+            busy_timeout = cur.fetchone()[0]
+            cur.execute("PRAGMA synchronous")
+            synchronous = cur.fetchone()[0]
+            
+            # Get current settings
+            settings = water_db.db_get_water_level_settings(conn)
+            conn.close()
+            
+            # Try to detect ADS1115
+            from . import reader
+            detected_addr = None
+            for addr in [0x48, 0x49, 0x4A, 0x4B]:
+                try:
+                    from smartify import ads1115
+                    if ads1115.ads_detect(bus=1, addr=addr, retries=1):
+                        detected_addr = f"0x{addr:02X}"
+                        break
+                except:
+                    pass
+            
+            return JSONResponse({
+                "ok": True,
+                "sqlite": {
+                    "journal_mode": journal_mode,
+                    "busy_timeout": busy_timeout,
+                    "synchronous": synchronous
+                },
+                "ads1115": {
+                    "detected_address": detected_addr,
+                    "signal_channel": settings.get("adc_channel_signal", 0),
+                    "supply_channel": settings.get("adc_channel_supply", 1)
+                },
+                "settings": {
+                    "use_normalization": settings.get("use_supply_normalization", True),
+                    "full_voltage": settings.get("full_voltage"),
+                    "empty_voltage": settings.get("empty_voltage")
+                }
+            })
+        except Exception as e:
+            print(f"[API] Error in /api/water/diagnostics: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse({
+                "ok": False,
+                "error": str(e)
             })
     
     return router
