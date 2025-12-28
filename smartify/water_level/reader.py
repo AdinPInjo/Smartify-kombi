@@ -2,9 +2,13 @@
 
 from typing import Optional, Tuple
 
+# Use absolute import to ensure it works under systemd
 try:
-    import ads1115
-except ImportError:
+    from smartify import ads1115
+except ImportError as e:
+    print(f"[Water Level Reader] CRITICAL: Failed to import ads1115 module: {e}")
+    import traceback
+    traceback.print_exc()
     ads1115 = None
 
 
@@ -38,7 +42,7 @@ def read_ads_pair(
         - detected_address: Detected I2C address as string (e.g., "0x48"), or None
     """
     if ads1115 is None:
-        print("[Water Level Reader] Error: ads1115 module not available")
+        print("[Water Level Reader] Error: ads1115 module not available (import failed at module load)")
         return (None, None, None)
     
     if addr_candidates is None:
@@ -53,8 +57,8 @@ def read_ads_pair(
             # Read voltage pair from channels
             # ads_read_voltage_pair should handle retries internally
             v0, v1 = ads1115.ads_read_voltage_pair(
-                channel0=signal_ch,
-                channel1=supply_ch,
+                ch0=signal_ch,
+                ch1=supply_ch,
                 bus=bus,
                 addr=addr,
                 pga=pga,
