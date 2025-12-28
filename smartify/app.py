@@ -1530,6 +1530,11 @@ def db_get_water_level_settings() -> Dict[str, Any]:
             "id": "default",
             "full_voltage": FALLBACK_FULL_V,
             "empty_voltage": FALLBACK_EMPTY_V,
+            "use_supply_normalization": True,
+            "adc_channel_signal": 0,
+            "adc_channel_supply": 1,
+            "divider_r_top": 47000.0,
+            "divider_r_bottom": 10000.0,
             "updated_at": now
         }
 
@@ -1797,6 +1802,14 @@ def _water_level_thread() -> None:
     
     print("[Water Level] Background thread started")
     
+    # Log configuration on startup
+    settings = db_get_water_level_settings()
+    use_normalization = settings.get("use_supply_normalization", True)
+    channel_signal = int(settings.get("adc_channel_signal", 0))
+    channel_supply = int(settings.get("adc_channel_supply", 1))
+    calibration_mode = "ratio" if use_normalization else "voltage"
+    print(f"[Water Level] Configuration: mode={calibration_mode}, signal_channel=A{channel_signal}, supply_channel=A{channel_supply}")
+    
     # Debug: Try to import and log ads1115 module location at startup
     try:
         import ads1115
@@ -1995,6 +2008,15 @@ def api_water_settings_get(
             "ok": True,
             "full_voltage": settings.get("full_voltage"),
             "empty_voltage": settings.get("empty_voltage"),
+            "use_supply_normalization": settings.get("use_supply_normalization", True),
+            "adc_channel_signal": settings.get("adc_channel_signal", 0),
+            "adc_channel_supply": settings.get("adc_channel_supply", 1),
+            "divider_r_top": settings.get("divider_r_top", 47000.0),
+            "divider_r_bottom": settings.get("divider_r_bottom", 10000.0),
+            "full_ratio": settings.get("full_ratio"),
+            "empty_ratio": settings.get("empty_ratio"),
+            "full_supply_voltage": settings.get("full_supply_voltage"),
+            "empty_supply_voltage": settings.get("empty_supply_voltage"),
             "updated_at": settings.get("updated_at", 0)
         })
     except Exception as e:
@@ -2030,45 +2052,169 @@ def api_water_settings_post(
         return err
     
     try:
+        # Get all possible fields from request body
         full_voltage = body.get("full_voltage")
         empty_voltage = body.get("empty_voltage")
+        use_supply_normalization = body.get("use_supply_normalization")
+        adc_channel_signal = body.get("adc_channel_signal")
+        adc_channel_supply = body.get("adc_channel_supply")
+        divider_r_top = body.get("divider_r_top")
+        divider_r_bottom = body.get("divider_r_bottom")
+        full_ratio = body.get("full_ratio")
+        empty_ratio = body.get("empty_ratio")
+        full_supply_voltage = body.get("full_supply_voltage")
+        empty_supply_voltage = body.get("empty_supply_voltage")
         
-        # Validate inputs
-        if full_voltage is None or empty_voltage is None:
-            return JSONResponse({
-                "ok": False,
-                "error": "missing_fields",
-                "message": "Both full_voltage and empty_voltage are required"
-            })
+        # Validate voltage-based calibration if provided (backward compatibility)
+        if full_voltage is not None or empty_voltage is not None:
+            if full_voltage is None or empty_voltage is None:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "missing_fields",
+                    "message": "Both full_voltage and empty_voltage must be provided together"
+                })
+            
+            try:
+                full_voltage = float(full_voltage)
+                empty_voltage = float(empty_voltage)
+            except (ValueError, TypeError):
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_type",
+                    "message": "full_voltage and empty_voltage must be numbers"
+                })
+            
+            EPSILON = 0.001
+            if full_voltage <= 0 or empty_voltage <= 0:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_value",
+                    "message": "Voltages must be positive numbers"
+                })
+            
+            if abs(full_voltage - empty_voltage) < EPSILON:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_value",
+                    "message": "Full and empty voltages must be different"
+                })
         
-        try:
-            full_voltage = float(full_voltage)
-            empty_voltage = float(empty_voltage)
-        except (ValueError, TypeError):
-            return JSONResponse({
-                "ok": False,
-                "error": "invalid_type",
-                "message": "full_voltage and empty_voltage must be numbers"
-            })
+        # Validate ratio-based calibration if provided
+        if full_ratio is not None or empty_ratio is not None:
+            if full_ratio is None or empty_ratio is None:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "missing_fields",
+                    "message": "Both full_ratio and empty_ratio must be provided together"
+                })
+            
+            try:
+                full_ratio = float(full_ratio)
+                empty_ratio = float(empty_ratio)
+            except (ValueError, TypeError):
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_type",
+                    "message": "full_ratio and empty_ratio must be numbers"
+                })
+            
+            EPSILON = 0.0001
+            if full_ratio <= 0 or empty_ratio <= 0:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_value",
+                    "message": "Ratios must be positive numbers"
+                })
+            
+            if abs(full_ratio - empty_ratio) < EPSILON:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_value",
+                    "message": "Full and empty ratios must be different"
+                })
         
-        # Validate values
-        EPSILON = 0.001
-        if full_voltage <= 0 or empty_voltage <= 0:
-            return JSONResponse({
-                "ok": False,
-                "error": "invalid_value",
-                "message": "Voltages must be positive numbers"
-            })
+        # Validate other fields
+        if use_supply_normalization is not None:
+            use_supply_normalization = bool(use_supply_normalization)
         
-        if abs(full_voltage - empty_voltage) < EPSILON:
-            return JSONResponse({
-                "ok": False,
-                "error": "invalid_value",
-                "message": "Full and empty voltages must be different"
-            })
+        if adc_channel_signal is not None:
+            try:
+                adc_channel_signal = int(adc_channel_signal)
+                if adc_channel_signal not in (0, 1, 2, 3):
+                    return JSONResponse({
+                        "ok": False,
+                        "error": "invalid_value",
+                        "message": "adc_channel_signal must be 0-3"
+                    })
+            except (ValueError, TypeError):
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_type",
+                    "message": "adc_channel_signal must be an integer"
+                })
+        
+        if adc_channel_supply is not None:
+            try:
+                adc_channel_supply = int(adc_channel_supply)
+                if adc_channel_supply not in (0, 1, 2, 3):
+                    return JSONResponse({
+                        "ok": False,
+                        "error": "invalid_value",
+                        "message": "adc_channel_supply must be 0-3"
+                    })
+            except (ValueError, TypeError):
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_type",
+                    "message": "adc_channel_supply must be an integer"
+                })
+        
+        if divider_r_top is not None:
+            try:
+                divider_r_top = float(divider_r_top)
+                if divider_r_top <= 0:
+                    return JSONResponse({
+                        "ok": False,
+                        "error": "invalid_value",
+                        "message": "divider_r_top must be positive"
+                    })
+            except (ValueError, TypeError):
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_type",
+                    "message": "divider_r_top must be a number"
+                })
+        
+        if divider_r_bottom is not None:
+            try:
+                divider_r_bottom = float(divider_r_bottom)
+                if divider_r_bottom <= 0:
+                    return JSONResponse({
+                        "ok": False,
+                        "error": "invalid_value",
+                        "message": "divider_r_bottom must be positive"
+                    })
+            except (ValueError, TypeError):
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_type",
+                    "message": "divider_r_bottom must be a number"
+                })
         
         # Save to DB
-        db_update_water_level_settings(full_voltage, empty_voltage)
+        db_update_water_level_settings(
+            full_voltage=full_voltage,
+            empty_voltage=empty_voltage,
+            use_supply_normalization=use_supply_normalization,
+            adc_channel_signal=adc_channel_signal,
+            adc_channel_supply=adc_channel_supply,
+            divider_r_top=divider_r_top,
+            divider_r_bottom=divider_r_bottom,
+            full_ratio=full_ratio,
+            empty_ratio=empty_ratio,
+            full_supply_voltage=full_supply_voltage,
+            empty_supply_voltage=empty_supply_voltage
+        )
         
         # Return saved values
         settings = db_get_water_level_settings()
@@ -2076,6 +2222,15 @@ def api_water_settings_post(
             "ok": True,
             "full_voltage": settings.get("full_voltage"),
             "empty_voltage": settings.get("empty_voltage"),
+            "use_supply_normalization": settings.get("use_supply_normalization", True),
+            "adc_channel_signal": settings.get("adc_channel_signal", 0),
+            "adc_channel_supply": settings.get("adc_channel_supply", 1),
+            "divider_r_top": settings.get("divider_r_top", 47000.0),
+            "divider_r_bottom": settings.get("divider_r_bottom", 10000.0),
+            "full_ratio": settings.get("full_ratio"),
+            "empty_ratio": settings.get("empty_ratio"),
+            "full_supply_voltage": settings.get("full_supply_voltage"),
+            "empty_supply_voltage": settings.get("empty_supply_voltage"),
             "updated_at": settings.get("updated_at", 0)
         })
     
