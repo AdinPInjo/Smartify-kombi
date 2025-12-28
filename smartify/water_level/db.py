@@ -142,12 +142,15 @@ def db_init_water_level(conn: sqlite3.Connection) -> None:
 
 def _set_connection_pragmas(conn: sqlite3.Connection) -> None:
     """Set recommended PRAGMA settings for a connection."""
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA synchronous=NORMAL")
-    except sqlite3.OperationalError:
-        pass  # Already set or not supported
+    cur = conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=5000")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    # Verify settings were applied
+    cur.execute("PRAGMA busy_timeout")
+    timeout = cur.fetchone()[0]
+    if timeout != 5000:
+        print(f"[DB] Warning: busy_timeout is {timeout}, expected 5000")
 
 
 def db_get_water_level_settings(conn: sqlite3.Connection) -> WaterLevelSettings:

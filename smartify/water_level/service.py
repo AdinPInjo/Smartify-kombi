@@ -88,8 +88,11 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                 
                 conn.close()
                 
-                if app_state:
-                    app_state["water_level_latest"] = {
+                if app_state is not None:
+                    # app_state is Starlette State object, use attribute assignment
+                    if not hasattr(app_state, 'water_level_latest'):
+                        app_state.water_level_latest = {}
+                    app_state.water_level_latest = {
                         "level_percent": 0,
                         "avg_voltage": 0.0,
                         "status": "error",
@@ -192,8 +195,10 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                             # Continue with in-memory snapshot only
                 
                 # Update in-memory cache if app_state provided
-                if app_state:
-                    app_state["water_level_latest"] = {
+                if app_state is not None:
+                    if not hasattr(app_state, 'water_level_latest'):
+                        app_state.water_level_latest = {}
+                    app_state.water_level_latest = {
                         "level_percent": level_percent,
                         "avg_voltage": avg_voltage,
                         "avg_signal_voltage": avg_signal,
@@ -246,8 +251,10 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                             # Continue with in-memory snapshot only
                 
                 # Update in-memory cache if app_state provided
-                if app_state:
-                    app_state["water_level_latest"] = {
+                if app_state is not None:
+                    if not hasattr(app_state, 'water_level_latest'):
+                        app_state.water_level_latest = {}
+                    app_state.water_level_latest = {
                         "level_percent": level_percent,
                         "avg_voltage": avg_voltage,
                         "status": status,
@@ -297,8 +304,10 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                             else:
                                 print(f"[Water Level] DB write failed: {e}")
                     
-                    if app_state:
-                        app_state["water_level_latest"] = {
+                    if app_state is not None:
+                        if not hasattr(app_state, 'water_level_latest'):
+                            app_state.water_level_latest = {}
+                        app_state.water_level_latest = {
                             "level_percent": prev_snapshot.get("level_percent"),
                             "avg_voltage": prev_snapshot.get("avg_voltage"),
                             "status": "error",
@@ -330,8 +339,10 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
                             else:
                                 print(f"[Water Level] DB write failed: {e}")
                     
-                    if app_state:
-                        app_state["water_level_latest"] = {
+                    if app_state is not None:
+                        if not hasattr(app_state, 'water_level_latest'):
+                            app_state.water_level_latest = {}
+                        app_state.water_level_latest = {
                             "level_percent": 0,
                             "avg_voltage": 0.0,
                             "status": "error",
