@@ -3,10 +3,16 @@ ADS1115 ADC reading using smbus2 directly (no Blinka dependencies).
 
 This module provides low-level access to ADS1115 16-bit ADC via I2C.
 Designed to work reliably on Raspberry Pi without sudo or BLINKA environment variables.
+
+All I2C access is serialized with a global lock to prevent concurrent access issues.
 """
 
 import time
+import threading
 from typing import Optional, Tuple
+
+# Global lock to serialize all I2C access (prevents concurrent reads from interfering)
+I2C_LOCK = threading.Lock()
 
 
 # ADS1115 I2C address (default)
@@ -111,12 +117,13 @@ def ads_detect(bus: int = 1, addr: int = ADS1115_ADDRESS, retries: int = 3) -> b
     
     for attempt in range(retries):
         try:
-            with SMBus(bus) as i2c:
-                # Try to read from config register (should always be readable)
-                # This is a simple presence check
-                config = i2c.read_i2c_block_data(addr, ADS1115_REG_CONFIG, 2)
-                if config is not None and len(config) >= 2:
-                    return True
+            with I2C_LOCK:  # Serialize I2C access
+                with SMBus(bus) as i2c:
+                    # Try to read from config register (should always be readable)
+                    # This is a simple presence check
+                    config = i2c.read_i2c_block_data(addr, ADS1115_REG_CONFIG, 2)
+                    if config is not None and len(config) >= 2:
+                        return True
         except (OSError, IOError) as e:
             if attempt < retries - 1:
                 time.sleep(0.05)  # 50ms delay before retry
@@ -187,30 +194,31 @@ def ads_read_raw_single_ended(
     
     for attempt in range(retries):
         try:
-            with SMBus(bus) as i2c:
-                # Step 1: Write config register to set channel and start conversion
-                config_bytes = [(config >> 8) & 0xFF, config & 0xFF]  # Big-endian
-                i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
-                
-                # Step 2: Wait 3-5ms for MUX to switch
-                time.sleep(0.004)  # 4ms settle time
-                
-                # Step 3: Read conversion once and discard (throwaway to clear stale data)
-                try:
-                    _ = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
-                except:
-                    pass  # Ignore errors on throwaway read
-                
-                # Step 4: Trigger a fresh conversion by writing config again
-                i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
-                
-                # Step 5: Wait for conversion to complete (worst case: 1/sps seconds + margin)
-                # For 128 SPS: ~8ms per sample, wait 25ms to be safe
-                conversion_time = 1.0 / sps
-                time.sleep(max(0.025, conversion_time * 2))  # At least 25ms, or 2x conversion time
-                
-                # Step 6: Read conversion register (16-bit, big-endian) - this is the value we use
-                data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
+            with I2C_LOCK:  # Serialize I2C access
+                with SMBus(bus) as i2c:
+                    # Step 1: Write config register to set channel and start conversion
+                    config_bytes = [(config >> 8) & 0xFF, config & 0xFF]  # Big-endian
+                    i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+                    
+                    # Step 2: Wait 3-5ms for MUX to switch
+                    time.sleep(0.004)  # 4ms settle time
+                    
+                    # Step 3: Read conversion once and discard (throwaway to clear stale data)
+                    try:
+                        _ = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
+                    except:
+                        pass  # Ignore errors on throwaway read
+                    
+                    # Step 4: Trigger a fresh conversion by writing config again
+                    i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+                    
+                    # Step 5: Wait for conversion to complete (worst case: 1/sps seconds + margin)
+                    # For 128 SPS: ~8ms per sample, wait 25ms to be safe
+                    conversion_time = 1.0 / sps
+                    time.sleep(max(0.025, conversion_time * 2))  # At least 25ms, or 2x conversion time
+                    
+                    # Step 6: Read conversion register (16-bit, big-endian) - this is the value we use
+                    data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
                 if len(data) >= 2:
                     # Convert from big-endian to signed 16-bit integer
                     raw_value = (data[0] << 8) | data[1]
@@ -328,50 +336,51 @@ def ads_read_voltage_pair(
     
     for attempt in range(retries):
         try:
-            with SMBus(bus) as i2c:
-                voltages = [None, None]
-                channels = [channel0, channel1]
-                configs = [config0, config1]
-                
-                for idx, (ch, config) in enumerate(zip(channels, configs)):
-                    try:
-                        # Step 1: Write config register to set channel and start conversion
-                        config_bytes = [(config >> 8) & 0xFF, config & 0xFF]  # Big-endian
-                        i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
-                        
-                        # Step 2: Wait 3ms for MUX to switch
-                        time.sleep(0.003)  # 3ms settle time
-                        
-                        # Step 3: Read conversion once and discard (throwaway to clear stale data)
+            with I2C_LOCK:  # Serialize I2C access - both channels read in one critical section
+                with SMBus(bus) as i2c:
+                    voltages = [None, None]
+                    channels = [channel0, channel1]
+                    configs = [config0, config1]
+                    
+                    for idx, (ch, config) in enumerate(zip(channels, configs)):
                         try:
-                            _ = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
-                        except:
-                            pass  # Ignore errors on throwaway read
-                        
-                        # Step 4: Trigger a fresh conversion by writing config again
-                        i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
-                        
-                        # Step 5: Wait for conversion to complete (worst case: 1/sps seconds + margin)
-                        # For 128 SPS: ~8ms per sample, wait 25ms to be safe
-                        conversion_time = 1.0 / sps
-                        time.sleep(max(0.025, conversion_time * 2))  # At least 25ms, or 2x conversion time
-                        
-                        # Step 6: Read conversion register (16-bit, big-endian) - this is the value we use
-                        data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
-                        if len(data) >= 2:
-                            # Convert from big-endian to signed 16-bit integer
-                            raw_value = (data[0] << 8) | data[1]
-                            # Convert unsigned 16-bit to signed 16-bit
-                            if raw_value > 32767:
-                                raw_value = raw_value - 65536
-                            # Convert raw value to voltage
-                            voltage = (raw_value / 32767.0) * pga
-                            voltages[idx] = voltage
-                    except Exception as e:
-                        print(f"[ADS1115] Error reading channel {ch} in pair: {e}")
-                        voltages[idx] = None
-                
-                return (voltages[0], voltages[1])
+                            # Step 1: Write config register to set channel and start conversion
+                            config_bytes = [(config >> 8) & 0xFF, config & 0xFF]  # Big-endian
+                            i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+                            
+                            # Step 2: Wait 3ms for MUX to switch
+                            time.sleep(0.003)  # 3ms settle time
+                            
+                            # Step 3: Read conversion once and discard (throwaway to clear stale data)
+                            try:
+                                _ = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
+                            except:
+                                pass  # Ignore errors on throwaway read
+                            
+                            # Step 4: Trigger a fresh conversion by writing config again
+                            i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+                            
+                            # Step 5: Wait for conversion to complete (worst case: 1/sps seconds + margin)
+                            # For 128 SPS: ~8ms per sample, wait 25ms to be safe
+                            conversion_time = 1.0 / sps
+                            time.sleep(max(0.025, conversion_time * 2))  # At least 25ms, or 2x conversion time
+                            
+                            # Step 6: Read conversion register (16-bit, big-endian) - this is the value we use
+                            data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
+                            if len(data) >= 2:
+                                # Convert from big-endian to signed 16-bit integer
+                                raw_value = (data[0] << 8) | data[1]
+                                # Convert unsigned 16-bit to signed 16-bit
+                                if raw_value > 32767:
+                                    raw_value = raw_value - 65536
+                                # Convert raw value to voltage
+                                voltage = (raw_value / 32767.0) * pga
+                                voltages[idx] = voltage
+                        except Exception as e:
+                            print(f"[ADS1115] Error reading channel {ch} in pair: {e}")
+                            voltages[idx] = None
+                    
+                    return (voltages[0], voltages[1])
                 
         except (OSError, IOError) as e:
             if attempt < retries - 1:
