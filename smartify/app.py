@@ -1411,10 +1411,6 @@ def api_me(request: Request, x_api_key: Optional[str] = Header(default=None, ali
 # Water Level (ADS1115)
 # =========================
 
-# Water level calibration constants
-WATER_LEVEL_FULL_V = 0.331  # Volts at 100% (full tank)
-WATER_LEVEL_EMPTY_V = 1.487  # Volts at 0% (empty tank)
-
 # In-memory cache for latest water level snapshot
 _water_level_latest: Dict[str, Any] = {
     "level_percent": None,
@@ -1476,22 +1472,37 @@ def read_ads1115_voltage(busnum: int = 1, address: Optional[int] = None, channel
 
 def db_get_water_level_settings() -> Dict[str, Any]:
     """Get water level calibration settings from database."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM water_level_settings WHERE id = 'default'")
-    row = cur.fetchone()
-    conn.close()
+    # Safe fallback literals (same as DB defaults)
+    FALLBACK_FULL_V = 0.497
+    FALLBACK_EMPTY_V = 2.230
     
-    if row:
-        return dict(row)
-    else:
-        # Return defaults if not found (shouldn't happen after init, but safe fallback)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM water_level_settings WHERE id = 'default'")
+        row = cur.fetchone()
+        conn.close()
+        
+        if row:
+            return dict(row)
+        else:
+            # Return defaults if not found (shouldn't happen after init, but safe fallback)
+            now = int(time.time())
+            return {
+                "id": "default",
+                "full_voltage": FALLBACK_FULL_V,
+                "empty_voltage": FALLBACK_EMPTY_V,
+                "updated_at": now
+            }
+    except Exception as e:
+        print(f"[Water Level] Error loading settings from DB: {e}")
+        # Return safe fallback on any error
         now = int(time.time())
         return {
             "id": "default",
-            "full_voltage": WATER_LEVEL_FULL_V_DEFAULT,
-            "empty_voltage": WATER_LEVEL_EMPTY_V_DEFAULT,
+            "full_voltage": FALLBACK_FULL_V,
+            "empty_voltage": FALLBACK_EMPTY_V,
             "updated_at": now
         }
 
@@ -1529,8 +1540,8 @@ def voltage_to_percent(voltage: float, full_v: Optional[float] = None, empty_v: 
     # Load calibration from DB if not provided
     if full_v is None or empty_v is None:
         settings = db_get_water_level_settings()
-        full_v = settings.get("full_voltage", WATER_LEVEL_FULL_V_DEFAULT)
-        empty_v = settings.get("empty_voltage", WATER_LEVEL_EMPTY_V_DEFAULT)
+        full_v = settings.get("full_voltage", 0.497)  # Safe fallback
+        empty_v = settings.get("empty_voltage", 2.230)  # Safe fallback
     
     # Validate calibration
     EPSILON = 0.001  # Minimum voltage difference
@@ -1764,8 +1775,8 @@ def api_water_settings_get(
         return JSONResponse({
             "ok": False,
             "error": "internal_error",
-            "full_voltage": WATER_LEVEL_FULL_V_DEFAULT,
-            "empty_voltage": WATER_LEVEL_EMPTY_V_DEFAULT,
+            "full_voltage": 0.497,  # Safe fallback
+            "empty_voltage": 2.230,  # Safe fallback
             "updated_at": 0,
             "message": f"Internal error: {str(e)}"
         })
@@ -1967,8 +1978,8 @@ def api_water_level_latest(
         
         # Get calibration settings for response
         calibration_settings = db_get_water_level_settings()
-        full_voltage = calibration_settings.get("full_voltage", WATER_LEVEL_FULL_V_DEFAULT)
-        empty_voltage = calibration_settings.get("empty_voltage", WATER_LEVEL_EMPTY_V_DEFAULT)
+        full_voltage = calibration_settings.get("full_voltage", 0.497)  # Safe fallback
+        empty_voltage = calibration_settings.get("empty_voltage", 2.230)  # Safe fallback
         
         # ALWAYS recompute level_percent from avg_voltage using current calibration
         # (Don't trust snapshot.level_percent as it may be stale if calibration changed)
