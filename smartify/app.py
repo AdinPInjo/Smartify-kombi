@@ -61,6 +61,9 @@ SMARTIFY_TRUST_LOCALHOST = os.environ.get("SMARTIFY_TRUST_LOCALHOST", "0").lower
 
 app = FastAPI(title="Smartify Dashboard API")
 
+# Initialize app state for water level module
+app.state.water_level = {}
+
 # CORS middleware - allow all origins for local network access
 app.add_middleware(
     CORSMiddleware,
@@ -779,7 +782,7 @@ def require_auth(request: Request, x_api_key: Optional[str]) -> Optional[JSONRes
 
 
 # Initialize and include water level router (must be after require_auth is defined)
-water_level_api.init_router(DB_PATH, require_auth, app_state)
+water_level_api.init_router(DB_PATH, require_auth, app.state)
 app.include_router(water_level_api.router)
 
 
@@ -1346,7 +1349,7 @@ def on_startup() -> None:
     t_rules = threading.Thread(target=_rule_evaluator_thread, daemon=True)
     t_rules.start()
     # Start water level thread (using new module)
-    water_level_service.start_water_level_thread(DB_PATH, app_state)
+    water_level_service.start_water_level_thread(DB_PATH, app.state)
 
 
 # =========================
