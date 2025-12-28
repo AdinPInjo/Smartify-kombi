@@ -446,10 +446,12 @@ def _create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[st
                     empty_v = float(settings.get("empty_voltage", 2.230))
                     level_percent, status, message = calibration.voltage_to_percent(avg_signal, full_v, empty_v)
                     
-                    # CRITICAL: Verify no silent substitution
-                    # avg_signal is RAW ADC voltage from channel, NOT calibration value
-                    assert avg_signal != full_v and avg_signal != empty_v, \
-                        f"BUG: signal_voltage={avg_signal} matches calibration value (full={full_v}, empty={empty_v})"
+                    # DIAGNOSTIC: Non-fatal check if signal is near calibration endpoints
+                    # (This is EXPECTED when tank is actually full or empty)
+                    if abs(avg_signal - full_v) < 0.02:
+                        print(f"[Water Level Live] INFO: Signal voltage {avg_signal:.6f}V is near FULL calibration {full_v:.6f}V (expected when tank is full)")
+                    if abs(avg_signal - empty_v) < 0.02:
+                        print(f"[Water Level Live] INFO: Signal voltage {avg_signal:.6f}V is near EMPTY calibration {empty_v:.6f}V (expected when tank is empty)")
                     
                     result = {
                         "ok": True,
