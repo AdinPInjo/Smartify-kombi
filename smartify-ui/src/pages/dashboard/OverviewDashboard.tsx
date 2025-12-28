@@ -477,6 +477,8 @@ type WaterLevelPayload = {
   status: "ok" | "stale" | "error" | "calibrating" | "unknown";
   age_seconds: number;
   message: string;
+  calibration_full_voltage?: number | null;
+  calibration_empty_voltage?: number | null;
 };
 
 function WaterLevelCard() {
@@ -520,6 +522,12 @@ function WaterLevelCard() {
           <span className="text-zinc-400">Level</span>
           <span className="font-semibold text-zinc-200">
             {levelPercent !== null ? `${levelPercent}%` : "—"}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-zinc-400">Voltage</span>
+          <span className="font-semibold text-zinc-200">
+            {waterData?.avg_voltage != null ? `${waterData.avg_voltage.toFixed(3)} V` : "—"}
           </span>
         </div>
         <div className="flex items-center justify-between">
