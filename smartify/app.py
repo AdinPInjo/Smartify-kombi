@@ -1850,7 +1850,8 @@ def _water_level_thread() -> None:
             r_top = float(settings.get("divider_r_top", 47000.0))
             r_bottom = float(settings.get("divider_r_bottom", 10000.0))
             
-            # Take 3 samples of both channels with 150ms spacing
+            # Take 3 samples of both channels with proper delays
+            # ADS1115 needs time for MUX to switch and conversion to complete
             signal_samples = []
             supply_samples = []
             for i in range(3):
@@ -1859,13 +1860,16 @@ def _water_level_thread() -> None:
                 if signal_v is not None:
                     signal_samples.append(signal_v)
                 
+                # Small delay between channel switches to allow MUX to settle
+                time.sleep(0.025)  # 25ms delay between channel switches
+                
                 # Read supply divider channel (A1 by default)
                 supply_div_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_supply)
                 if supply_div_v is not None:
                     supply_samples.append(supply_div_v)
                 
                 if i < 2:  # Don't sleep after last sample
-                    time.sleep(0.15)  # 150ms between samples
+                    time.sleep(0.125)  # Additional delay before next sample pair
             
             # Process readings
             if use_normalization and len(signal_samples) >= 1 and len(supply_samples) >= 1:
@@ -1878,6 +1882,11 @@ def _water_level_thread() -> None:
                 
                 # Compute ratio = signal / supply
                 ratio = avg_signal / supply_voltage_est if supply_voltage_est > 0 else 0.0
+                
+                # Debug log once per minute
+                print(f"[Water Level] Channel reads: signal_ch=A{channel_signal} → {avg_signal:.4f}V, "
+                      f"supply_ch=A{channel_supply} → {avg_supply_div:.4f}V, "
+                      f"supply_est={supply_voltage_est:.2f}V, ratio={ratio:.4f}")
                 
                 # Convert ratio to percent
                 level_percent, status, message = ratio_to_percent(ratio)
@@ -2130,6 +2139,15 @@ def api_water_settings_post(
                     "message": "full_ratio and empty_ratio must be numbers"
                 })
             
+            # Validate that ratios are in a reasonable range (0 < ratio < 1.2)
+            # If values look like voltages (> 1.2), reject them
+            if use_supply_normalization is True and (full_ratio > 1.2 or empty_ratio > 1.2):
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_value",
+                    "message": "Expected ratio values (typically 0.1-0.7), got values > 1.2 which look like voltages. Use 'Set from live' button which saves the correct ratio."
+                })
+            
             EPSILON = 0.0001
             if full_ratio <= 0 or empty_ratio <= 0:
                 return JSONResponse({
@@ -2317,13 +2335,16 @@ def api_water_level_live(
                         except:
                             pass
             
+            # Small delay between channel switches to allow MUX to settle
+            time.sleep(0.025)  # 25ms delay between channel switches
+            
             # Read supply divider channel
             supply_div_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_supply)
             if supply_div_v is not None:
                 supply_samples.append(supply_div_v)
             
             if i < 2:  # Don't sleep after last sample
-                time.sleep(0.1)  # 100ms between samples
+                time.sleep(0.075)  # Additional delay before next sample pair
         
         if len(signal_samples) >= 1:
             avg_signal = sum(signal_samples) / len(signal_samples)
