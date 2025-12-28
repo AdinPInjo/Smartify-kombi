@@ -1554,26 +1554,35 @@ def db_update_water_level_settings(
 ) -> None:
     """Update water level calibration settings in database."""
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row  # Use Row factory for dict-like access
     cur = conn.cursor()
     
     # Get current settings to preserve values not being updated
     cur.execute("SELECT * FROM water_level_settings WHERE id = 'default'")
     row = cur.fetchone()
-    current = dict(row) if row else {}
+    # Convert Row to dict safely
+    if row:
+        current = dict(row)
+    else:
+        current = {}
     
     # Use provided values or keep current values
     now = int(time.time())
-    final_full_voltage = full_voltage if full_voltage is not None else current.get("full_voltage", 0.497)
-    final_empty_voltage = empty_voltage if empty_voltage is not None else current.get("empty_voltage", 2.230)
-    final_use_normalization = use_supply_normalization if use_supply_normalization is not None else current.get("use_supply_normalization", True)
-    final_channel_signal = adc_channel_signal if adc_channel_signal is not None else current.get("adc_channel_signal", 0)
-    final_channel_supply = adc_channel_supply if adc_channel_supply is not None else current.get("adc_channel_supply", 1)
-    final_r_top = divider_r_top if divider_r_top is not None else current.get("divider_r_top", 47000.0)
-    final_r_bottom = divider_r_bottom if divider_r_bottom is not None else current.get("divider_r_bottom", 10000.0)
-    final_full_ratio = full_ratio if full_ratio is not None else current.get("full_ratio")
-    final_empty_ratio = empty_ratio if empty_ratio is not None else current.get("empty_ratio")
-    final_full_supply = full_supply_voltage if full_supply_voltage is not None else current.get("full_supply_voltage")
-    final_empty_supply = empty_supply_voltage if empty_supply_voltage is not None else current.get("empty_supply_voltage")
+    final_full_voltage = float(full_voltage) if full_voltage is not None else float(current.get("full_voltage", 0.497))
+    final_empty_voltage = float(empty_voltage) if empty_voltage is not None else float(current.get("empty_voltage", 2.230))
+    # Convert boolean to int (0/1) for SQLite storage
+    if use_supply_normalization is not None:
+        final_use_normalization = 1 if bool(use_supply_normalization) else 0
+    else:
+        final_use_normalization = 1 if bool(current.get("use_supply_normalization", True)) else 0
+    final_channel_signal = int(adc_channel_signal) if adc_channel_signal is not None else int(current.get("adc_channel_signal", 0))
+    final_channel_supply = int(adc_channel_supply) if adc_channel_supply is not None else int(current.get("adc_channel_supply", 1))
+    final_r_top = float(divider_r_top) if divider_r_top is not None else float(current.get("divider_r_top", 47000.0))
+    final_r_bottom = float(divider_r_bottom) if divider_r_bottom is not None else float(current.get("divider_r_bottom", 10000.0))
+    final_full_ratio = float(full_ratio) if full_ratio is not None else (float(current.get("full_ratio")) if current.get("full_ratio") is not None else None)
+    final_empty_ratio = float(empty_ratio) if empty_ratio is not None else (float(current.get("empty_ratio")) if current.get("empty_ratio") is not None else None)
+    final_full_supply = float(full_supply_voltage) if full_supply_voltage is not None else (float(current.get("full_supply_voltage")) if current.get("full_supply_voltage") is not None else None)
+    final_empty_supply = float(empty_supply_voltage) if empty_supply_voltage is not None else (float(current.get("empty_supply_voltage")) if current.get("empty_supply_voltage") is not None else None)
     
     # Check which columns exist
     cur.execute("PRAGMA table_info(water_level_settings)")
@@ -1592,7 +1601,10 @@ def db_update_water_level_settings(
              final_channel_signal, final_channel_supply, final_r_top, final_r_bottom,
              final_full_ratio, final_empty_ratio, final_full_supply, final_empty_supply)
         )
-        print(f"[Water Level] Updated calibration: full={final_full_voltage}V, empty={final_empty_voltage}V, normalization={final_use_normalization}")
+        print(f"[Water Level] Updated calibration: mode={'ratio' if final_use_normalization else 'voltage'}, "
+              f"full_ratio={final_full_ratio}, empty_ratio={final_empty_ratio}, "
+              f"full_voltage={final_full_voltage}V, empty_voltage={final_empty_voltage}V, "
+              f"normalization={final_use_normalization}, signal_ch=A{final_channel_signal}, supply_ch=A{final_channel_supply}")
     else:
         # Old schema - update only basic fields
         cur.execute(
@@ -2006,18 +2018,18 @@ def api_water_settings_get(
         settings = db_get_water_level_settings()
         return JSONResponse({
             "ok": True,
-            "full_voltage": settings.get("full_voltage"),
-            "empty_voltage": settings.get("empty_voltage"),
-            "use_supply_normalization": settings.get("use_supply_normalization", True),
-            "adc_channel_signal": settings.get("adc_channel_signal", 0),
-            "adc_channel_supply": settings.get("adc_channel_supply", 1),
-            "divider_r_top": settings.get("divider_r_top", 47000.0),
-            "divider_r_bottom": settings.get("divider_r_bottom", 10000.0),
-            "full_ratio": settings.get("full_ratio"),
-            "empty_ratio": settings.get("empty_ratio"),
-            "full_supply_voltage": settings.get("full_supply_voltage"),
-            "empty_supply_voltage": settings.get("empty_supply_voltage"),
-            "updated_at": settings.get("updated_at", 0)
+            "full_voltage": float(settings.get("full_voltage", 0.497)),
+            "empty_voltage": float(settings.get("empty_voltage", 2.230)),
+            "use_supply_normalization": bool(settings.get("use_supply_normalization", True)),  # Convert 0/1 to bool
+            "adc_channel_signal": int(settings.get("adc_channel_signal", 0)),
+            "adc_channel_supply": int(settings.get("adc_channel_supply", 1)),
+            "divider_r_top": float(settings.get("divider_r_top", 47000.0)),
+            "divider_r_bottom": float(settings.get("divider_r_bottom", 10000.0)),
+            "full_ratio": float(settings.get("full_ratio")) if settings.get("full_ratio") is not None else None,
+            "empty_ratio": float(settings.get("empty_ratio")) if settings.get("empty_ratio") is not None else None,
+            "full_supply_voltage": float(settings.get("full_supply_voltage")) if settings.get("full_supply_voltage") is not None else None,
+            "empty_supply_voltage": float(settings.get("empty_supply_voltage")) if settings.get("empty_supply_voltage") is not None else None,
+            "updated_at": int(settings.get("updated_at", 0))
         })
     except Exception as e:
         print(f"[API] Error in /api/water/settings GET: {e}")
@@ -2201,6 +2213,14 @@ def api_water_settings_post(
                     "message": "divider_r_bottom must be a number"
                 })
         
+        # Log incoming payload for debugging
+        print(f"[Water Level Settings POST] Incoming payload: "
+              f"use_normalization={use_supply_normalization}, "
+              f"full_ratio={full_ratio}, empty_ratio={empty_ratio}, "
+              f"full_voltage={full_voltage}, empty_voltage={empty_voltage}, "
+              f"divider_r_top={divider_r_top}, divider_r_bottom={divider_r_bottom}, "
+              f"signal_ch={adc_channel_signal}, supply_ch={adc_channel_supply}")
+        
         # Save to DB
         db_update_water_level_settings(
             full_voltage=full_voltage,
@@ -2216,22 +2236,28 @@ def api_water_settings_post(
             empty_supply_voltage=empty_supply_voltage
         )
         
-        # Return saved values
+        # Return saved values (reload from DB to confirm persistence)
         settings = db_get_water_level_settings()
+        
+        # Log saved values
+        print(f"[Water Level Settings POST] Saved values: "
+              f"use_normalization={settings.get('use_supply_normalization')}, "
+              f"full_ratio={settings.get('full_ratio')}, empty_ratio={settings.get('empty_ratio')}, "
+              f"full_voltage={settings.get('full_voltage')}, empty_voltage={settings.get('empty_voltage')}")
         return JSONResponse({
             "ok": True,
-            "full_voltage": settings.get("full_voltage"),
-            "empty_voltage": settings.get("empty_voltage"),
-            "use_supply_normalization": settings.get("use_supply_normalization", True),
-            "adc_channel_signal": settings.get("adc_channel_signal", 0),
-            "adc_channel_supply": settings.get("adc_channel_supply", 1),
-            "divider_r_top": settings.get("divider_r_top", 47000.0),
-            "divider_r_bottom": settings.get("divider_r_bottom", 10000.0),
-            "full_ratio": settings.get("full_ratio"),
-            "empty_ratio": settings.get("empty_ratio"),
-            "full_supply_voltage": settings.get("full_supply_voltage"),
-            "empty_supply_voltage": settings.get("empty_supply_voltage"),
-            "updated_at": settings.get("updated_at", 0)
+            "full_voltage": float(settings.get("full_voltage", 0.497)),
+            "empty_voltage": float(settings.get("empty_voltage", 2.230)),
+            "use_supply_normalization": bool(settings.get("use_supply_normalization", True)),  # Convert 0/1 to bool
+            "adc_channel_signal": int(settings.get("adc_channel_signal", 0)),
+            "adc_channel_supply": int(settings.get("adc_channel_supply", 1)),
+            "divider_r_top": float(settings.get("divider_r_top", 47000.0)),
+            "divider_r_bottom": float(settings.get("divider_r_bottom", 10000.0)),
+            "full_ratio": float(settings.get("full_ratio")) if settings.get("full_ratio") is not None else None,
+            "empty_ratio": float(settings.get("empty_ratio")) if settings.get("empty_ratio") is not None else None,
+            "full_supply_voltage": float(settings.get("full_supply_voltage")) if settings.get("full_supply_voltage") is not None else None,
+            "empty_supply_voltage": float(settings.get("empty_supply_voltage")) if settings.get("empty_supply_voltage") is not None else None,
+            "updated_at": int(settings.get("updated_at", 0))
         })
     
     except Exception as e:
