@@ -1655,26 +1655,28 @@ def ratio_to_percent(ratio: float, full_ratio: Optional[float] = None, empty_rat
     # Determine which direction: if full_ratio < empty_ratio, it's inverted (lower ratio = higher level)
     # If full_ratio > empty_ratio, it's normal (higher ratio = higher level)
     
-    # Clamp to calibration range
+    # Clamp to calibration range and compute percent
     if full_ratio < empty_ratio:
-        # Inverted mapping (lower ratio = higher level)
+        # Inverted mapping: full_ratio (lower value) = 100%, empty_ratio (higher value) = 0%
+        # Formula: percent = (empty_ratio - ratio) / (empty_ratio - full_ratio) * 100
         if ratio <= full_ratio:
             percent = 100
         elif ratio >= empty_ratio:
             percent = 0
         else:
-            # Linear interpolation
+            # Linear interpolation: (empty - ratio) / (empty - full) * 100
             ratio_range = empty_ratio - full_ratio
             percent = 100.0 * (empty_ratio - ratio) / ratio_range
             percent = max(0, min(100, percent))  # Clamp to 0-100
     else:
-        # Normal mapping (higher ratio = higher level)
+        # Normal mapping: full_ratio (higher value) = 100%, empty_ratio (lower value) = 0%
+        # Formula: percent = (ratio - empty_ratio) / (full_ratio - empty_ratio) * 100
         if ratio >= full_ratio:
             percent = 100
         elif ratio <= empty_ratio:
             percent = 0
         else:
-            # Linear interpolation
+            # Linear interpolation: (ratio - empty) / (full - empty) * 100
             ratio_range = full_ratio - empty_ratio
             percent = 100.0 * (ratio - empty_ratio) / ratio_range
             percent = max(0, min(100, percent))  # Clamp to 0-100
@@ -1850,6 +1852,27 @@ def _water_level_thread() -> None:
             r_top = float(settings.get("divider_r_top", 47000.0))
             r_bottom = float(settings.get("divider_r_bottom", 10000.0))
             
+            # Defensive check: ensure signal and supply channels are different
+            if channel_signal == channel_supply:
+                print(f"[Water Level] ERROR: Signal and supply channels are the same (A{channel_signal})")
+                db_upsert_water_level_snapshot(
+                    avg_voltage=0.0,
+                    level_percent=0,
+                    status="error",
+                    message=f"Invalid configuration: signal and supply channels are both A{channel_signal}",
+                    updated_at=now
+                )
+                _water_level_latest.update({
+                    "level_percent": 0,
+                    "avg_voltage": 0.0,
+                    "status": "error",
+                    "message": f"Invalid configuration: signal and supply channels are both A{channel_signal}",
+                    "updated_at": now,
+                    "age_seconds": 0
+                })
+                time.sleep(60)  # Wait before next iteration
+                continue  # Skip this iteration
+            
             # Take 3 samples of both channels with proper delays
             # ADS1115 needs time for MUX to switch and conversion to complete
             signal_samples = []
@@ -1877,19 +1900,63 @@ def _water_level_thread() -> None:
                 avg_signal = sum(signal_samples) / len(signal_samples)
                 avg_supply_div = sum(supply_samples) / len(supply_samples)
                 
+                # Sanity check: detect if channels are mirroring (A0 == A1)
+                # If voltage difference is less than 10mV, channels are likely the same
+                CHANNEL_MIRROR_THRESHOLD = 0.01  # 10mV
+                if abs(avg_signal - avg_supply_div) < CHANNEL_MIRROR_THRESHOLD:
+                    print(f"[Water Level] ERROR: Channels mirrored! signal_ch=A{channel_signal} → {avg_signal:.4f}V, "
+                          f"supply_ch=A{channel_supply} → {avg_supply_div:.4f}V (diff={abs(avg_signal - avg_supply_div):.6f}V)")
+                    # Set error status (don't compute level_percent as channels are invalid)
+                    status = "error"
+                    message = "ADS1115 channels mirrored (A0 == A1). Check wiring or ADC MUX switching."
+                    level_percent = 0  # Set to 0 for safety when channels mirror
+                    
+                    # Store snapshot with error status
+                    db_upsert_water_level_snapshot(
+                        avg_voltage=avg_signal,
+                        level_percent=level_percent,
+                        status=status,
+                        message=message,
+                        updated_at=now,
+                        avg_signal_voltage=avg_signal,
+                        avg_supply_div_voltage=avg_supply_div,
+                        supply_voltage_est=None,
+                        ratio=None
+                    )
+                    
+                    # Update cache
+                    _water_level_latest.update({
+                        "level_percent": 0,
+                        "avg_voltage": avg_signal,
+                        "avg_signal_voltage": avg_signal,
+                        "avg_supply_div_voltage": avg_supply_div,
+                        "supply_voltage_est": None,
+                        "ratio": None,
+                        "status": status,
+                        "message": message,
+                        "updated_at": now,
+                        "age_seconds": 0
+                    })
+                    continue  # Skip to next iteration
+                
                 # Compute supply voltage estimate: V_supply = V_divider * (Rtop+Rbottom)/Rbottom
                 supply_voltage_est = avg_supply_div * (r_top + r_bottom) / r_bottom if r_bottom > 0 else 0.0
                 
-                # Compute ratio = signal / supply
+                # Compute ratio = signal_voltage / supply_voltage_est (NOT supply_div_voltage / supply_voltage_est)
                 ratio = avg_signal / supply_voltage_est if supply_voltage_est > 0 else 0.0
                 
-                # Debug log once per minute
-                print(f"[Water Level] Channel reads: signal_ch=A{channel_signal} → {avg_signal:.4f}V, "
-                      f"supply_ch=A{channel_supply} → {avg_supply_div:.4f}V, "
-                      f"supply_est={supply_voltage_est:.2f}V, ratio={ratio:.4f}")
+                # Get calibration values for logging
+                calib_settings = db_get_water_level_settings()
+                full_ratio_calib = calib_settings.get("full_ratio")
+                empty_ratio_calib = calib_settings.get("empty_ratio")
                 
                 # Convert ratio to percent
                 level_percent, status, message = ratio_to_percent(ratio)
+                
+                # Debug log once per minute with comprehensive info
+                print(f"[Water Level] Channels: A{channel_signal}(signal)={avg_signal:.4f}V, A{channel_supply}(supply_div)={avg_supply_div:.4f}V, "
+                      f"supply_est={supply_voltage_est:.2f}V, ratio={ratio:.6f}, "
+                      f"calib(full={full_ratio_calib}, empty={empty_ratio_calib}), computed={level_percent}%")
                 
                 # For backward compatibility, avg_voltage is signal voltage
                 avg_voltage = avg_signal
@@ -2120,24 +2187,34 @@ def api_water_settings_post(
                     "message": "Full and empty voltages must be different"
                 })
         
-        # Validate ratio-based calibration if provided
-        if full_ratio is not None or empty_ratio is not None:
-            if full_ratio is None or empty_ratio is None:
-                return JSONResponse({
-                    "ok": False,
-                    "error": "missing_fields",
-                    "message": "Both full_ratio and empty_ratio must be provided together"
-                })
-            
-            try:
-                full_ratio = float(full_ratio)
-                empty_ratio = float(empty_ratio)
-            except (ValueError, TypeError):
-                return JSONResponse({
-                    "ok": False,
-                    "error": "invalid_type",
-                    "message": "full_ratio and empty_ratio must be numbers"
-                })
+            # Validate ratio-based calibration if provided
+            if full_ratio is not None or empty_ratio is not None:
+                if full_ratio is None or empty_ratio is None:
+                    return JSONResponse({
+                        "ok": False,
+                        "error": "missing_fields",
+                        "message": "Both full_ratio and empty_ratio must be provided together"
+                    })
+                
+                try:
+                    full_ratio = float(full_ratio)
+                    empty_ratio = float(empty_ratio)
+                except (ValueError, TypeError):
+                    return JSONResponse({
+                        "ok": False,
+                        "error": "invalid_type",
+                        "message": "full_ratio and empty_ratio must be numbers"
+                    })
+                
+                # Validation: if normalization is enabled, ratios should be in typical range (0.02-0.4)
+                # If values look like voltages (> 1.2), reject with helpful message
+                if use_supply_normalization is not False:  # Default to True if not explicitly False
+                    if full_ratio > 1.2 or empty_ratio > 1.2:
+                        return JSONResponse({
+                            "ok": False,
+                            "error": "invalid_value",
+                            "message": "Expected ratio values (typically 0.02-0.4), got voltages. Use 'Set from live' which saves ratio."
+                        })
             
             # Validate that ratios are in a reasonable range (0 < ratio < 1.2)
             # If values look like voltages (> 1.2), reject them
@@ -2314,6 +2391,20 @@ def api_water_level_live(
         r_top = float(settings.get("divider_r_top", 47000.0))
         r_bottom = float(settings.get("divider_r_bottom", 10000.0))
         
+        # Defensive check: ensure signal and supply channels are different
+        if channel_signal == channel_supply:
+            return JSONResponse({
+                "ok": False,
+                "signal_voltage": None,
+                "supply_div_voltage": None,
+                "supply_voltage_est": None,
+                "ratio": None,
+                "level_percent": None,
+                "address": "0x48",
+                "status": "error",
+                "message": f"Invalid configuration: signal and supply channels are both A{channel_signal}"
+            })
+        
         # Take 3 quick samples of both channels
         signal_samples = []
         supply_samples = []
@@ -2352,7 +2443,25 @@ def api_water_level_live(
             # Compute supply and ratio if normalization enabled and supply read succeeded
             if use_normalization and len(supply_samples) >= 1:
                 avg_supply_div = sum(supply_samples) / len(supply_samples)
+                
+                # Sanity check: detect if channels are mirroring (A0 == A1)
+                CHANNEL_MIRROR_THRESHOLD = 0.01  # 10mV
+                if abs(avg_signal - avg_supply_div) < CHANNEL_MIRROR_THRESHOLD:
+                    # Channels are mirroring - return error status
+                    return JSONResponse({
+                        "ok": False,
+                        "signal_voltage": avg_signal,
+                        "supply_div_voltage": avg_supply_div,
+                        "supply_voltage_est": None,
+                        "ratio": None,
+                        "level_percent": None,
+                        "address": detected_address or "0x48",
+                        "status": "error",
+                        "message": "ADS1115 channels mirrored (A0 == A1). Check wiring or ADC MUX switching."
+                    })
+                
                 supply_voltage_est = avg_supply_div * (r_top + r_bottom) / r_bottom if r_bottom > 0 else 0.0
+                # Ratio = signal_voltage / supply_voltage_est (NOT supply_div_voltage / supply_voltage_est)
                 ratio = avg_signal / supply_voltage_est if supply_voltage_est > 0 else 0.0
                 level_percent, status, message = ratio_to_percent(ratio)
                 
