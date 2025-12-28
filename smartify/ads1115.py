@@ -48,13 +48,15 @@ ADS1115_PGA_0_256V = 0x0A00  # ±0.256V
 ADS1115_MODE_SINGLE = 0x0100  # Single-shot mode
 
 # DR (bits 7-5): Data rate (samples per second)
-ADS1115_DR_128SPS = 0x0000    # 128 SPS (default)
-ADS1115_DR_250SPS = 0x0020    # 250 SPS
-ADS1115_DR_490SPS = 0x0040    # 490 SPS
-ADS1115_DR_920SPS = 0x0060    # 920 SPS
-ADS1115_DR_1600SPS = 0x0080   # 1600 SPS
-ADS1115_DR_2400SPS = 0x00A0   # 2400 SPS
-ADS1115_DR_3300SPS = 0x00C0   # 3300 SPS
+# ADS1115-specific values (NOT ADS1015)
+ADS1115_DR_8SPS   = 0x0000  # 8 SPS
+ADS1115_DR_16SPS  = 0x0020  # 16 SPS
+ADS1115_DR_32SPS  = 0x0040  # 32 SPS
+ADS1115_DR_64SPS  = 0x0060  # 64 SPS
+ADS1115_DR_128SPS = 0x0080  # 128 SPS (CORRECTED - was 0x0000!)
+ADS1115_DR_250SPS = 0x00A0  # 250 SPS
+ADS1115_DR_475SPS = 0x00C0  # 475 SPS
+ADS1115_DR_860SPS = 0x00E0  # 860 SPS
 
 # OS (bit 15): Operational status / single-shot start
 ADS1115_OS_SINGLE = 0x8000    # Start single-shot conversion
@@ -87,19 +89,23 @@ def _get_pga_value(pga_volts: float) -> int:
 
 
 def _get_sps_value(sps: int) -> int:
-    """Convert samples per second to register value."""
+    """
+    Get the SPS (samples per second) register value for ADS1115.
+    
+    Valid values: 8, 16, 32, 64, 128, 250, 475, 860
+    Default: 128 SPS (0x0080)
+    """
     sps_map = {
-        128: ADS1115_DR_128SPS,
-        250: ADS1115_DR_250SPS,
-        490: ADS1115_DR_490SPS,
-        920: ADS1115_DR_920SPS,
-        1600: ADS1115_DR_1600SPS,
-        2400: ADS1115_DR_2400SPS,
-        3300: ADS1115_DR_3300SPS,
+        8: ADS1115_DR_8SPS,      # 0x0000
+        16: ADS1115_DR_16SPS,    # 0x0020
+        32: ADS1115_DR_32SPS,    # 0x0040
+        64: ADS1115_DR_64SPS,    # 0x0060
+        128: ADS1115_DR_128SPS,  # 0x0080 (CORRECTED)
+        250: ADS1115_DR_250SPS,  # 0x00A0
+        475: ADS1115_DR_475SPS,  # 0x00C0
+        860: ADS1115_DR_860SPS,  # 0x00E0
     }
-    available = sorted(sps_map.keys())
-    closest = min(available, key=lambda x: abs(x - sps))
-    return sps_map[closest]
+    return sps_map.get(sps, ADS1115_DR_128SPS)  # Default to 128 SPS
 
 
 def ads_detect(bus: int = 1, addr: int = ADS1115_ADDRESS, retries: int = 3) -> bool:
@@ -269,9 +275,9 @@ def ads_read_voltage(
         return None
     
     # Convert raw value to voltage
-    # ADS1115 is 16-bit, so max value is 32767 for positive voltages
-    # Voltage = (raw_value / 32767) * pga_voltage
-    voltage = (raw / 32767.0) * pga
+    # ADS1115 is 16-bit signed: range is -32768 to +32767
+    # Voltage = raw_value * (pga_voltage / 32768.0)
+    voltage = raw * (pga / 32768.0)
     return voltage
 
 
@@ -407,7 +413,8 @@ def ads_read_voltage_pair(
                         
                         if raw_value is not None:
                             # Convert raw value to voltage
-                            voltage = (raw_value / 32767.0) * pga
+                            # ADS1115 is 16-bit signed: range is -32768 to +32767
+                            voltage = raw_value * (pga / 32768.0)
                             voltages[idx] = voltage
                             print(f"[ADS1115] Channel {ch}: raw={raw_value}, voltage={voltage:.6f}V")
                         else:
