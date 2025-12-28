@@ -320,7 +320,13 @@ def db_init() -> None:
 
 
 def db_insert_temp(ts: int, sensor_index: int, t: Optional[float], h: Optional[float]) -> None:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.OperationalError:
+        pass
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO temperature_readings (ts, sensor_index, temperature_c, humidity) VALUES (?, ?, ?, ?)",
@@ -332,7 +338,13 @@ def db_insert_temp(ts: int, sensor_index: int, t: Optional[float], h: Optional[f
 
 def db_insert_sensor_sample(sensor_name: str, temp: Optional[float], humidity: Optional[float], ok: bool, created_at: int) -> None:
     """Insert a raw sensor sample (optional, for debugging)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.OperationalError:
+        pass
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO sensor_samples (sensor_name, temp, humidity, ok, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -358,30 +370,19 @@ def db_update_sensor_snapshot(
     last_good_at: int,
     updated_at: int
 ) -> None:
-    """Update or insert sensor snapshot."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        """INSERT INTO sensor_snapshot 
-           (sensor_name, avg_temp, avg_humidity, sample_count, window_start, window_end, last_good_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(sensor_name) DO UPDATE SET
-           avg_temp = excluded.avg_temp,
-           avg_humidity = excluded.avg_humidity,
-           sample_count = excluded.sample_count,
-           window_start = excluded.window_start,
-           window_end = excluded.window_end,
-           last_good_at = excluded.last_good_at,
-           updated_at = excluded.updated_at""",
-        (sensor_name, avg_temp, avg_humidity, sample_count, window_start, window_end, last_good_at, updated_at),
-    )
-    conn.commit()
-    conn.close()
+    """Update or insert sensor snapshot (alias for db_upsert_sensor_snapshot)."""
+    db_upsert_sensor_snapshot(sensor_name, avg_temp, avg_humidity, sample_count, window_start, window_end, last_good_at, updated_at)
 
 
 def db_get_sensor_snapshot(sensor_name: str) -> Optional[Dict[str, Any]]:
     """Get sensor snapshot."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.OperationalError:
+        pass
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
@@ -392,7 +393,13 @@ def db_get_sensor_snapshot(sensor_name: str) -> Optional[Dict[str, Any]]:
 
 def db_insert_gps(ts: int, lat: Optional[float], lon: Optional[float], speed_kmh: Optional[float],
                   course: Optional[float], altitude_m: Optional[float]) -> None:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.OperationalError:
+        pass
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO gps_fixes (ts, lat, lon, speed_kmh, course, altitude_m) VALUES (?, ?, ?, ?, ?, ?)",

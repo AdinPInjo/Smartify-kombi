@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
 Test script to verify ADS1115 pair reading using the same library functions as the backend.
+Run from repo root: python3 smartify/tools/test_ads_pair.py
 """
 
 import sys
 import time
 from pathlib import Path
 
-# Add parent directory to path so we can import ads1115
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+# Add repo root to path if needed
+repo_root = Path(__file__).resolve().parent.parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
-import ads1115
+# Use absolute import (same as backend)
+from smartify import ads1115
 
 def main():
     print("=== ADS1115 Pair Read Test ===")
@@ -55,8 +59,8 @@ def main():
             
             # Read both channels using the library function
             v0, v1 = ads1115.ads_read_voltage_pair(
-                ch0=channel_a0,
-                ch1=channel_a1,
+                channel0=channel_a0,
+                channel1=channel_a1,
                 addr=detected_addr,
                 bus=bus,
                 pga=pga,
