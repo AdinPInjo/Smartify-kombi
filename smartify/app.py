@@ -1967,16 +1967,42 @@ def api_water_level_latest(
         
         # Get calibration settings for response
         calibration_settings = db_get_water_level_settings()
+        full_voltage = calibration_settings.get("full_voltage", WATER_LEVEL_FULL_V_DEFAULT)
+        empty_voltage = calibration_settings.get("empty_voltage", WATER_LEVEL_EMPTY_V_DEFAULT)
+        
+        # ALWAYS recompute level_percent from avg_voltage using current calibration
+        # (Don't trust snapshot.level_percent as it may be stale if calibration changed)
+        avg_voltage = snapshot.get("avg_voltage")
+        computed_percent = snapshot.get("level_percent")  # Default to stored value if recompute fails
+        
+        if avg_voltage is not None and avg_voltage > 0:
+            try:
+                # Clamp logic: if voltage is very close to full/empty, force 100/0
+                CLAMP_THRESHOLD = 0.02  # 20mV tolerance
+                if abs(avg_voltage - full_voltage) <= CLAMP_THRESHOLD:
+                    computed_percent = 100
+                elif abs(avg_voltage - empty_voltage) <= CLAMP_THRESHOLD:
+                    computed_percent = 0
+                else:
+                    # Recompute using current calibration
+                    computed_percent, calc_status, calc_message = voltage_to_percent(avg_voltage, full_v=full_voltage, empty_v=empty_voltage)
+                
+                # Debug log
+                print(f"[Water Level API] Recomputed: avg_voltage={avg_voltage:.6f}V, full={full_voltage:.3f}V, empty={empty_voltage:.3f}V, percent={computed_percent}%")
+            except Exception as e:
+                print(f"[Water Level API] Error recomputing level_percent: {e}")
+                # Keep stored value as fallback
+                computed_percent = snapshot.get("level_percent", 0)
         
         return JSONResponse({
             "ok": True,
-            "level_percent": snapshot.get("level_percent"),
-            "avg_voltage": snapshot.get("avg_voltage"),
+            "level_percent": computed_percent,
+            "avg_voltage": avg_voltage,
             "status": status,
             "age_seconds": int(age_seconds),
             "message": message,
-            "calibration_full_voltage": calibration_settings.get("full_voltage"),
-            "calibration_empty_voltage": calibration_settings.get("empty_voltage")
+            "calibration_full_voltage": full_voltage,
+            "calibration_empty_voltage": empty_voltage
         })
     
     except Exception as e:
