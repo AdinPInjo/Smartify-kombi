@@ -312,17 +312,44 @@ def db_init() -> None:
         );
         """
     )
+    
+    # Check if new columns exist, add them if missing (migration)
+    cur.execute("PRAGMA table_info(water_level_settings)")
+    existing_columns = [row[1] for row in cur.fetchall()]
+    
+    new_columns = {
+        "use_supply_normalization": "BOOLEAN DEFAULT 1",
+        "adc_channel_signal": "INTEGER DEFAULT 0",
+        "adc_channel_supply": "INTEGER DEFAULT 1",
+        "divider_r_top": "REAL DEFAULT 47000",
+        "divider_r_bottom": "REAL DEFAULT 10000",
+        "full_ratio": "REAL",
+        "empty_ratio": "REAL",
+        "full_supply_voltage": "REAL",
+        "empty_supply_voltage": "REAL"
+    }
+    
+    for col_name, col_def in new_columns.items():
+        if col_name not in existing_columns:
+            try:
+                cur.execute(f"ALTER TABLE water_level_settings ADD COLUMN {col_name} {col_def}")
+                print(f"[DB] Added column water_level_settings.{col_name}")
+            except sqlite3.OperationalError as e:
+                print(f"[DB] Warning: Could not add column {col_name}: {e}")
+    
     # Initialize default calibration if not exists
     cur.execute("SELECT COUNT(*) FROM water_level_settings WHERE id = 'default'")
     if cur.fetchone()[0] == 0:
         now = int(time.time())
         # Use new discovered calibration values (full=0.497, empty=2.230)
         cur.execute(
-            """INSERT INTO water_level_settings (id, full_voltage, empty_voltage, updated_at)
-               VALUES (?, ?, ?, ?)""",
-            ("default", 0.497, 2.230, now)
+            """INSERT INTO water_level_settings 
+               (id, full_voltage, empty_voltage, updated_at, use_supply_normalization, 
+                adc_channel_signal, adc_channel_supply, divider_r_top, divider_r_bottom)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("default", 0.497, 2.230, now, 1, 0, 1, 47000.0, 10000.0)
         )
-        print(f"[DB] Initialized water_level_settings with defaults: full=0.497V, empty=2.230V")
+        print(f"[DB] Initialized water_level_settings with defaults: full=0.497V, empty=2.230V, normalization enabled")
     
     # Initialize default heater relay device if it doesn't exist
     cur.execute("SELECT COUNT(*) FROM relay_devices WHERE name = 'heater'")
@@ -1507,19 +1534,135 @@ def db_get_water_level_settings() -> Dict[str, Any]:
         }
 
 
-def db_update_water_level_settings(full_voltage: float, empty_voltage: float) -> None:
+def db_update_water_level_settings(
+    full_voltage: Optional[float] = None,
+    empty_voltage: Optional[float] = None,
+    use_supply_normalization: Optional[bool] = None,
+    adc_channel_signal: Optional[int] = None,
+    adc_channel_supply: Optional[int] = None,
+    divider_r_top: Optional[float] = None,
+    divider_r_bottom: Optional[float] = None,
+    full_ratio: Optional[float] = None,
+    empty_ratio: Optional[float] = None,
+    full_supply_voltage: Optional[float] = None,
+    empty_supply_voltage: Optional[float] = None
+) -> None:
     """Update water level calibration settings in database."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+    
+    # Get current settings to preserve values not being updated
+    cur.execute("SELECT * FROM water_level_settings WHERE id = 'default'")
+    row = cur.fetchone()
+    current = dict(row) if row else {}
+    
+    # Use provided values or keep current values
     now = int(time.time())
-    cur.execute(
-        """INSERT OR REPLACE INTO water_level_settings (id, full_voltage, empty_voltage, updated_at)
-           VALUES (?, ?, ?, ?)""",
-        ("default", full_voltage, empty_voltage, now)
-    )
+    final_full_voltage = full_voltage if full_voltage is not None else current.get("full_voltage", 0.497)
+    final_empty_voltage = empty_voltage if empty_voltage is not None else current.get("empty_voltage", 2.230)
+    final_use_normalization = use_supply_normalization if use_supply_normalization is not None else current.get("use_supply_normalization", True)
+    final_channel_signal = adc_channel_signal if adc_channel_signal is not None else current.get("adc_channel_signal", 0)
+    final_channel_supply = adc_channel_supply if adc_channel_supply is not None else current.get("adc_channel_supply", 1)
+    final_r_top = divider_r_top if divider_r_top is not None else current.get("divider_r_top", 47000.0)
+    final_r_bottom = divider_r_bottom if divider_r_bottom is not None else current.get("divider_r_bottom", 10000.0)
+    final_full_ratio = full_ratio if full_ratio is not None else current.get("full_ratio")
+    final_empty_ratio = empty_ratio if empty_ratio is not None else current.get("empty_ratio")
+    final_full_supply = full_supply_voltage if full_supply_voltage is not None else current.get("full_supply_voltage")
+    final_empty_supply = empty_supply_voltage if empty_supply_voltage is not None else current.get("empty_supply_voltage")
+    
+    # Check which columns exist
+    cur.execute("PRAGMA table_info(water_level_settings)")
+    existing_columns = [row[1] for row in cur.fetchall()]
+    has_new_columns = "use_supply_normalization" in existing_columns
+    
+    if has_new_columns:
+        # Use new schema with all fields
+        cur.execute(
+            """INSERT OR REPLACE INTO water_level_settings 
+               (id, full_voltage, empty_voltage, updated_at, use_supply_normalization,
+                adc_channel_signal, adc_channel_supply, divider_r_top, divider_r_bottom,
+                full_ratio, empty_ratio, full_supply_voltage, empty_supply_voltage)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("default", final_full_voltage, final_empty_voltage, now, final_use_normalization,
+             final_channel_signal, final_channel_supply, final_r_top, final_r_bottom,
+             final_full_ratio, final_empty_ratio, final_full_supply, final_empty_supply)
+        )
+        print(f"[Water Level] Updated calibration: full={final_full_voltage}V, empty={final_empty_voltage}V, normalization={final_use_normalization}")
+    else:
+        # Old schema - update only basic fields
+        cur.execute(
+            """INSERT OR REPLACE INTO water_level_settings (id, full_voltage, empty_voltage, updated_at)
+               VALUES (?, ?, ?, ?)""",
+            ("default", final_full_voltage, final_empty_voltage, now)
+        )
+        print(f"[Water Level] Updated calibration: full={final_full_voltage}V, empty={final_empty_voltage}V")
+    
     conn.commit()
     conn.close()
-    print(f"[Water Level] Updated calibration: full={full_voltage}V, empty={empty_voltage}V")
+
+
+def ratio_to_percent(ratio: float, full_ratio: Optional[float] = None, empty_ratio: Optional[float] = None) -> Tuple[int, str, str]:
+    """
+    Convert signal/supply ratio to water level percent using linear calibration.
+    
+    Args:
+        ratio: Signal voltage / Supply voltage ratio
+        full_ratio: Full tank ratio (if None, loads from DB)
+        empty_ratio: Empty tank ratio (if None, loads from DB)
+    
+    Returns:
+        Tuple of (level_percent, status, message)
+        - level_percent: Integer 0-100
+        - status: "ok", "error"
+        - message: Human-readable status message
+    """
+    # Load calibration from DB if not provided
+    if full_ratio is None or empty_ratio is None:
+        settings = db_get_water_level_settings()
+        full_ratio = settings.get("full_ratio")
+        empty_ratio = settings.get("empty_ratio")
+        
+        # If ratio calibration not set, compute from voltage calibration (for migration)
+        if full_ratio is None or empty_ratio is None:
+            # Fallback: use old voltage-based logic if ratios not available
+            return (0, "error", "Ratio calibration not configured")
+    
+    # Validate calibration
+    EPSILON = 0.0001  # Minimum ratio difference
+    if full_ratio <= 0 or empty_ratio <= 0:
+        return (0, "error", "Invalid calibration settings (ratios must be positive)")
+    
+    if abs(full_ratio - empty_ratio) < EPSILON:
+        return (0, "error", "Invalid calibration settings (full and empty ratios too close)")
+    
+    # Determine which direction: if full_ratio < empty_ratio, it's inverted (lower ratio = higher level)
+    # If full_ratio > empty_ratio, it's normal (higher ratio = higher level)
+    
+    # Clamp to calibration range
+    if full_ratio < empty_ratio:
+        # Inverted mapping (lower ratio = higher level)
+        if ratio <= full_ratio:
+            percent = 100
+        elif ratio >= empty_ratio:
+            percent = 0
+        else:
+            # Linear interpolation
+            ratio_range = empty_ratio - full_ratio
+            percent = 100.0 * (empty_ratio - ratio) / ratio_range
+            percent = max(0, min(100, percent))  # Clamp to 0-100
+    else:
+        # Normal mapping (higher ratio = higher level)
+        if ratio >= full_ratio:
+            percent = 100
+        elif ratio <= empty_ratio:
+            percent = 0
+        else:
+            # Linear interpolation
+            ratio_range = full_ratio - empty_ratio
+            percent = 100.0 * (ratio - empty_ratio) / ratio_range
+            percent = max(0, min(100, percent))  # Clamp to 0-100
+    
+    return (int(round(percent)), "ok", "Reading stable")
 
 
 def voltage_to_percent(voltage: float, full_v: Optional[float] = None, empty_v: Optional[float] = None) -> Tuple[int, str, str]:
@@ -1533,7 +1676,7 @@ def voltage_to_percent(voltage: float, full_v: Optional[float] = None, empty_v: 
     
     Returns:
         Tuple of (level_percent, status, message)
-        - level_percent: Integer 0-100, or None if calibration invalid
+        - level_percent: Integer 0-100
         - status: "ok", "error"
         - message: Human-readable status message
     """
@@ -1600,7 +1743,11 @@ def db_upsert_water_level_snapshot(
     level_percent: int,
     status: str,
     message: str,
-    updated_at: int
+    updated_at: int,
+    avg_signal_voltage: Optional[float] = None,
+    avg_supply_div_voltage: Optional[float] = None,
+    supply_voltage_est: Optional[float] = None,
+    ratio: Optional[float] = None
 ) -> None:
     """Store water level snapshot (delete old, insert new)."""
     conn = sqlite3.connect(DB_PATH)
@@ -1616,13 +1763,30 @@ def db_upsert_water_level_snapshot(
     # Delete old snapshots (keep only latest)
     cur.execute("DELETE FROM water_level_snapshot")
     
-    # Insert new snapshot
-    cur.execute(
-        """INSERT INTO water_level_snapshot 
-           (avg_voltage, level_percent, status, message, updated_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (avg_voltage, level_percent, status, message, updated_at, created_at)
-    )
+    # Check if new columns exist
+    cur.execute("PRAGMA table_info(water_level_snapshot)")
+    existing_columns = [row[1] for row in cur.fetchall()]
+    has_new_columns = "avg_signal_voltage" in existing_columns
+    
+    if has_new_columns:
+        # Insert new snapshot with all fields
+        cur.execute(
+            """INSERT INTO water_level_snapshot 
+               (avg_voltage, level_percent, status, message, updated_at, created_at,
+                avg_signal_voltage, avg_supply_div_voltage, supply_voltage_est, ratio)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (avg_voltage, level_percent, status, message, updated_at, created_at,
+             avg_signal_voltage, avg_supply_div_voltage, supply_voltage_est, ratio)
+        )
+    else:
+        # Old schema - insert without new columns
+        cur.execute(
+            """INSERT INTO water_level_snapshot 
+               (avg_voltage, level_percent, status, message, updated_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (avg_voltage, level_percent, status, message, updated_at, created_at)
+        )
+    
     conn.commit()
     conn.close()
 
@@ -1653,23 +1817,85 @@ def _water_level_thread() -> None:
         try:
             now = int(time.time())
             
-            # Take 3 samples with 100-200ms spacing
-            samples = []
+            # Load settings to check if normalization is enabled
+            settings = db_get_water_level_settings()
+            use_normalization = settings.get("use_supply_normalization", True)
+            channel_signal = int(settings.get("adc_channel_signal", 0))
+            channel_supply = int(settings.get("adc_channel_supply", 1))
+            r_top = float(settings.get("divider_r_top", 47000.0))
+            r_bottom = float(settings.get("divider_r_bottom", 10000.0))
+            
+            # Take 3 samples of both channels with 150ms spacing
+            signal_samples = []
+            supply_samples = []
             for i in range(3):
-                voltage = read_ads1115_voltage(busnum=1, address=None, channel=0)
-                if voltage is not None:
-                    samples.append(voltage)
+                # Read signal channel (A0 by default)
+                signal_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_signal)
+                if signal_v is not None:
+                    signal_samples.append(signal_v)
+                
+                # Read supply divider channel (A1 by default)
+                supply_div_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_supply)
+                if supply_div_v is not None:
+                    supply_samples.append(supply_div_v)
+                
                 if i < 2:  # Don't sleep after last sample
                     time.sleep(0.15)  # 150ms between samples
             
-            if len(samples) >= 1:
-                # Compute average voltage
-                avg_voltage = sum(samples) / len(samples)
+            # Process readings
+            if use_normalization and len(signal_samples) >= 1 and len(supply_samples) >= 1:
+                # Normalization mode: use ratio
+                avg_signal = sum(signal_samples) / len(signal_samples)
+                avg_supply_div = sum(supply_samples) / len(supply_samples)
                 
-                # Convert to percent
+                # Compute supply voltage estimate: V_supply = V_divider * (Rtop+Rbottom)/Rbottom
+                supply_voltage_est = avg_supply_div * (r_top + r_bottom) / r_bottom if r_bottom > 0 else 0.0
+                
+                # Compute ratio = signal / supply
+                ratio = avg_signal / supply_voltage_est if supply_voltage_est > 0 else 0.0
+                
+                # Convert ratio to percent
+                level_percent, status, message = ratio_to_percent(ratio)
+                
+                # For backward compatibility, avg_voltage is signal voltage
+                avg_voltage = avg_signal
+                
+                # Store snapshot with all fields
+                db_upsert_water_level_snapshot(
+                    avg_voltage=avg_voltage,
+                    level_percent=level_percent,
+                    status=status,
+                    message=message,
+                    updated_at=now,
+                    avg_signal_voltage=avg_signal,
+                    avg_supply_div_voltage=avg_supply_div,
+                    supply_voltage_est=supply_voltage_est,
+                    ratio=ratio
+                )
+                
+                # Update in-memory cache
+                _water_level_latest.update({
+                    "level_percent": level_percent,
+                    "avg_voltage": avg_voltage,
+                    "avg_signal_voltage": avg_signal,
+                    "avg_supply_div_voltage": avg_supply_div,
+                    "supply_voltage_est": supply_voltage_est,
+                    "ratio": ratio,
+                    "status": status,
+                    "message": message,
+                    "updated_at": now,
+                    "age_seconds": 0
+                })
+                
+                print(f"[Water Level] Updated (normalized): {level_percent}% (signal={avg_signal:.3f}V, supply={supply_voltage_est:.3f}V, ratio={ratio:.4f}) - {message}")
+            elif len(signal_samples) >= 1:
+                # Fallback mode: direct voltage (no normalization or supply read failed)
+                avg_voltage = sum(signal_samples) / len(signal_samples)
+                
+                # Convert to percent using old voltage-based method
                 level_percent, status, message = voltage_to_percent(avg_voltage)
                 
-                # Store snapshot
+                # Store snapshot (old schema compatibility)
                 db_upsert_water_level_snapshot(
                     avg_voltage=avg_voltage,
                     level_percent=level_percent,
@@ -1688,7 +1914,7 @@ def _water_level_thread() -> None:
                     "age_seconds": 0
                 })
                 
-                print(f"[Water Level] Updated: {level_percent}% ({avg_voltage:.3f}V) - {message}")
+                print(f"[Water Level] Updated (voltage-only): {level_percent}% ({avg_voltage:.3f}V) - {message}")
             else:
                 # No successful samples
                 # Keep previous snapshot but mark as error
@@ -1700,7 +1926,11 @@ def _water_level_thread() -> None:
                         level_percent=prev_snapshot.get("level_percent", 0),
                         status="error",
                         message="I2C read error (ADS1115)",
-                        updated_at=now
+                        updated_at=now,
+                        avg_signal_voltage=prev_snapshot.get("avg_signal_voltage"),
+                        avg_supply_div_voltage=prev_snapshot.get("avg_supply_div_voltage"),
+                        supply_voltage_est=prev_snapshot.get("supply_voltage_est"),
+                        ratio=prev_snapshot.get("ratio")
                     )
                     _water_level_latest.update({
                         "level_percent": prev_snapshot.get("level_percent"),
@@ -1866,10 +2096,10 @@ def api_water_level_live(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
     """
-    Get live voltage reading from ADS1115 A0 (single read, not from snapshot).
+    Get live voltage reading from ADS1115 (reads signal and supply channels, computes ratio).
     
-    Takes 3 quick reads and averages them for stability.
-    Returns JSON with voltage, raw, address, message.
+    Takes 3 quick reads of both channels and averages them for stability.
+    Returns JSON with signal_voltage, supply_div_voltage, supply_voltage_est, ratio, level_percent.
     No 500s - always HTTP 200.
     """
     err = require_auth(request, x_api_key)
@@ -1877,17 +2107,26 @@ def api_water_level_live(
         return err
     
     try:
-        # Take 3 quick samples
-        samples = []
+        # Load settings
+        settings = db_get_water_level_settings()
+        use_normalization = settings.get("use_supply_normalization", True)
+        channel_signal = int(settings.get("adc_channel_signal", 0))
+        channel_supply = int(settings.get("adc_channel_supply", 1))
+        r_top = float(settings.get("divider_r_top", 47000.0))
+        r_bottom = float(settings.get("divider_r_bottom", 10000.0))
+        
+        # Take 3 quick samples of both channels
+        signal_samples = []
+        supply_samples = []
         detected_address = None
         
         for i in range(3):
-            voltage = read_ads1115_voltage(busnum=1, address=None, channel=0)
-            if voltage is not None:
-                samples.append(voltage)
+            # Read signal channel
+            signal_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_signal)
+            if signal_v is not None:
+                signal_samples.append(signal_v)
                 # Try to detect which address worked (for reporting)
                 if detected_address is None:
-                    # Check addresses to find which one works
                     for addr in [0x48, 0x49, 0x4A, 0x4B]:
                         try:
                             import ads1115
@@ -1896,25 +2135,61 @@ def api_water_level_live(
                                 break
                         except:
                             pass
+            
+            # Read supply divider channel
+            supply_div_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_supply)
+            if supply_div_v is not None:
+                supply_samples.append(supply_div_v)
+            
             if i < 2:  # Don't sleep after last sample
                 time.sleep(0.1)  # 100ms between samples
         
-        if len(samples) >= 1:
-            avg_voltage = sum(samples) / len(samples)
-            return JSONResponse({
-                "ok": True,
-                "voltage": avg_voltage,
-                "raw": None,  # We don't track raw in read_ads1115_voltage, but could add if needed
-                "address": detected_address or "0x48",
-                "message": "ok"
-            })
+        if len(signal_samples) >= 1:
+            avg_signal = sum(signal_samples) / len(signal_samples)
+            
+            # Compute supply and ratio if normalization enabled and supply read succeeded
+            if use_normalization and len(supply_samples) >= 1:
+                avg_supply_div = sum(supply_samples) / len(supply_samples)
+                supply_voltage_est = avg_supply_div * (r_top + r_bottom) / r_bottom if r_bottom > 0 else 0.0
+                ratio = avg_signal / supply_voltage_est if supply_voltage_est > 0 else 0.0
+                level_percent, status, message = ratio_to_percent(ratio)
+                
+                return JSONResponse({
+                    "ok": True,
+                    "signal_voltage": avg_signal,
+                    "supply_div_voltage": avg_supply_div,
+                    "supply_voltage_est": supply_voltage_est,
+                    "ratio": ratio,
+                    "level_percent": level_percent,
+                    "address": detected_address or "0x48",
+                    "status": status,
+                    "message": message
+                })
+            else:
+                # Fallback: signal only (no normalization or supply read failed)
+                level_percent, status, message = voltage_to_percent(avg_signal)
+                return JSONResponse({
+                    "ok": True,
+                    "signal_voltage": avg_signal,
+                    "supply_div_voltage": None,
+                    "supply_voltage_est": None,
+                    "ratio": None,
+                    "level_percent": level_percent,
+                    "address": detected_address or "0x48",
+                    "status": status,
+                    "message": message
+                })
         else:
             return JSONResponse({
                 "ok": False,
                 "error": "read_failed",
-                "voltage": None,
-                "raw": None,
+                "signal_voltage": None,
+                "supply_div_voltage": None,
+                "supply_voltage_est": None,
+                "ratio": None,
+                "level_percent": None,
                 "address": None,
+                "status": "error",
                 "message": "I2C read error (ADS1115)"
             })
     
@@ -1925,9 +2200,13 @@ def api_water_level_live(
         return JSONResponse({
             "ok": False,
             "error": "internal_error",
-            "voltage": None,
-            "raw": None,
+            "signal_voltage": None,
+            "supply_div_voltage": None,
+            "supply_voltage_est": None,
+            "ratio": None,
+            "level_percent": None,
             "address": None,
+            "status": "error",
             "message": f"Internal error: {str(e)}"
         })
 

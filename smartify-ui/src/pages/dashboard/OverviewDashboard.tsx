@@ -473,12 +473,17 @@ function HeaderRelayCard() {
 type WaterLevelPayload = {
   ok: boolean;
   level_percent: number | null;
-  avg_voltage: number | null;
+  avg_voltage: number | null; // Backward compatibility (signal voltage)
+  signal_voltage?: number | null;
+  supply_div_voltage?: number | null;
+  supply_voltage_est?: number | null;
+  ratio?: number | null;
   status: "ok" | "stale" | "error" | "calibrating" | "unknown";
   age_seconds: number;
   message: string;
   calibration_full_voltage?: number | null;
   calibration_empty_voltage?: number | null;
+  use_supply_normalization?: boolean;
 };
 
 function WaterLevelCard() {
@@ -515,9 +520,15 @@ function WaterLevelCard() {
           </span>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-zinc-400">Voltage</span>
-          <span className="font-semibold text-zinc-200">
-            {waterData?.avg_voltage != null ? `${waterData.avg_voltage.toFixed(3)} V` : "—"}
+          <span className="text-zinc-400">Status</span>
+          <span className={`font-semibold ${
+            waterData?.status === "error" || waterData?.status === "stale"
+              ? "text-amber-400"
+              : waterData?.status === "ok"
+              ? "text-zinc-200"
+              : "text-zinc-400"
+          }`}>
+            {waterData?.message ?? "—"}
           </span>
         </div>
       </CardContent>
