@@ -18,6 +18,13 @@ from starlette.middleware.sessions import SessionMiddleware
 # Water level module
 from smartify.water_level import api as water_level_api, service as water_level_service
 
+# Startup sanity check: log ADS1115 module location
+try:
+    from smartify import ads1115
+    print(f"[Startup] ads1115 module loaded from: {ads1115.__file__}")
+except ImportError as e:
+    print(f"[Startup] WARNING: Could not import ads1115 module: {e}")
+
 # =========================
 # Config (no hardcoded IPs)
 # =========================

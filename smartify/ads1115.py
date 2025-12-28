@@ -21,6 +21,10 @@ except ImportError:
 # Global lock to serialize all I2C access (prevents concurrent reads from interfering)
 I2C_LOCK = threading.Lock()
 
+# Mirrored channel detection counter (for consecutive detections)
+_mirrored_consecutive_count = 0
+_MIRRORED_THRESHOLD = 3  # Warn only after 3 consecutive mirrored readings
+
 
 # ADS1115 I2C address (default)
 ADS1115_ADDRESS = 0x48
@@ -387,7 +391,13 @@ def ads_read_voltage_pair(
     Returns:
         Tuple of (voltage0, voltage1) in volts, or (None, None) on error
         Each voltage may be None if that specific channel read failed
+    
+    Note:
+        For water level sensor, A0 (signal) voltage INCREASES as tank empties.
+        Typical values: Full tank ≈ 0.5V, Empty tank ≈ 2.2V
     """
+    global _mirrored_consecutive_count
+    
     if channel0 not in (0, 1, 2, 3) or channel1 not in (0, 1, 2, 3):
         print(f"[ADS1115] Invalid channels: {channel0}, {channel1}. Must be 0-3.")
         return (None, None)
@@ -416,16 +426,23 @@ def ads_read_voltage_pair(
                             # ADS1115 is 16-bit signed: range is -32768 to +32767
                             voltage = raw_value * (pga / 32768.0)
                             voltages[idx] = voltage
-                            print(f"[ADS1115] Channel {ch}: raw={raw_value}, voltage={voltage:.6f}V")
+                            # Reduced logging: only log on errors or warnings, not every read
                         else:
                             print(f"[ADS1115] Channel {ch}: read failed (None)")
                             voltages[idx] = None
                     
-                    # Verify channels are distinct
+                    # Verify channels are distinct (warn only after N consecutive mirrored readings)
                     if voltages[0] is not None and voltages[1] is not None:
                         diff = abs(voltages[0] - voltages[1])
-                        if diff < 0.001:
-                            print(f"[ADS1115] WARNING: Channels {channel0} and {channel1} returned same value: {voltages[0]:.6f}V")
+                        if diff < 0.01:  # 10mV threshold
+                            _mirrored_consecutive_count += 1
+                            if _mirrored_consecutive_count >= _MIRRORED_THRESHOLD:
+                                print(f"[ADS1115] WARNING: Channels {channel0} and {channel1} returned same value "
+                                      f"{voltages[0]:.6f}V for {_mirrored_consecutive_count} consecutive reads")
+                        else:
+                            # Reset counter on distinct read
+                            if _mirrored_consecutive_count > 0:
+                                _mirrored_consecutive_count = 0
                     
                     # Return both voltages (may be None if read failed)
                     return (voltages[0], voltages[1])
