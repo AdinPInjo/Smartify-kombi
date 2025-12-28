@@ -437,7 +437,17 @@ function WaterLevelSettingsCard() {
               </span>
             </div>
             <div>
-              <span className="text-zinc-400">Supply:</span>{" "}
+              <span className="text-zinc-400">Supply (A1):</span>{" "}
+              <span className="font-semibold text-zinc-200">
+                {liveData?.supply_div_voltage != null
+                  ? `${liveData.supply_div_voltage.toFixed(3)} V`
+                  : snapshotData?.supply_div_voltage != null
+                  ? `${snapshotData.supply_div_voltage.toFixed(3)} V`
+                  : "—"}
+              </span>
+            </div>
+            <div>
+              <span className="text-zinc-400">Supply Est:</span>{" "}
               <span className="font-semibold text-zinc-200">
                 {liveData?.supply_voltage_est != null
                   ? `${liveData.supply_voltage_est.toFixed(2)} V`

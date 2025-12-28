@@ -1949,6 +1949,9 @@ def _water_level_thread() -> None:
             # Take 3 samples of both channels using robust pair-read
             signal_samples = []
             supply_samples = []
+            CHANNEL_MIRROR_THRESHOLD = 0.002  # 2mV (very strict - only real wiring issues)
+            mirrored_count = 0  # Count how many samples appear mirrored
+            
             for i in range(3):
                 # Read both channels in one SMBus session (more reliable)
                 signal_v, supply_div_v = read_ads1115_voltage_pair(
@@ -1958,6 +1961,11 @@ def _water_level_thread() -> None:
                     signal_samples.append(signal_v)
                 if supply_div_v is not None:
                     supply_samples.append(supply_div_v)
+                
+                # Check if this individual sample appears mirrored (both not None and very close)
+                if signal_v is not None and supply_div_v is not None:
+                    if abs(signal_v - supply_div_v) < CHANNEL_MIRROR_THRESHOLD:
+                        mirrored_count += 1
                 
                 if i < 2:  # Don't sleep after last sample
                     time.sleep(0.1)  # Short delay before next sample pair
@@ -1969,9 +1977,8 @@ def _water_level_thread() -> None:
                 avg_supply_div = sum(supply_samples) / len(supply_samples)
                 
                 # Sanity check: detect if channels are mirroring (A0 == A1)
-                # Only trigger if difference is very small (< 2mV) after robust pair-read
-                CHANNEL_MIRROR_THRESHOLD = 0.002  # 2mV (very strict - only real wiring issues)
-                if abs(avg_signal - avg_supply_div) < CHANNEL_MIRROR_THRESHOLD:
+                # Only trigger if ALL 3 samples appear mirrored (all samples show same channel)
+                if mirrored_count >= 3:
                     print(f"[Water Level] ERROR: Channels mirrored! signal_ch=A{channel_signal} → {avg_signal:.4f}V, "
                           f"supply_ch=A{channel_supply} → {avg_supply_div:.4f}V (diff={abs(avg_signal - avg_supply_div):.6f}V)")
                     # Set error status (don't compute level_percent as channels are invalid)
@@ -2487,6 +2494,9 @@ def api_water_level_live(
         # Take 3 quick samples of both channels using robust pair-read
         signal_samples = []
         supply_samples = []
+        CHANNEL_MIRROR_THRESHOLD = 0.002  # 2mV (very strict - only real wiring issues)
+        mirrored_count = 0  # Count how many samples appear mirrored
+        
         for i in range(3):
             # Read both channels in one SMBus session (more reliable)
             signal_v, supply_div_v = read_ads1115_voltage_pair(
@@ -2496,6 +2506,11 @@ def api_water_level_live(
                 signal_samples.append(signal_v)
             if supply_div_v is not None:
                 supply_samples.append(supply_div_v)
+            
+            # Check if this individual sample appears mirrored (both not None and very close)
+            if signal_v is not None and supply_div_v is not None:
+                if abs(signal_v - supply_div_v) < CHANNEL_MIRROR_THRESHOLD:
+                    mirrored_count += 1
             
             if i < 2:  # Don't sleep after last sample
                 time.sleep(0.1)  # Short delay before next sample pair
@@ -2508,16 +2523,17 @@ def api_water_level_live(
                 avg_supply_div = sum(supply_samples) / len(supply_samples)
                 
                 # Sanity check: detect if channels are mirroring (A0 == A1)
-                # Only trigger if difference is very small (< 2mV) after robust pair-read
-                CHANNEL_MIRROR_THRESHOLD = 0.002  # 2mV (very strict - only real wiring issues)
-                if abs(avg_signal - avg_supply_div) < CHANNEL_MIRROR_THRESHOLD:
-                    # Channels are mirroring - return error status
+                # Only trigger if ALL 3 samples appear mirrored (all samples show same channel)
+                if mirrored_count >= 3:
+                    # Channels are mirroring - return error status but still include voltages for debugging
+                    supply_voltage_est = avg_supply_div * (r_top + r_bottom) / r_bottom if r_bottom > 0 else 0.0
+                    ratio = avg_signal / supply_voltage_est if supply_voltage_est > 0 else None
                     return JSONResponse({
                         "ok": False,
-                        "signal_voltage": avg_signal,
-                        "supply_div_voltage": avg_supply_div,
-                        "supply_voltage_est": None,
-                        "ratio": None,
+                        "signal_voltage": float(avg_signal),
+                        "supply_div_voltage": float(avg_supply_div),
+                        "supply_voltage_est": float(supply_voltage_est) if supply_voltage_est else None,
+                        "ratio": float(ratio) if ratio is not None else None,
                         "level_percent": None,
                         "address": detected_address or "0x48",
                         "status": "error",
