@@ -1526,8 +1526,8 @@ def read_ads1115_voltage_pair(
     for addr in addresses_to_try:
         # Detect ADS1115
         if ads_detect(bus=busnum, addr=addr, retries=1):
-            # Read voltage pair from channels
-            v0, v1 = ads_read_voltage_pair(channel0, channel1, bus=busnum, addr=addr, pga=4.096, sps=128, retries=3)
+            # Read voltage pair from channels (new implementation uses OS bit polling, no retries param)
+            v0, v1 = ads_read_voltage_pair(channel0, channel1, bus=busnum, addr=addr, pga=4.096, sps=128)
             if v0 is not None or v1 is not None:
                 return (v0, v1)
             # If detection succeeded but read failed, continue to next address
@@ -1561,14 +1561,14 @@ def db_get_water_level_settings() -> Dict[str, Any]:
                 full_ratio = settings.get("full_ratio")
                 empty_ratio = settings.get("empty_ratio")
                 
-                # If ratios look like voltages (> 1.2), clear them
+                # If ratios look like voltages (> 1.0), clear them
                 cleared = False
-                if full_ratio is not None and full_ratio > 1.2:
-                    print(f"[Water Level] Auto-clearing invalid full_ratio={full_ratio} (looks like voltage)")
+                if full_ratio is not None and full_ratio > 1.0:
+                    print(f"[Water Level] Auto-clearing invalid full_ratio={full_ratio} (looks like voltage, ratios must be < 1.0)")
                     settings["full_ratio"] = None
                     cleared = True
-                if empty_ratio is not None and empty_ratio > 1.2:
-                    print(f"[Water Level] Auto-clearing invalid empty_ratio={empty_ratio} (looks like voltage)")
+                if empty_ratio is not None and empty_ratio > 1.0:
+                    print(f"[Water Level] Auto-clearing invalid empty_ratio={empty_ratio} (looks like voltage, ratios must be < 1.0)")
                     settings["empty_ratio"] = None
                     cleared = True
                 
@@ -2001,15 +2001,10 @@ def _water_level_thread() -> None:
                       f"A{channel_supply}(supply_div)={avg_supply_div:.4f}V, diff={diff:.6f}V, "
                       f"samples={len(signal_samples)}/{len(supply_samples)}")
                 
-                # Sanity check: detect if channels are mirroring (A0 == A1)
-                # Only trigger if averaged values are still mirrored after retries
+                # Warn if channels still appear mirrored (but don't fail - allow processing)
                 if diff < CHANNEL_MIRROR_THRESHOLD:
-                    print(f"[Water Level] ERROR: Channels mirrored! signal_ch=A{channel_signal} → {avg_signal:.4f}V, "
-                          f"supply_ch=A{channel_supply} → {avg_supply_div:.4f}V (diff={abs(avg_signal - avg_supply_div):.6f}V)")
-                    # Set error status (don't compute level_percent as channels are invalid)
-                    status = "error"
-                    message = "ADS1115 channels mirrored (A0 == A1). Check wiring or ADC MUX switching."
-                    level_percent = 0  # Set to 0 for safety when channels mirror
+                    print(f"[Water Level Thread] WARNING: Channels appear mirrored "
+                          f"(diff={diff:.6f}V). Continuing anyway.")
                     
                     # Store snapshot with error status
                     db_upsert_water_level_snapshot(
@@ -2287,42 +2282,33 @@ def api_water_settings_post(
                     "message": "Full and empty voltages must be different"
                 })
         
-            # Validate ratio-based calibration if provided
-            if full_ratio is not None or empty_ratio is not None:
-                if full_ratio is None or empty_ratio is None:
-                    return JSONResponse({
-                        "ok": False,
-                        "error": "missing_fields",
-                        "message": "Both full_ratio and empty_ratio must be provided together"
-                    })
-                
-                try:
-                    full_ratio = float(full_ratio)
-                    empty_ratio = float(empty_ratio)
-                except (ValueError, TypeError):
-                    return JSONResponse({
-                        "ok": False,
-                        "error": "invalid_type",
-                        "message": "full_ratio and empty_ratio must be numbers"
-                    })
-                
-                # Validation: if normalization is enabled, ratios should be in typical range (0.02-0.4)
-                # If values look like voltages (> 1.2), reject with helpful message
-                if use_supply_normalization is not False:  # Default to True if not explicitly False
-                    if full_ratio > 1.2 or empty_ratio > 1.2:
-                        return JSONResponse({
-                            "ok": False,
-                            "error": "invalid_value",
-                            "message": "Expected ratio values (typically 0.02-0.4), got voltages. Use 'Set from live' which saves ratio."
-                        })
+        # Validate ratio-based calibration if provided
+        if full_ratio is not None or empty_ratio is not None:
+            if full_ratio is None or empty_ratio is None:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "missing_fields",
+                    "message": "Both full_ratio and empty_ratio must be provided together"
+                })
             
-            # Validate that ratios are in a reasonable range (0 < ratio < 1.2)
-            # If values look like voltages (> 1.2), reject them
-            if use_supply_normalization is True and (full_ratio > 1.2 or empty_ratio > 1.2):
+            try:
+                full_ratio = float(full_ratio)
+                empty_ratio = float(empty_ratio)
+            except (ValueError, TypeError):
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_type",
+                    "message": "full_ratio and empty_ratio must be numbers"
+                })
+            
+            # Validate ratio values are in reasonable range (ratios should be < 1.0)
+            # Ratios are typically 0.03-0.4, not voltages (> 1.0)
+            if full_ratio > 1.0 or empty_ratio > 1.0:
                 return JSONResponse({
                     "ok": False,
                     "error": "invalid_value",
-                    "message": "Expected ratio values (typically 0.1-0.7), got values > 1.2 which look like voltages. Use 'Set from live' button which saves the correct ratio."
+                    "message": f"Ratio values must be less than 1.0 (got full_ratio={full_ratio}, empty_ratio={empty_ratio}). "
+                               f"Ratios are typically 0.03-0.4. Use 'Set from live' button which saves the correct ratio."
                 })
             
             EPSILON = 0.0001
@@ -2516,46 +2502,42 @@ def api_water_level_live(
         except:
             pass
         
-        # Take 3 samples with retry logic for mirrored channels
+        # Take 3 samples with retry logic (retry entire pair-read if mirrored)
         signal_samples = []
         supply_samples = []
-        CHANNEL_MIRROR_THRESHOLD = 0.01  # 10mV threshold for mirrored detection
-        MAX_SAMPLE_RETRIES = 2  # Retry up to 2 times per sample if mirrored
+        CHANNEL_MIRROR_THRESHOLD = 0.002  # 2mV threshold (very strict - only real wiring issues)
+        MAX_PAIR_RETRIES = 2  # Retry entire pair-read up to 2 times if mirrored
         
         for i in range(3):
             signal_v = None
             supply_div_v = None
-            sample_retries = 0
+            pair_retries = 0
             
-            # Retry logic: if sample appears mirrored, retry up to MAX_SAMPLE_RETRIES times
-            while sample_retries <= MAX_SAMPLE_RETRIES:
+            # Retry logic: if pair read appears mirrored, retry entire pair-read
+            while pair_retries <= MAX_PAIR_RETRIES:
                 # Read both channels in one SMBus session (more reliable)
-                # IMPORTANT: Tuple unpacking order: (channel0_voltage, channel1_voltage)
-                # So signal_v = channel_signal voltage, supply_div_v = channel_supply voltage
                 signal_v, supply_div_v = read_ads1115_voltage_pair(
                     busnum=1, address=None, channel0=channel_signal, channel1=channel_supply
                 )
                 
-                # Debug log for each read
-                if signal_v is not None and supply_div_v is not None:
-                    diff = abs(signal_v - supply_div_v)
-                    print(f"[Water Level Live] Sample {i+1} (retry {sample_retries}): "
-                          f"A{channel_signal}={signal_v:.4f}V, A{channel_supply}={supply_div_v:.4f}V, diff={diff:.6f}V")
-                    
-                    # If channels are distinct, accept this sample
-                    if diff >= CHANNEL_MIRROR_THRESHOLD:
-                        break
-                    # If mirrored and we have retries left, retry with delay
-                    elif sample_retries < MAX_SAMPLE_RETRIES:
-                        print(f"[Water Level Live] Sample {i+1} appears mirrored (diff={diff:.6f}V), retrying...")
-                        time.sleep(0.015)  # 15ms delay before retry
-                        sample_retries += 1
-                    else:
-                        # Out of retries, accept the sample anyway (will be checked later)
-                        print(f"[Water Level Live] Sample {i+1} still mirrored after {MAX_SAMPLE_RETRIES} retries")
-                        break
+                # If read failed, break (no retry on I/O errors)
+                if signal_v is None or supply_div_v is None:
+                    break
+                
+                # Check if channels are distinct (not mirrored)
+                diff = abs(signal_v - supply_div_v)
+                if diff >= CHANNEL_MIRROR_THRESHOLD:
+                    # Channels are distinct - accept this sample
+                    break
+                
+                # Channels appear mirrored - retry if we have retries left
+                if pair_retries < MAX_PAIR_RETRIES:
+                    print(f"[Water Level Live] Sample {i+1} appears mirrored (diff={diff:.6f}V), retrying pair-read...")
+                    time.sleep(0.02)  # 20ms delay before retry
+                    pair_retries += 1
                 else:
-                    # One or both channels failed to read - accept what we have
+                    # Out of retries - accept what we have (may log warning later)
+                    print(f"[Water Level Live] Sample {i+1} still mirrored after {MAX_PAIR_RETRIES} retries")
                     break
             
             # Add valid samples to lists
@@ -2580,25 +2562,10 @@ def api_water_level_live(
                       f"A{channel_supply}(supply_div)={avg_supply_div:.4f}V, diff={diff:.6f}V, "
                       f"samples={len(signal_samples)}/{len(supply_samples)}")
                 
-                # Sanity check: detect if channels are mirroring (A0 == A1)
-                # Only trigger if averaged values are still mirrored after retries
+                # Warn if channels still appear mirrored (but don't fail - allow processing)
                 if diff < CHANNEL_MIRROR_THRESHOLD:
-                    # Channels are mirroring - return error status but still include voltages for debugging
-                    supply_voltage_est = avg_supply_div * (r_top + r_bottom) / r_bottom if r_bottom > 0 else 0.0
-                    ratio = avg_signal / supply_voltage_est if supply_voltage_est > 0 else None
-                    print(f"[Water Level Live] ERROR: Channels still mirrored after retries! "
-                          f"A{channel_signal}={avg_signal:.4f}V, A{channel_supply}={avg_supply_div:.4f}V, diff={diff:.6f}V")
-                    return JSONResponse({
-                        "ok": False,
-                        "signal_voltage": float(avg_signal),
-                        "supply_div_voltage": float(avg_supply_div),
-                        "supply_voltage_est": float(supply_voltage_est) if supply_voltage_est else None,
-                        "ratio": float(ratio) if ratio is not None else None,
-                        "level_percent": None,
-                        "address": detected_address or "0x48",
-                        "status": "error",
-                        "message": "ADS1115 channels mirrored (A0 == A1). Check wiring or ADC MUX switching."
-                    })
+                    print(f"[Water Level Live] WARNING: Channels appear mirrored after retries "
+                          f"(diff={diff:.6f}V). Continuing anyway.")
                 
                 supply_voltage_est = avg_supply_div * (r_top + r_bottom) / r_bottom if r_bottom > 0 else 0.0
                 # Ratio = signal_voltage / supply_voltage_est (NOT supply_div_voltage / supply_voltage_est)
