@@ -268,3 +268,121 @@ def ads_read_voltage(
     voltage = (raw / 32767.0) * pga
     return voltage
 
+
+def ads_read_voltage_pair(
+    channel0: int,
+    channel1: int,
+    bus: int = 1,
+    addr: int = ADS1115_ADDRESS,
+    pga: float = 4.096,
+    sps: int = 128,
+    retries: int = 3
+) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Read voltages from two single-ended channels in one SMBus session.
+    
+    This function opens a single SMBus connection and reads both channels sequentially
+    using a robust pattern to avoid stale conversions. This is more reliable than
+    calling ads_read_voltage() twice separately.
+    
+    Args:
+        channel0: First channel number (0-3)
+        channel1: Second channel number (0-3)
+        bus: I2C bus number (typically 1 on Raspberry Pi)
+        addr: I2C address (default 0x48)
+        pga: Programmable gain amplifier voltage range (default 4.096V)
+        sps: Samples per second (default 128)
+        retries: Number of retry attempts on I/O error
+    
+    Returns:
+        Tuple of (voltage0, voltage1) in volts, or (None, None) on error
+        Each voltage may be None if that specific channel read failed
+    """
+    if channel0 not in (0, 1, 2, 3) or channel1 not in (0, 1, 2, 3):
+        print(f"[ADS1115] Invalid channels: {channel0}, {channel1}. Must be 0-3.")
+        return (None, None)
+    
+    try:
+        from smbus2 import SMBus
+    except ImportError:
+        print("[ADS1115] Error: smbus2 not installed")
+        return (None, None)
+    
+    # Build config register values for both channels
+    mux0 = CHANNEL_MUX[channel0]
+    mux1 = CHANNEL_MUX[channel1]
+    pga_value = _get_pga_value(pga)
+    sps_value = _get_sps_value(sps)
+    
+    # Config: OS (start) | MUX | PGA | MODE (single-shot) | DR | COMP_QUE (disable)
+    config_base = (
+        ADS1115_OS_SINGLE |  # Start single-shot conversion
+        pga_value |          # PGA setting
+        ADS1115_MODE_SINGLE |  # Single-shot mode
+        sps_value |          # Data rate
+        0x0003               # Comparator queue (disable)
+    )
+    
+    config0 = config_base | mux0
+    config1 = config_base | mux1
+    
+    for attempt in range(retries):
+        try:
+            with SMBus(bus) as i2c:
+                voltages = [None, None]
+                channels = [channel0, channel1]
+                configs = [config0, config1]
+                
+                for idx, (ch, config) in enumerate(zip(channels, configs)):
+                    try:
+                        # Step 1: Write config register to set channel and start conversion
+                        config_bytes = [(config >> 8) & 0xFF, config & 0xFF]  # Big-endian
+                        i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+                        
+                        # Step 2: Wait 3ms for MUX to switch
+                        time.sleep(0.003)  # 3ms settle time
+                        
+                        # Step 3: Read conversion once and discard (throwaway to clear stale data)
+                        try:
+                            _ = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
+                        except:
+                            pass  # Ignore errors on throwaway read
+                        
+                        # Step 4: Trigger a fresh conversion by writing config again
+                        i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+                        
+                        # Step 5: Wait for conversion to complete (worst case: 1/sps seconds + margin)
+                        # For 128 SPS: ~8ms per sample, wait 25ms to be safe
+                        conversion_time = 1.0 / sps
+                        time.sleep(max(0.025, conversion_time * 2))  # At least 25ms, or 2x conversion time
+                        
+                        # Step 6: Read conversion register (16-bit, big-endian) - this is the value we use
+                        data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
+                        if len(data) >= 2:
+                            # Convert from big-endian to signed 16-bit integer
+                            raw_value = (data[0] << 8) | data[1]
+                            # Convert unsigned 16-bit to signed 16-bit
+                            if raw_value > 32767:
+                                raw_value = raw_value - 65536
+                            # Convert raw value to voltage
+                            voltage = (raw_value / 32767.0) * pga
+                            voltages[idx] = voltage
+                    except Exception as e:
+                        print(f"[ADS1115] Error reading channel {ch} in pair: {e}")
+                        voltages[idx] = None
+                
+                return (voltages[0], voltages[1])
+                
+        except (OSError, IOError) as e:
+            if attempt < retries - 1:
+                delay = 0.05 + (attempt * 0.02)  # 50ms, 70ms, 90ms
+                time.sleep(delay)
+                continue
+            print(f"[ADS1115] I/O error reading channel pair ({channel0}, {channel1}) after {retries} attempts: {e}")
+            return (None, None)
+        except Exception as e:
+            print(f"[ADS1115] Unexpected error reading channel pair ({channel0}, {channel1}): {e}")
+            return (None, None)
+    
+    return (None, None)
+

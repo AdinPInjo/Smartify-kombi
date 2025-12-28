@@ -1497,8 +1497,51 @@ def read_ads1115_voltage(busnum: int = 1, address: Optional[int] = None, channel
     return None
 
 
+def read_ads1115_voltage_pair(
+    busnum: int = 1,
+    address: Optional[int] = None,
+    channel0: int = 0,
+    channel1: int = 1
+) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Read voltages from two ADS1115 channels in one SMBus session (more reliable).
+    
+    Tries addresses [0x48, 0x49, 0x4A, 0x4B] if address is None.
+    Returns tuple (voltage0, voltage1) in volts, or (None, None) on error.
+    Each voltage may be None if that specific channel read failed.
+    """
+    try:
+        import ads1115
+        ads_detect = ads1115.ads_detect
+        ads_read_voltage_pair = ads1115.ads_read_voltage_pair
+    except (ImportError, AttributeError) as e:
+        print(f"[Water Level] Error: Failed to import ads1115 module or pair-read function: {e}")
+        return (None, None)
+    except Exception as e:
+        print(f"[Water Level] Unexpected error importing ads1115: {e}")
+        return (None, None)
+    
+    addresses_to_try = [0x48, 0x49, 0x4A, 0x4B] if address is None else [address]
+    
+    for addr in addresses_to_try:
+        # Detect ADS1115
+        if ads_detect(bus=busnum, addr=addr, retries=1):
+            # Read voltage pair from channels
+            v0, v1 = ads_read_voltage_pair(channel0, channel1, bus=busnum, addr=addr, pga=4.096, sps=128, retries=3)
+            if v0 is not None or v1 is not None:
+                return (v0, v1)
+            # If detection succeeded but read failed, continue to next address
+            continue
+    
+    # No ADS1115 found or all reads failed
+    return (None, None)
+
+
 def db_get_water_level_settings() -> Dict[str, Any]:
-    """Get water level calibration settings from database."""
+    """Get water level calibration settings from database.
+    
+    Auto-cleans invalid ratio values (> 1.2) if normalization is enabled.
+    """
     # Safe fallback literals (same as DB defaults)
     FALLBACK_FULL_V = 0.497
     FALLBACK_EMPTY_V = 2.230
@@ -1509,11 +1552,41 @@ def db_get_water_level_settings() -> Dict[str, Any]:
         cur = conn.cursor()
         cur.execute("SELECT * FROM water_level_settings WHERE id = 'default'")
         row = cur.fetchone()
-        conn.close()
         
         if row:
-            return dict(row)
+            settings = dict(row)
+            # Auto-clear invalid ratio values if normalization is enabled
+            use_normalization = settings.get("use_supply_normalization", True)
+            if use_normalization:
+                full_ratio = settings.get("full_ratio")
+                empty_ratio = settings.get("empty_ratio")
+                
+                # If ratios look like voltages (> 1.2), clear them
+                cleared = False
+                if full_ratio is not None and full_ratio > 1.2:
+                    print(f"[Water Level] Auto-clearing invalid full_ratio={full_ratio} (looks like voltage)")
+                    settings["full_ratio"] = None
+                    cleared = True
+                if empty_ratio is not None and empty_ratio > 1.2:
+                    print(f"[Water Level] Auto-clearing invalid empty_ratio={empty_ratio} (looks like voltage)")
+                    settings["empty_ratio"] = None
+                    cleared = True
+                
+                # Update DB if we cleared invalid ratios
+                if cleared:
+                    cur.execute(
+                        """UPDATE water_level_settings 
+                           SET full_ratio = ?, empty_ratio = ?
+                           WHERE id = 'default'""",
+                        (settings.get("full_ratio"), settings.get("empty_ratio"))
+                    )
+                    conn.commit()
+                    print("[Water Level] Updated DB: cleared invalid ratio values")
+            
+            conn.close()
+            return settings
         else:
+            conn.close()
             # Return defaults if not found (shouldn't happen after init, but safe fallback)
             now = int(time.time())
             return {
@@ -1873,26 +1946,21 @@ def _water_level_thread() -> None:
                 time.sleep(60)  # Wait before next iteration
                 continue  # Skip this iteration
             
-            # Take 3 samples of both channels with proper delays
-            # ADS1115 needs time for MUX to switch and conversion to complete
+            # Take 3 samples of both channels using robust pair-read
             signal_samples = []
             supply_samples = []
             for i in range(3):
-                # Read signal channel (A0 by default)
-                signal_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_signal)
+                # Read both channels in one SMBus session (more reliable)
+                signal_v, supply_div_v = read_ads1115_voltage_pair(
+                    busnum=1, address=None, channel0=channel_signal, channel1=channel_supply
+                )
                 if signal_v is not None:
                     signal_samples.append(signal_v)
-                
-                # Delay between channel switches (handled by ads1115.py robust read pattern)
-                time.sleep(0.005)  # 5ms delay between channel switches
-                
-                # Read supply divider channel (A1 by default)
-                supply_div_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_supply)
                 if supply_div_v is not None:
                     supply_samples.append(supply_div_v)
                 
                 if i < 2:  # Don't sleep after last sample
-                    time.sleep(0.125)  # Additional delay before next sample pair
+                    time.sleep(0.1)  # Short delay before next sample pair
             
             # Process readings
             if use_normalization and len(signal_samples) >= 1 and len(supply_samples) >= 1:
@@ -1901,8 +1969,8 @@ def _water_level_thread() -> None:
                 avg_supply_div = sum(supply_samples) / len(supply_samples)
                 
                 # Sanity check: detect if channels are mirroring (A0 == A1)
-                # If voltage difference is less than 10mV, channels are likely the same
-                CHANNEL_MIRROR_THRESHOLD = 0.01  # 10mV
+                # Only trigger if difference is very small (< 2mV) after robust pair-read
+                CHANNEL_MIRROR_THRESHOLD = 0.002  # 2mV (very strict - only real wiring issues)
                 if abs(avg_signal - avg_supply_div) < CHANNEL_MIRROR_THRESHOLD:
                     print(f"[Water Level] ERROR: Channels mirrored! signal_ch=A{channel_signal} → {avg_signal:.4f}V, "
                           f"supply_ch=A{channel_supply} → {avg_supply_div:.4f}V (diff={abs(avg_signal - avg_supply_div):.6f}V)")
@@ -2405,37 +2473,32 @@ def api_water_level_live(
                 "message": f"Invalid configuration: signal and supply channels are both A{channel_signal}"
             })
         
-        # Take 3 quick samples of both channels
+        # Detect address for reporting
+        detected_address = None
+        try:
+            import ads1115
+            for addr in [0x48, 0x49, 0x4A, 0x4B]:
+                if ads1115.ads_detect(bus=1, addr=addr, retries=1):
+                    detected_address = f"0x{addr:02X}"
+                    break
+        except:
+            pass
+        
+        # Take 3 quick samples of both channels using robust pair-read
         signal_samples = []
         supply_samples = []
-        detected_address = None
-        
         for i in range(3):
-            # Read signal channel
-            signal_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_signal)
+            # Read both channels in one SMBus session (more reliable)
+            signal_v, supply_div_v = read_ads1115_voltage_pair(
+                busnum=1, address=None, channel0=channel_signal, channel1=channel_supply
+            )
             if signal_v is not None:
                 signal_samples.append(signal_v)
-                # Try to detect which address worked (for reporting)
-                if detected_address is None:
-                    for addr in [0x48, 0x49, 0x4A, 0x4B]:
-                        try:
-                            import ads1115
-                            if ads1115.ads_detect(bus=1, addr=addr, retries=1):
-                                detected_address = f"0x{addr:02X}"
-                                break
-                        except:
-                            pass
-            
-            # Delay between channel switches (handled by ads1115.py robust read pattern)
-            time.sleep(0.005)  # 5ms delay between channel switches
-            
-            # Read supply divider channel
-            supply_div_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_supply)
             if supply_div_v is not None:
                 supply_samples.append(supply_div_v)
             
             if i < 2:  # Don't sleep after last sample
-                time.sleep(0.075)  # Additional delay before next sample pair
+                time.sleep(0.1)  # Short delay before next sample pair
         
         if len(signal_samples) >= 1:
             avg_signal = sum(signal_samples) / len(signal_samples)
@@ -2445,7 +2508,8 @@ def api_water_level_live(
                 avg_supply_div = sum(supply_samples) / len(supply_samples)
                 
                 # Sanity check: detect if channels are mirroring (A0 == A1)
-                CHANNEL_MIRROR_THRESHOLD = 0.01  # 10mV
+                # Only trigger if difference is very small (< 2mV) after robust pair-read
+                CHANNEL_MIRROR_THRESHOLD = 0.002  # 2mV (very strict - only real wiring issues)
                 if abs(avg_signal - avg_supply_div) < CHANNEL_MIRROR_THRESHOLD:
                     # Channels are mirroring - return error status
                     return JSONResponse({
@@ -2465,13 +2529,14 @@ def api_water_level_live(
                 ratio = avg_signal / supply_voltage_est if supply_voltage_est > 0 else 0.0
                 level_percent, status, message = ratio_to_percent(ratio)
                 
+                # Ensure all numeric fields are present (never return null for these when ok:true)
                 return JSONResponse({
                     "ok": True,
-                    "signal_voltage": avg_signal,
-                    "supply_div_voltage": avg_supply_div,
-                    "supply_voltage_est": supply_voltage_est,
-                    "ratio": ratio,
-                    "level_percent": level_percent,
+                    "signal_voltage": float(avg_signal) if avg_signal is not None else None,
+                    "supply_div_voltage": float(avg_supply_div) if avg_supply_div is not None else None,
+                    "supply_voltage_est": float(supply_voltage_est) if supply_voltage_est is not None else None,
+                    "ratio": float(ratio) if ratio is not None else None,
+                    "level_percent": int(level_percent) if level_percent is not None else None,
                     "address": detected_address or "0x48",
                     "status": status,
                     "message": message
