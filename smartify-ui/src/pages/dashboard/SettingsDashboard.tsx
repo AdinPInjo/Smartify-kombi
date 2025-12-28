@@ -243,21 +243,25 @@ function WaterLevelSettingsCard() {
       }
       const data: WaterLevelLive = await r.json();
       if (data.ok) {
-        // Only set live data when we have valid response
+        // Set live data with all fields from response (even if some are null)
         setLiveData(data);
-        if (data.signal_voltage != null) {
-          const supplyText = data.supply_voltage_est != null ? data.supply_voltage_est.toFixed(2) : "—";
-          toast.success(`Live read: Signal=${data.signal_voltage.toFixed(3)}V, Supply=${supplyText}V`);
+        // Show success toast with available data
+        if (data.signal_voltage != null && data.supply_voltage_est != null) {
+          toast.success(`Live read: Signal=${data.signal_voltage.toFixed(3)}V, Supply=${data.supply_voltage_est.toFixed(2)}V`);
+        } else if (data.signal_voltage != null) {
+          toast.success(`Live read: Signal=${data.signal_voltage.toFixed(3)}V`);
         } else {
-          toast.error(data.message || "Live data read but signal voltage is missing");
+          toast.info(data.message || "Live data received");
         }
       } else {
         toast.error(data.message || "Failed to read live data");
         // Don't clear existing liveData on error - keep previous values
+        setLiveData(null);
       }
     } catch (error: any) {
       toast.error(error.message || "Failed to read live data");
-      // Don't clear existing liveData on error - keep previous values
+      // Clear on error to avoid showing stale data
+      setLiveData(null);
     } finally {
       setLoadingLive(false);
     }
