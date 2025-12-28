@@ -19,11 +19,14 @@ from starlette.middleware.sessions import SessionMiddleware
 from smartify.water_level import api as water_level_api, service as water_level_service
 
 # Startup sanity check: log ADS1115 module location
+# This runs immediately on import, so it appears in service logs on startup
 try:
     from smartify import ads1115
-    print(f"[Startup] ads1115 module loaded from: {ads1115.__file__}")
+    print(f"[Startup] ADS1115 module loaded from: {ads1115.__file__}")
 except ImportError as e:
     print(f"[Startup] WARNING: Could not import ads1115 module: {e}")
+except Exception as e:
+    print(f"[Startup] ERROR loading ads1115 module: {e}")
 
 # =========================
 # Config (no hardcoded IPs)
