@@ -80,8 +80,7 @@ app.add_middleware(
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Include water level router
-app.include_router(water_level_api.router)
+# Water level router will be initialized after require_auth is defined (see below)
 
 
 # =========================
@@ -779,6 +778,11 @@ def require_auth(request: Request, x_api_key: Optional[str]) -> Optional[JSONRes
     return JSONResponse({"error": "unauthorized"}, status_code=401)
 
 
+# Initialize and include water level router (must be after require_auth is defined)
+water_level_api.init_router(DB_PATH, require_auth, app_state)
+app.include_router(water_level_api.router)
+
+
 # =========================
 # Sensor: DHT22
 # =========================
@@ -1342,8 +1346,7 @@ def on_startup() -> None:
     t_rules = threading.Thread(target=_rule_evaluator_thread, daemon=True)
     t_rules.start()
     # Start water level thread (using new module)
-    # Start water level thread
-    water_level_service.start_water_level_thread(app_state)
+    water_level_service.start_water_level_thread(DB_PATH, app_state)
 
 
 # =========================

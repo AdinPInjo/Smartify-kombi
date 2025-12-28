@@ -2,7 +2,7 @@
 
 import time
 import sqlite3
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 from pathlib import Path
 from fastapi import APIRouter, Request, Header, Body
 from fastapi.responses import JSONResponse
@@ -16,8 +16,30 @@ _live_read_cache: Optional[Dict[str, Any]] = None
 _live_read_cache_time: float = 0.0
 CACHE_TTL_SECONDS = 0.5  # Cache for 500ms
 
+# Module-level router (will be initialized by init_router)
+router: Optional[APIRouter] = None
+_db_path: Optional[Path] = None
+_require_auth_func: Optional[Callable] = None
 
-def create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[str, Any]] = None) -> APIRouter:
+
+def init_router(db_path: Path, require_auth_func: Callable, app_state: Optional[Dict[str, Any]] = None) -> None:
+    """
+    Initialize the module-level router.
+    
+    Must be called before using router.
+    
+    Args:
+        db_path: Path to SQLite database
+        require_auth_func: Function that checks authentication (returns error response or None)
+        app_state: Optional application state dict (for shared cache)
+    """
+    global router, _db_path, _require_auth_func
+    _db_path = db_path
+    _require_auth_func = require_auth_func
+    router = _create_router(db_path, require_auth_func, app_state)
+
+
+def _create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[str, Any]] = None) -> APIRouter:
     """
     Create FastAPI router for water level endpoints.
     
@@ -546,4 +568,19 @@ def create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[str
             })
     
     return router
+
+
+def create_router(db_path: Path, require_auth_func, app_state: Optional[Dict[str, Any]] = None) -> APIRouter:
+    """
+    Create FastAPI router for water level endpoints (legacy function, use init_router instead).
+    
+    Args:
+        db_path: Path to SQLite database
+        require_auth_func: Function that checks authentication (returns error response or None)
+        app_state: Optional application state dict (for shared cache)
+    
+    Returns:
+        FastAPI router with water level endpoints
+    """
+    return _create_router(db_path, require_auth_func, app_state)
 
