@@ -57,8 +57,8 @@ def read_ads_pair(
             # Read voltage pair from channels
             # ads_read_voltage_pair should handle retries internally
             v0, v1 = ads1115.ads_read_voltage_pair(
-                ch0=signal_ch,
-                ch1=supply_ch,
+                channel0=signal_ch,
+                channel1=supply_ch,
                 bus=bus,
                 addr=addr,
                 pga=pga,

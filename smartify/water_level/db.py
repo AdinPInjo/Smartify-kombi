@@ -52,12 +52,43 @@ def db_init_water_level(conn: sqlite3.Connection) -> None:
         """
     )
     
+    # Migrate water_level_snapshot table if it exists with old schema
+    cur.execute("PRAGMA table_info(water_level_snapshot)")
+    snapshot_columns = [row[1] for row in cur.fetchall()]
+    
+    if snapshot_columns:  # Table exists
+        # Check if new columns are missing
+        missing_columns = {
+            "avg_signal_voltage": "REAL",
+            "avg_supply_div_voltage": "REAL",
+            "supply_voltage_est": "REAL",
+            "ratio": "REAL"
+        }
+        
+        for col_name, col_type in missing_columns.items():
+            if col_name not in snapshot_columns:
+                try:
+                    cur.execute(f"ALTER TABLE water_level_snapshot ADD COLUMN {col_name} {col_type}")
+                    print(f"[DB] Migrated water_level_snapshot: added column {col_name}")
+                except sqlite3.OperationalError as e:
+                    print(f"[DB] Warning: Could not add column {col_name}: {e}")
+        
+        # Check if id column has CHECK constraint (new schema)
+        # If not, this is old schema with AUTOINCREMENT - need to handle id=1 constraint
+        cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='water_level_snapshot'")
+        table_sql = cur.fetchone()
+        if table_sql and "CHECK(id=1)" not in table_sql[0]:
+            # Old schema: id is AUTOINCREMENT, not single-row
+            # We'll keep using it as-is; upsert will handle id=1 via INSERT ... ON CONFLICT
+            print("[DB] Water level snapshot using legacy AUTOINCREMENT schema (backward compatible)")
+    
     # Enable WAL mode for better concurrency (run once at init)
     try:
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA busy_timeout=5000")
+        cur.execute("PRAGMA synchronous=NORMAL")
     except sqlite3.OperationalError as e:
-        print(f"[DB] Warning: Could not set WAL mode or busy_timeout: {e}")
+        print(f"[DB] Warning: Could not set PRAGMA: {e}")
     
     # Water level settings table (calibration)
     cur.execute(
@@ -109,6 +140,16 @@ def db_init_water_level(conn: sqlite3.Connection) -> None:
         print(f"[DB] Initialized water_level_settings with defaults: full=0.497V, empty=2.230V, normalization enabled")
 
 
+def _set_connection_pragmas(conn: sqlite3.Connection) -> None:
+    """Set recommended PRAGMA settings for a connection."""
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.OperationalError:
+        pass  # Already set or not supported
+
+
 def db_get_water_level_settings(conn: sqlite3.Connection) -> WaterLevelSettings:
     """
     Get water level calibration settings from database.
@@ -119,6 +160,7 @@ def db_get_water_level_settings(conn: sqlite3.Connection) -> WaterLevelSettings:
     FALLBACK_EMPTY_V = 2.230
     
     try:
+        _set_connection_pragmas(conn)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("SELECT * FROM water_level_settings WHERE id = 'default'")
@@ -196,6 +238,7 @@ def db_update_water_level_settings(
     empty_supply_voltage: Optional[float] = None
 ) -> WaterLevelSettings:
     """Update water level calibration settings in database."""
+    _set_connection_pragmas(conn)
     conn.row_factory = sqlite3.Row
     
     # Get current settings to preserve values not being updated
@@ -262,13 +305,16 @@ def db_update_water_level_settings(
 
 
 def db_get_water_level_snapshot(conn: sqlite3.Connection) -> Optional[WaterLevelSnapshot]:
-    """Get the latest water level snapshot from database (single row with id=1)."""
+    """Get the latest water level snapshot from database."""
+    _set_connection_pragmas(conn)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute(
-        "SELECT * FROM water_level_snapshot WHERE id = 1"
-    )
+    # Try id=1 first (new schema), fall back to latest row (old schema)
+    cur.execute("SELECT * FROM water_level_snapshot WHERE id = 1")
     row = cur.fetchone()
+    if not row:
+        cur.execute("SELECT * FROM water_level_snapshot ORDER BY updated_at DESC LIMIT 1")
+        row = cur.fetchone()
     return dict(row) if row else None  # type: ignore
 
 
@@ -277,47 +323,65 @@ def db_upsert_water_snapshot(
     snapshot: Dict[str, Any]
 ) -> None:
     """
-    Insert or update water level snapshot in database using single-row upsert.
+    Insert or update water level snapshot in database.
     
-    This eliminates DELETE+INSERT which causes database locks.
-    Uses single-row pattern with id=1 constraint.
+    Supports both old (AUTOINCREMENT) and new (id=1 CHECK) schemas.
+    Uses upsert pattern to eliminate DELETE+INSERT database locks.
     """
+    _set_connection_pragmas(conn)
     cur = conn.cursor()
     
     now = int(time.time())
     created_at = snapshot.get("created_at", now)
     
-    # Single upsert operation (no delete needed)
-    cur.execute(
-        """INSERT INTO water_level_snapshot 
-           (id, avg_voltage, level_percent, status, message, updated_at, created_at,
-            avg_signal_voltage, avg_supply_div_voltage, supply_voltage_est, ratio)
-           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
-               avg_voltage = excluded.avg_voltage,
-               level_percent = excluded.level_percent,
-               status = excluded.status,
-               message = excluded.message,
-               updated_at = excluded.updated_at,
-               avg_signal_voltage = excluded.avg_signal_voltage,
-               avg_supply_div_voltage = excluded.avg_supply_div_voltage,
-               supply_voltage_est = excluded.supply_voltage_est,
-               ratio = excluded.ratio
-        """,
-        (
-            snapshot.get("avg_voltage", 0.0),
-            snapshot.get("level_percent", 0),
-            snapshot.get("status", "unknown"),
-            snapshot.get("message", ""),
-            snapshot.get("updated_at", now),
-            created_at,
-            snapshot.get("avg_signal_voltage"),
-            snapshot.get("avg_supply_div_voltage"),
-            snapshot.get("supply_voltage_est"),
-            snapshot.get("ratio")
+    # Check which columns exist in the table
+    cur.execute("PRAGMA table_info(water_level_snapshot)")
+    existing_cols = {row[1] for row in cur.fetchall()}
+    
+    # Build column list and values based on what exists in schema
+    base_cols = ["avg_voltage", "level_percent", "status", "message", "updated_at", "created_at"]
+    optional_cols = ["avg_signal_voltage", "avg_supply_div_voltage", "supply_voltage_est", "ratio"]
+    
+    cols_to_write = base_cols + [c for c in optional_cols if c in existing_cols]
+    values_to_write = [
+        snapshot.get("avg_voltage", 0.0),
+        snapshot.get("level_percent", 0),
+        snapshot.get("status", "unknown"),
+        snapshot.get("message", ""),
+        snapshot.get("updated_at", now),
+        created_at
+    ]
+    for col in optional_cols:
+        if col in existing_cols:
+            values_to_write.append(snapshot.get(col))
+    
+    # Try upsert with id=1 first (new schema)
+    try:
+        placeholders = ", ".join(["?"] * len(values_to_write))
+        update_clause = ", ".join([f"{col} = excluded.{col}" for col in cols_to_write])
+        
+        cur.execute(
+            f"""INSERT INTO water_level_snapshot 
+               (id, {", ".join(cols_to_write)})
+               VALUES (1, {placeholders})
+               ON CONFLICT(id) DO UPDATE SET {update_clause}
+            """,
+            values_to_write
         )
-    )
-    conn.commit()
+        conn.commit()
+    except sqlite3.IntegrityError:
+        # Old schema: AUTOINCREMENT without CHECK constraint
+        # Delete old rows and insert new one
+        cur.execute("DELETE FROM water_level_snapshot WHERE id != 1 OR id IS NULL")
+        placeholders = ", ".join(["?"] * len(values_to_write))
+        cur.execute(
+            f"""INSERT OR REPLACE INTO water_level_snapshot 
+               (id, {", ".join(cols_to_write)})
+               VALUES (1, {placeholders})
+            """,
+            values_to_write
+        )
+        conn.commit()
 
 
 # Backward compatibility alias
