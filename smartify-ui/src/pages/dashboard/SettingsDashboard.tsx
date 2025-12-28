@@ -269,10 +269,11 @@ function WaterLevelSettingsCard() {
 
   // Helper: Set FULL calibration from current live reading
   const setFullFromLive = () => {
-    if (!liveData || !liveData.ok) {
+    if (!liveData) {
       toast.error("No live data available. Please refresh first.");
       return;
     }
+    // Allow setting from live data even if ok:false (for debugging)
     if (useNormalization) {
       if (liveData.ratio != null && liveData.ratio > 0) {
         setFullRatio(liveData.ratio.toFixed(6));
@@ -292,10 +293,11 @@ function WaterLevelSettingsCard() {
 
   // Helper: Set EMPTY calibration from current live reading
   const setEmptyFromLive = () => {
-    if (!liveData || !liveData.ok) {
+    if (!liveData) {
       toast.error("No live data available. Please refresh first.");
       return;
     }
+    // Allow setting from live data even if ok:false (for debugging)
     if (useNormalization) {
       if (liveData.ratio != null && liveData.ratio > 0) {
         setEmptyRatio(liveData.ratio.toFixed(6));
@@ -546,10 +548,10 @@ function WaterLevelSettingsCard() {
                         variant="ghost"
                         size="sm"
                         onClick={setFullFromLive}
-                        disabled={!liveData || loadingLive}
+                        disabled={!liveData || loadingLive || (useNormalization && (!liveData.ratio || liveData.ratio <= 0)) || (!useNormalization && (!liveData.signal_voltage || liveData.signal_voltage <= 0))}
                         className="h-6 text-xs px-2"
                       >
-                        Set from live
+                        Set FULL from live
                       </Button>
                     </div>
                     <Input
@@ -571,10 +573,10 @@ function WaterLevelSettingsCard() {
                         variant="ghost"
                         size="sm"
                         onClick={setEmptyFromLive}
-                        disabled={!liveData || loadingLive}
+                        disabled={!liveData || loadingLive || (useNormalization && (!liveData.ratio || liveData.ratio <= 0)) || (!useNormalization && (!liveData.signal_voltage || liveData.signal_voltage <= 0))}
                         className="h-6 text-xs px-2"
                       >
-                        Set from live
+                        Set EMPTY from live
                       </Button>
                     </div>
                     <Input

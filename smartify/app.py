@@ -1245,7 +1245,7 @@ def _gps_reader_thread() -> None:
                             })
                             db_insert_gps(now, _gps_latest.get("lat"), _gps_latest.get("lon"),
                                           _gps_latest.get("speed_kmh"), _gps_latest.get("course"), alt)
-
+                    
                     except serial.SerialTimeoutException:
                         # Timeout is normal, continue polling
                         continue
@@ -1946,26 +1946,45 @@ def _water_level_thread() -> None:
                 time.sleep(60)  # Wait before next iteration
                 continue  # Skip this iteration
             
-            # Take 3 samples of both channels using robust pair-read
+            # Take 3 samples with retry logic for mirrored channels
             signal_samples = []
             supply_samples = []
-            CHANNEL_MIRROR_THRESHOLD = 0.002  # 2mV (very strict - only real wiring issues)
-            mirrored_count = 0  # Count how many samples appear mirrored
+            CHANNEL_MIRROR_THRESHOLD = 0.01  # 10mV threshold for mirrored detection
+            MAX_SAMPLE_RETRIES = 2  # Retry up to 2 times per sample if mirrored
             
             for i in range(3):
-                # Read both channels in one SMBus session (more reliable)
-                signal_v, supply_div_v = read_ads1115_voltage_pair(
-                    busnum=1, address=None, channel0=channel_signal, channel1=channel_supply
-                )
+                signal_v = None
+                supply_div_v = None
+                sample_retries = 0
+                
+                # Retry logic: if sample appears mirrored, retry up to MAX_SAMPLE_RETRIES times
+                while sample_retries <= MAX_SAMPLE_RETRIES:
+                    # Read both channels in one SMBus session (more reliable)
+                    signal_v, supply_div_v = read_ads1115_voltage_pair(
+                        busnum=1, address=None, channel0=channel_signal, channel1=channel_supply
+                    )
+                    
+                    # If channels are distinct, accept this sample
+                    if signal_v is not None and supply_div_v is not None:
+                        diff = abs(signal_v - supply_div_v)
+                        if diff >= CHANNEL_MIRROR_THRESHOLD:
+                            break
+                        # If mirrored and we have retries left, retry with delay
+                        elif sample_retries < MAX_SAMPLE_RETRIES:
+                            time.sleep(0.015)  # 15ms delay before retry
+                            sample_retries += 1
+                        else:
+                            # Out of retries, accept the sample anyway (will be checked later)
+                            break
+                    else:
+                        # One or both channels failed to read - accept what we have
+                        break
+                
+                # Add valid samples to lists
                 if signal_v is not None:
                     signal_samples.append(signal_v)
                 if supply_div_v is not None:
                     supply_samples.append(supply_div_v)
-                
-                # Check if this individual sample appears mirrored (both not None and very close)
-                if signal_v is not None and supply_div_v is not None:
-                    if abs(signal_v - supply_div_v) < CHANNEL_MIRROR_THRESHOLD:
-                        mirrored_count += 1
                 
                 if i < 2:  # Don't sleep after last sample
                     time.sleep(0.1)  # Short delay before next sample pair
@@ -1976,9 +1995,15 @@ def _water_level_thread() -> None:
                 avg_signal = sum(signal_samples) / len(signal_samples)
                 avg_supply_div = sum(supply_samples) / len(supply_samples)
                 
+                # Debug log showing channels and values
+                diff = abs(avg_signal - avg_supply_div)
+                print(f"[Water Level Thread] Channels: A{channel_signal}(signal)={avg_signal:.4f}V, "
+                      f"A{channel_supply}(supply_div)={avg_supply_div:.4f}V, diff={diff:.6f}V, "
+                      f"samples={len(signal_samples)}/{len(supply_samples)}")
+                
                 # Sanity check: detect if channels are mirroring (A0 == A1)
-                # Only trigger if ALL 3 samples appear mirrored (all samples show same channel)
-                if mirrored_count >= 3:
+                # Only trigger if averaged values are still mirrored after retries
+                if diff < CHANNEL_MIRROR_THRESHOLD:
                     print(f"[Water Level] ERROR: Channels mirrored! signal_ch=A{channel_signal} → {avg_signal:.4f}V, "
                           f"supply_ch=A{channel_supply} → {avg_supply_div:.4f}V (diff={abs(avg_signal - avg_supply_div):.6f}V)")
                     # Set error status (don't compute level_percent as channels are invalid)
@@ -2491,26 +2516,53 @@ def api_water_level_live(
         except:
             pass
         
-        # Take 3 quick samples of both channels using robust pair-read
+        # Take 3 samples with retry logic for mirrored channels
         signal_samples = []
         supply_samples = []
-        CHANNEL_MIRROR_THRESHOLD = 0.002  # 2mV (very strict - only real wiring issues)
-        mirrored_count = 0  # Count how many samples appear mirrored
+        CHANNEL_MIRROR_THRESHOLD = 0.01  # 10mV threshold for mirrored detection
+        MAX_SAMPLE_RETRIES = 2  # Retry up to 2 times per sample if mirrored
         
         for i in range(3):
-            # Read both channels in one SMBus session (more reliable)
-            signal_v, supply_div_v = read_ads1115_voltage_pair(
-                busnum=1, address=None, channel0=channel_signal, channel1=channel_supply
-            )
+            signal_v = None
+            supply_div_v = None
+            sample_retries = 0
+            
+            # Retry logic: if sample appears mirrored, retry up to MAX_SAMPLE_RETRIES times
+            while sample_retries <= MAX_SAMPLE_RETRIES:
+                # Read both channels in one SMBus session (more reliable)
+                # IMPORTANT: Tuple unpacking order: (channel0_voltage, channel1_voltage)
+                # So signal_v = channel_signal voltage, supply_div_v = channel_supply voltage
+                signal_v, supply_div_v = read_ads1115_voltage_pair(
+                    busnum=1, address=None, channel0=channel_signal, channel1=channel_supply
+                )
+                
+                # Debug log for each read
+                if signal_v is not None and supply_div_v is not None:
+                    diff = abs(signal_v - supply_div_v)
+                    print(f"[Water Level Live] Sample {i+1} (retry {sample_retries}): "
+                          f"A{channel_signal}={signal_v:.4f}V, A{channel_supply}={supply_div_v:.4f}V, diff={diff:.6f}V")
+                    
+                    # If channels are distinct, accept this sample
+                    if diff >= CHANNEL_MIRROR_THRESHOLD:
+                        break
+                    # If mirrored and we have retries left, retry with delay
+                    elif sample_retries < MAX_SAMPLE_RETRIES:
+                        print(f"[Water Level Live] Sample {i+1} appears mirrored (diff={diff:.6f}V), retrying...")
+                        time.sleep(0.015)  # 15ms delay before retry
+                        sample_retries += 1
+                    else:
+                        # Out of retries, accept the sample anyway (will be checked later)
+                        print(f"[Water Level Live] Sample {i+1} still mirrored after {MAX_SAMPLE_RETRIES} retries")
+                        break
+                else:
+                    # One or both channels failed to read - accept what we have
+                    break
+            
+            # Add valid samples to lists
             if signal_v is not None:
                 signal_samples.append(signal_v)
             if supply_div_v is not None:
                 supply_samples.append(supply_div_v)
-            
-            # Check if this individual sample appears mirrored (both not None and very close)
-            if signal_v is not None and supply_div_v is not None:
-                if abs(signal_v - supply_div_v) < CHANNEL_MIRROR_THRESHOLD:
-                    mirrored_count += 1
             
             if i < 2:  # Don't sleep after last sample
                 time.sleep(0.1)  # Short delay before next sample pair
@@ -2522,12 +2574,20 @@ def api_water_level_live(
             if use_normalization and len(supply_samples) >= 1:
                 avg_supply_div = sum(supply_samples) / len(supply_samples)
                 
+                # Debug log showing channels and values
+                diff = abs(avg_signal - avg_supply_div)
+                print(f"[Water Level Live] Channels: A{channel_signal}(signal)={avg_signal:.4f}V, "
+                      f"A{channel_supply}(supply_div)={avg_supply_div:.4f}V, diff={diff:.6f}V, "
+                      f"samples={len(signal_samples)}/{len(supply_samples)}")
+                
                 # Sanity check: detect if channels are mirroring (A0 == A1)
-                # Only trigger if ALL 3 samples appear mirrored (all samples show same channel)
-                if mirrored_count >= 3:
+                # Only trigger if averaged values are still mirrored after retries
+                if diff < CHANNEL_MIRROR_THRESHOLD:
                     # Channels are mirroring - return error status but still include voltages for debugging
                     supply_voltage_est = avg_supply_div * (r_top + r_bottom) / r_bottom if r_bottom > 0 else 0.0
                     ratio = avg_signal / supply_voltage_est if supply_voltage_est > 0 else None
+                    print(f"[Water Level Live] ERROR: Channels still mirrored after retries! "
+                          f"A{channel_signal}={avg_signal:.4f}V, A{channel_supply}={avg_supply_div:.4f}V, diff={diff:.6f}V")
                     return JSONResponse({
                         "ok": False,
                         "signal_voltage": float(avg_signal),
@@ -2545,7 +2605,12 @@ def api_water_level_live(
                 ratio = avg_signal / supply_voltage_est if supply_voltage_est > 0 else 0.0
                 level_percent, status, message = ratio_to_percent(ratio)
                 
+                # Debug: verify field assignments are correct
+                print(f"[Water Level Live] Final: signal_voltage={avg_signal:.4f}V, supply_div_voltage={avg_supply_div:.4f}V, "
+                      f"supply_est={supply_voltage_est:.2f}V, ratio={ratio:.6f}, level={level_percent}%")
+                
                 # Ensure all numeric fields are present (never return null for these when ok:true)
+                # IMPORTANT: signal_voltage = A0 (channel_signal), supply_div_voltage = A1 (channel_supply)
                 return JSONResponse({
                     "ok": True,
                     "signal_voltage": float(avg_signal) if avg_signal is not None else None,
