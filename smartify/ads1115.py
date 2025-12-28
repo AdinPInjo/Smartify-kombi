@@ -179,16 +179,26 @@ def ads_read_raw_single_ended(
     for attempt in range(retries):
         try:
             with SMBus(bus) as i2c:
-                # Write config register to start conversion
+                # Write config register to start conversion for target channel
                 config_bytes = [(config >> 8) & 0xFF, config & 0xFF]  # Big-endian
                 i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
                 
-                # Wait for conversion to complete (worst case: 1/sps seconds + margin)
-                # For 128 SPS: ~8ms per sample, wait 20ms to be safe
-                conversion_time = 1.0 / sps
-                time.sleep(max(0.02, conversion_time * 2))  # At least 20ms, or 2x conversion time
+                # Wait 2-5ms for MUX to switch
+                time.sleep(0.003)  # 3ms
                 
-                # Read conversion register (16-bit, big-endian)
+                # Read conversion once and discard (throwaway read to clear stale data)
+                try:
+                    throwaway_data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
+                    # Trigger a new conversion by writing config again
+                    i2c.write_i2c_block_data(addr, ADS1115_REG_CONFIG, config_bytes)
+                except:
+                    pass  # Ignore errors on throwaway read
+                
+                # Wait 20-30ms for conversion to complete
+                conversion_time = 1.0 / sps
+                time.sleep(max(0.025, conversion_time * 2))  # At least 25ms, or 2x conversion time
+                
+                # Read conversion register (16-bit, big-endian) - this is the value we use
                 data = i2c.read_i2c_block_data(addr, ADS1115_REG_CONVERSION, 2)
                 if len(data) >= 2:
                     # Convert from big-endian to signed 16-bit integer

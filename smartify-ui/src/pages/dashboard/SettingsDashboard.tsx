@@ -233,6 +233,8 @@ function WaterLevelSettingsCard() {
   // Fetch live data
   const fetchLiveData = async () => {
     setLoadingLive(true);
+    // Clear live data immediately to prevent showing stale/incorrect values
+    setLiveData(null);
     try {
       const r = await apiFetch("/api/water/level/live");
       if (!r.ok) {
@@ -241,6 +243,7 @@ function WaterLevelSettingsCard() {
       }
       const data: WaterLevelLive = await r.json();
       if (data.ok) {
+        // Only set live data when we have valid response
         setLiveData(data);
         if (data.signal_voltage != null) {
           const supplyText = data.supply_voltage_est != null ? data.supply_voltage_est.toFixed(2) : "—";
@@ -250,11 +253,11 @@ function WaterLevelSettingsCard() {
         }
       } else {
         toast.error(data.message || "Failed to read live data");
-        setLiveData(null); // Clear invalid data
+        // Don't clear existing liveData on error - keep previous values
       }
     } catch (error: any) {
       toast.error(error.message || "Failed to read live data");
-      setLiveData(null); // Clear on error
+      // Don't clear existing liveData on error - keep previous values
     } finally {
       setLoadingLive(false);
     }
@@ -454,7 +457,9 @@ function WaterLevelSettingsCard() {
                 <div>
                   <span className="text-zinc-400">Level:</span>{" "}
                   <span className="font-semibold text-zinc-200">
-                    {liveData?.level_percent != null
+                    {loadingLive
+                      ? "Refreshing..."
+                      : liveData?.level_percent != null
                       ? `${liveData.level_percent}%`
                       : snapshotData?.level_percent != null
                       ? `${snapshotData.level_percent}%`

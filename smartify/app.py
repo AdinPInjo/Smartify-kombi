@@ -1860,8 +1860,8 @@ def _water_level_thread() -> None:
                 if signal_v is not None:
                     signal_samples.append(signal_v)
                 
-                # Small delay between channel switches to allow MUX to settle
-                time.sleep(0.025)  # 25ms delay between channel switches
+                # Delay between channel switches (handled by ads1115.py robust read pattern)
+                time.sleep(0.005)  # 5ms delay between channel switches
                 
                 # Read supply divider channel (A1 by default)
                 supply_div_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_supply)
@@ -2335,8 +2335,8 @@ def api_water_level_live(
                         except:
                             pass
             
-            # Small delay between channel switches to allow MUX to settle
-            time.sleep(0.025)  # 25ms delay between channel switches
+            # Delay between channel switches (handled by ads1115.py robust read pattern)
+            time.sleep(0.005)  # 5ms delay between channel switches
             
             # Read supply divider channel
             supply_div_v = read_ads1115_voltage(busnum=1, address=None, channel=channel_supply)
