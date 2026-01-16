@@ -376,9 +376,8 @@ def apply_heater_setting(enabled: bool, verify: bool = True) -> bool:
         return True
     
     # Verify the state change (retry up to 5 times)
-    import time
     for attempt in range(5):
-        time.sleep(0.2)  # Wait for relay to switch
+        pytime.sleep(0.2)  # Wait for relay to switch
         relays = read_relay_states()
         if relays:
             heater_state = relays.get("heater", {}).get("state", "unknown")
