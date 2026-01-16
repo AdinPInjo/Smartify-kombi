@@ -11,9 +11,11 @@ smartify/remote_sync/
 ├── __init__.py                        # Module init
 ├── remote_client.py                   # HTTP client for Edge Functions
 ├── runner.py                          # Main service with telemetry and settings loops
-├── smartify-remote-sync.service       # Systemd unit file
-├── SETUP.sh                           # Automated setup script
 └── README.md                          # Complete documentation
+
+deploy/
+├── smartify-remote-sync.service       # Systemd unit file
+└── install_remote_sync.sh             # Automated setup script
 ```
 
 ## Architecture
@@ -108,8 +110,8 @@ Survives service restarts and power cycles.
 ### Quick Setup (Recommended)
 
 ```bash
-cd /home/pi/smartify/remote_sync
-./SETUP.sh
+cd /home/pi/Smartify-kombi
+bash smartify/deploy/install_remote_sync.sh
 ```
 
 The script will:
@@ -481,10 +483,10 @@ def apply(self, desired_state: Dict[str, Any]) -> Dict[str, Any]:
 
 ## Next Steps
 
-1. ✅ Run `./SETUP.sh` on Raspberry Pi
-2. ✅ Register device in Supabase
-3. ✅ Verify telemetry appears in database
-4. ✅ Test settings update from admin dashboard
+1. ✅ Run `bash smartify/deploy/install_remote_sync.sh` on Raspberry Pi
+2. ✅ Update sensor adapters in `smartify/remote_sync/adapters.py`
+3. ✅ Test telemetry in `/var/log/smartify/telemetry_outbox.jsonl`
+4. ✅ Test settings update via `/etc/smartify/desired_state.json`
 5. ⏭️ Integrate actual control functions
 6. ⏭️ Set up monitoring alerts
 7. ⏭️ Deploy to production

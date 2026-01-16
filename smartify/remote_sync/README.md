@@ -104,8 +104,8 @@ Clean interface to existing smartify sensors and controls:
 ### Quick Install
 
 ```bash
-cd /home/pi/smartify/deploy
-./install_remote_sync.sh
+cd /home/pi/Smartify-kombi
+bash smartify/deploy/install_remote_sync.sh
 ```
 
 The script will:
@@ -120,7 +120,7 @@ The script will:
 ```bash
 # Create directories
 sudo mkdir -p /var/log/smartify /var/lib/smartify /etc/smartify
-sudo chown pi:pi /var/log/smartify /var/lib/smartify /etc/smartify
+sudo chown $USER:$USER /var/log/smartify /var/lib/smartify /etc/smartify
 
 # Create default desired_state.json
 cat > /etc/smartify/desired_state.json <<EOF
@@ -130,11 +130,9 @@ cat > /etc/smartify/desired_state.json <<EOF
 }
 EOF
 
-# Install service
-sudo cp deploy/smartify-remote-sync.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable smartify-remote-sync
-sudo systemctl start smartify-remote-sync
+# Install service (use the installer script instead for proper user detection)
+cd /home/pi/Smartify-kombi
+bash smartify/deploy/install_remote_sync.sh
 ```
 
 ## Usage
@@ -236,9 +234,107 @@ settings_thread = threading.Thread(
 )
 ```
 
+## Local API Endpoints
+
+The sensor adapters support HTTP API fallback when direct imports fail. The following endpoints are expected:
+
+### Temperature API
+
+**Endpoint:** `GET /api/temperature/latest`
+
+**Example Response:**
+```json
+{
+  "ts": 1705419600,
+  "sensors": [
+    {
+      "sensor_index": 0,
+      "sensor_name": "kombi",
+      "temperature_c": 22.5,
+      "humidity": 45.2
+    },
+    {
+      "sensor_index": 1,
+      "sensor_name": "garaza",
+      "temperature_c": 18.2,
+      "humidity": 52.8
+    }
+  ]
+}
+```
+
+The adapter will:
+- Average all `temperature_c` values from sensors array
+- Support alternative key: `temp_c`
+
+### Water Level API
+
+**Endpoint:** `GET /api/water/level/live`
+
+**Example Response:**
+```json
+{
+  "ok": true,
+  "level_percent": 68,
+  "signal_voltage": 1.234,
+  "supply_div_voltage": 2.567,
+  "supply_voltage_est": 11.8,
+  "ratio": 0.127,
+  "address": "0x48",
+  "status": "ok",
+  "message": ""
+}
+```
+
+The adapter will try these keys in order:
+1. `level_percent`
+2. `water_percent`
+3. `percent`
+4. `percentage`
+
+### GPS API
+
+**Endpoint:** `GET /api/gps/current`
+
+**Example Response:**
+```json
+{
+  "ts": 1705419600,
+  "lat": 48.8566,
+  "lon": 2.3522,
+  "speed_kmh": 45.5,
+  "course": 180.0,
+  "altitude_m": 125.0,
+  "satellites": 8,
+  "ok": true,
+  "error": null
+}
+```
+
+The adapter will:
+- Check `ok` field (skip if false)
+- Extract `lat` and `lon` coordinates
+- Return None if coordinates are null
+
+### API Configuration
+
+Set the base URL via environment variable:
+
+```bash
+export SMARTIFY_LOCAL_API_BASE="http://127.0.0.1:5000"
+```
+
+Or in the systemd service file (already included):
+
+```ini
+Environment="SMARTIFY_LOCAL_API_BASE=http://127.0.0.1:5000"
+```
+
 ## Integrating Your Code
 
-### Update Sensor Adapters
+### Update Sensor Adapters (Optional)
+
+The adapters already support HTTP API fallback. If you want to use direct imports instead:
 
 Edit `remote_sync/adapters.py` and update the imports:
 
