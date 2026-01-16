@@ -51,7 +51,7 @@ sudo chown $ACTUAL_USER:$ACTUAL_USER /etc/smartify
 echo "   ✓ Directories created with proper permissions for $ACTUAL_USER"
 echo ""
 
-# Create default desired_state.json if it doesn't exist
+# Create default desired_state.json if it doesn't exist (for local mode)
 if [ ! -f /etc/smartify/desired_state.json ]; then
     echo "📝 Creating default desired_state.json..."
     cat > /etc/smartify/desired_state.json <<EOF
@@ -64,6 +64,19 @@ EOF
     echo "   ✓ Created /etc/smartify/desired_state.json"
 else
     echo "📝 desired_state.json already exists, skipping"
+fi
+echo ""
+
+# Create remote_sync.env if it doesn't exist
+if [ ! -f /etc/smartify/remote_sync.env ]; then
+    echo "🔧 Creating remote_sync.env from template..."
+    sudo cp "$SCRIPT_DIR/remote_sync.env.example" /etc/smartify/remote_sync.env
+    sudo chown $ACTUAL_USER:$ACTUAL_USER /etc/smartify/remote_sync.env
+    sudo chmod 600 /etc/smartify/remote_sync.env
+    echo "   ✓ Created /etc/smartify/remote_sync.env (default: local mode)"
+    echo "   📝 Edit this file to configure remote sync"
+else
+    echo "🔧 remote_sync.env already exists, preserving existing config"
 fi
 echo ""
 
