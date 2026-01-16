@@ -97,31 +97,47 @@ class StateManager:
         self.state_dir = Path("/var/lib/smartify")
         self.state_dir.mkdir(parents=True, exist_ok=True)
         
-        self.last_gps_file = self.state_dir / "last_gps.json"
+        self.last_gps_fix_file = self.state_dir / "last_gps_fix.json"
         self.applied_version_file = self.state_dir / "applied_version.txt"
+        self.last_relay_change_file = self.state_dir / "last_relay_change.json"
     
-    def get_last_gps(self) -> Optional[Dict[str, float]]:
-        """Get last GPS position"""
+    def get_last_gps_fix(self) -> Optional[Dict[str, Any]]:
+        """
+        Get last valid GPS fix
+        
+        Returns:
+            Dictionary with ts (unix timestamp), lat, lon, or None
+        """
         try:
-            if self.last_gps_file.exists():
-                with open(self.last_gps_file, "r") as f:
-                    return json.load(f)
+            if self.last_gps_fix_file.exists():
+                with open(self.last_gps_fix_file, "r") as f:
+                    data = json.load(f)
+                    # Validate structure
+                    if all(k in data for k in ["ts", "lat", "lon"]):
+                        return data
         except Exception as e:
-            logger.error(f"Error reading last GPS: {e}")
+            logger.error(f"Error reading last GPS fix: {e}")
         return None
     
-    def save_last_gps(self, latitude: float, longitude: float):
-        """Save current GPS position"""
+    def save_last_gps_fix(self, latitude: float, longitude: float, timestamp: Optional[float] = None):
+        """
+        Save current GPS fix
+        
+        Args:
+            latitude: GPS latitude
+            longitude: GPS longitude
+            timestamp: Unix timestamp (defaults to now)
+        """
         try:
             data = {
-                "latitude": latitude,
-                "longitude": longitude,
-                "timestamp": datetime.now().isoformat()
+                "ts": timestamp or time.time(),
+                "lat": latitude,
+                "lon": longitude,
             }
-            with open(self.last_gps_file, "w") as f:
+            with open(self.last_gps_fix_file, "w") as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
-            logger.error(f"Error saving GPS: {e}")
+            logger.error(f"Error saving GPS fix: {e}")
     
     def get_applied_version(self) -> int:
         """Get last applied settings version"""
@@ -140,15 +156,126 @@ class StateManager:
                 f.write(str(version))
         except Exception as e:
             logger.error(f"Error saving applied version: {e}")
+    
+    def get_last_relay_change(self, relay_name: str) -> Optional[float]:
+        """
+        Get timestamp of last relay state change
+        
+        Args:
+            relay_name: Name of relay (e.g., "heater")
+        
+        Returns:
+            Unix timestamp of last change, or None
+        """
+        try:
+            if self.last_relay_change_file.exists():
+                with open(self.last_relay_change_file, "r") as f:
+                    data = json.load(f)
+                    return data.get(relay_name)
+        except Exception as e:
+            logger.error(f"Error reading last relay change: {e}")
+        return None
+    
+    def save_relay_change(self, relay_name: str, timestamp: Optional[float] = None):
+        """
+        Save timestamp of relay state change
+        
+        Args:
+            relay_name: Name of relay (e.g., "heater")
+            timestamp: Unix timestamp (defaults to now)
+        """
+        try:
+            data = {}
+            if self.last_relay_change_file.exists():
+                with open(self.last_relay_change_file, "r") as f:
+                    data = json.load(f)
+            
+            data[relay_name] = timestamp or time.time()
+            
+            with open(self.last_relay_change_file, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving relay change: {e}")
 
 
 # =============================================================================
 # Telemetry Loop
 # =============================================================================
 
+def calculate_delta_km_safe(
+    gps_location: Dict[str, Any],
+    last_fix: Optional[Dict[str, Any]],
+    current_time: float
+) -> Optional[float]:
+    """
+    Calculate delta_km with safety checks to avoid jitter accumulation
+    
+    Safety rules:
+    - Both fixes must be valid
+    - Time delta must be reasonable (<= 10 minutes)
+    - Speed sanity check (< 180 km/h)
+    - Ignore tiny movements (< 0.03 km) to filter jitter
+    
+    Args:
+        gps_location: Current GPS fix with lat/lon
+        last_fix: Last saved fix with ts, lat, lon
+        current_time: Current unix timestamp
+    
+    Returns:
+        Distance in km, or None if invalid/filtered
+    """
+    if not last_fix:
+        logger.debug("No previous GPS fix, delta_km = None")
+        return None
+    
+    # Extract coordinates
+    lat1 = last_fix.get("lat")
+    lon1 = last_fix.get("lon")
+    lat2 = gps_location.get("latitude")
+    lon2 = gps_location.get("longitude")
+    last_ts = last_fix.get("ts")
+    
+    # Validate all required data
+    if None in (lat1, lon1, lat2, lon2, last_ts):
+        logger.warning("Incomplete GPS data for delta_km calculation")
+        return None
+    
+    # Check time delta (must be <= 10 minutes)
+    time_delta_s = current_time - last_ts
+    if time_delta_s > 600:  # 10 minutes
+        logger.debug(f"Time delta too large ({time_delta_s:.0f}s), resetting GPS baseline")
+        return None
+    
+    if time_delta_s <= 0:
+        logger.warning("Invalid time delta (negative or zero)")
+        return None
+    
+    # Calculate distance
+    distance_km = calculate_distance(lat1, lon1, lat2, lon2)
+    
+    # Filter tiny jitter (< 30 meters = 0.03 km)
+    if distance_km < 0.03:
+        logger.debug(f"Filtering GPS jitter: {distance_km*1000:.1f}m < 30m threshold")
+        return None
+    
+    # Sanity check: speed must be < 180 km/h
+    time_delta_h = time_delta_s / 3600.0
+    speed_kmh = distance_km / time_delta_h if time_delta_h > 0 else 999
+    
+    if speed_kmh > 180:
+        logger.warning(f"Unrealistic speed detected: {speed_kmh:.1f} km/h, ignoring delta_km")
+        return None
+    
+    logger.debug(f"Valid delta_km: {distance_km:.3f} km (speed: {speed_kmh:.1f} km/h, time: {time_delta_s:.0f}s)")
+    return distance_km
+
+
 def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: int = 60):
     """
     Telemetry collection and posting loop
+    
+    Collects sensor data, calculates delta_km with safety checks,
+    posts telemetry, and updates device_state.current_state
     
     Args:
         client: RemoteClient instance
@@ -168,55 +295,64 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                 water_percent = read_water_level()
                 gps_location = read_gps_location()
                 
-                # Calculate delta_km if GPS available
+                # Calculate delta_km with safety checks (TASK 6)
                 delta_km = None
                 gps_lat = None
                 gps_lon = None
+                gps_has_fix = False
                 
-                if gps_location:
+                if gps_location and gps_location.get('fix'):
                     gps_lat = gps_location['latitude']
                     gps_lon = gps_location['longitude']
+                    gps_has_fix = True
                     
-                    last_gps = state_manager.get_last_gps()
-                    if last_gps:
-                        delta_km = calculate_distance(
-                            last_gps['latitude'],
-                            last_gps['longitude'],
-                            gps_lat,
-                            gps_lon
-                        )
-                        logger.debug(f"Calculated delta_km: {delta_km:.3f} km")
+                    # Get last valid GPS fix
+                    last_fix = state_manager.get_last_gps_fix()
                     
-                    # Save current GPS as last position
-                    state_manager.save_last_gps(gps_lat, gps_lon)
+                    # Calculate delta_km with safety checks
+                    delta_km = calculate_delta_km_safe(gps_location, last_fix, now)
+                    
+                    # Save current fix as last fix (even if delta_km was filtered)
+                    state_manager.save_last_gps_fix(gps_lat, gps_lon, now)
+                    
+                    if delta_km is not None:
+                        logger.info(f"GPS movement: {delta_km:.3f} km")
+                    else:
+                        logger.debug("GPS fix available but delta_km filtered (jitter/invalid)")
+                else:
+                    logger.debug("No GPS fix available, delta_km = None")
                 
-                # Post telemetry
+                # Post telemetry (TASK 1)
+                # NOTE: We do NOT include GPS coordinates in telemetry table
+                # GPS coords are ONLY in device_state.current_state (admin-only)
                 logger.info(f"Posting telemetry: temp={temperature_c}, water={water_percent}, "
-                           f"delta_km={delta_km}, gps={'yes' if gps_location else 'no'}")
+                           f"delta_km={delta_km}, gps_fix={'yes' if gps_has_fix else 'no'}")
                 
                 success = client.post_telemetry(
                     temperature_c=temperature_c,
                     water_percent=water_percent,
                     delta_km=delta_km,
-                    gps_lat=gps_lat,
-                    gps_lon=gps_lon,
+                    gps_lat=None,  # DO NOT send GPS coords to telemetry table
+                    gps_lon=None,  # GPS coords only in device_state (see below)
                 )
                 
                 if success:
                     logger.info("Telemetry posted successfully")
                     
-                    # Build and update current state snapshot for device_state
+                    # Build comprehensive current state snapshot (TASK 2)
+                    # This includes GPS coords for admin-only view
                     current_state = build_current_state()
                     
                     # Update device_state.current_state via ackState
                     # Use current applied_version (doesn't increment version, just updates state)
                     applied_version = state_manager.get_applied_version()
                     if client.ack_state(applied_version, current_state):
-                        logger.debug(f"Device state updated")
+                        logger.debug("Device state updated")
                         # Log key metrics
                         relays = current_state.get("relays", {})
                         temps = current_state.get("temps", {})
-                        logger.debug(f"State: relays={relays}, temps={temps}")
+                        gps_state = current_state.get("gps")
+                        logger.debug(f"State: relays={relays}, temps={temps}, gps={'fix' if gps_state else 'no fix'}")
                     else:
                         logger.debug("Device state update skipped (expected in local mode)")
                 else:
@@ -266,16 +402,16 @@ def settings_loop(client: RemoteClient, state_manager: StateManager, interval: i
                         logger.info(f"New settings version {remote_version} detected, applying...")
                         logger.info(f"Desired state: {desired.get('desired_state', {})}")
                         
-                        # Apply settings
+                        # Apply settings (TASK 4 & 5)
                         desired_state = desired.get("desired_state", {})
-                        current_state = apply_desired_state(desired_state)
+                        current_state = apply_desired_state(desired_state, state_manager)
                         
                         # Log what was applied
                         actions = current_state.get("actions_taken", [])
                         if actions:
                             logger.info(f"Applied: {'; '.join(actions)}")
                         
-                        # Acknowledge
+                        # Acknowledge (TASK 4)
                         if client.ack_state(remote_version, current_state):
                             state_manager.save_applied_version(remote_version)
                             logger.info(f"Successfully applied and acknowledged version {remote_version}")
