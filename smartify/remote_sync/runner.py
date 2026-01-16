@@ -407,34 +407,35 @@ def settings_loop(client: RemoteClient, state_manager: StateManager, interval: i
                         current_state = apply_desired_state(desired_state, state_manager)
                         
                         # Log what was applied
-                        actions = current_state.get("actions_taken", [])
+                        actions = current_state.get("actions_taken", []) or []
                         if actions:
-                            logger.info(f"Applied: {'; '.join(actions)}")
+                            logger.info("Applied: %s", '; '.join(str(a) for a in actions))
                         
                         # Check if apply failed (exception) or any critical actions FAILED
-                        apply_failed = current_state.get("apply_failed", False)
-                        has_failures = any("FAILED" in action for action in actions)
+                        apply_failed = bool(current_state.get("apply_failed", False))
+                        has_failures = any("FAILED" in str(a) for a in actions)
                         
                         if apply_failed or has_failures:
-                            logger.error(f"Apply failed - skipping ACK for version {remote_version}")
+                            logger.error("Apply failed - skipping ACK for version %s", remote_version)
                             if apply_failed:
-                                error_msg = current_state.get("apply_error", "unknown error")
-                                logger.error(f"Apply exception: {error_msg}")
+                                logger.error("Apply error: %s", current_state.get("apply_error"))
                             if has_failures:
-                                logger.error(f"Failed actions: {[a for a in actions if 'FAILED' in a]}")
+                                failed_actions = [a for a in actions if "FAILED" in str(a)]
+                                logger.error("Failed actions: %s", failed_actions)
                             # Do NOT ack - will retry next cycle
+                            # Do NOT save applied version
                         else:
                             # Acknowledge (TASK 4) - only if no failures
                             if client.ack_state(remote_version, current_state):
                                 state_manager.save_applied_version(remote_version)
-                                logger.info(f"Successfully applied and acknowledged version {remote_version}")
+                                logger.info("Successfully applied and acknowledged version %s", remote_version)
                                 
                                 # Log relay states after change
                                 relays = current_state.get("relays", {})
                                 if relays:
-                                    logger.info(f"Relay states after change: {relays}")
+                                    logger.info("Relay states after change: %s", relays)
                             else:
-                                logger.warning(f"Failed to acknowledge version {remote_version}")
+                                logger.warning("Failed to acknowledge version %s", remote_version)
                     else:
                         logger.debug("Settings up to date")
                 else:
@@ -458,6 +459,7 @@ def main():
     """Main entry point"""
     logger.info("=" * 60)
     logger.info("Smartify Remote Sync starting...")
+    logger.info("runner.py path: %s", __file__)
     logger.info("=" * 60)
     
     try:
