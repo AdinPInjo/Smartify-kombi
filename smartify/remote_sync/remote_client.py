@@ -73,7 +73,9 @@ class RemoteClient:
         """Initialize HTTP mode configuration"""
         self.base_url = os.getenv("SMARTIFY_REMOTE_BASE_URL", "").strip()
         self.device_token = os.getenv("SMARTIFY_DEVICE_TOKEN", "").strip()
+        self.supabase_anon_key = os.getenv("SMARTIFY_SUPABASE_ANON_KEY", "").strip()
         
+        # Validate required configuration
         if not self.base_url:
             logger.error("SMARTIFY_REMOTE_BASE_URL not set for HTTP mode")
             raise ValueError("SMARTIFY_REMOTE_BASE_URL is required for HTTP mode")
@@ -82,14 +84,22 @@ class RemoteClient:
             logger.error("SMARTIFY_DEVICE_TOKEN not set for HTTP mode")
             raise ValueError("SMARTIFY_DEVICE_TOKEN is required for HTTP mode")
         
+        if not self.supabase_anon_key:
+            logger.error("SMARTIFY_SUPABASE_ANON_KEY not set for HTTP mode")
+            raise ValueError("SMARTIFY_SUPABASE_ANON_KEY is required for HTTP mode")
+        
         # Remove trailing slash from base URL
         self.base_url = self.base_url.rstrip('/')
         
-        # Setup HTTP session with headers
+        # Setup HTTP session with headers for Supabase Edge Functions
+        # Authorization and apikey use the Supabase anon key (for gateway)
+        # x-device-token contains the device authentication token
         self.session = requests.Session()
         self.session.headers.update({
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self.device_token}'
+            'Authorization': f'Bearer {self.supabase_anon_key}',
+            'apikey': self.supabase_anon_key,
+            'x-device-token': self.device_token,
         })
         
         # HTTP timeouts and retry settings
@@ -99,6 +109,7 @@ class RemoteClient:
         
         logger.info(f"HTTP mode initialized: base_url={self.base_url}")
         logger.debug(f"Device token configured (length={len(self.device_token)})")
+        logger.debug(f"Supabase anon key configured (length={len(self.supabase_anon_key)})")
 
     def post_telemetry(
         self,
@@ -203,12 +214,12 @@ class RemoteClient:
                 )
                 
                 if response.status_code == 200:
-                    logger.debug(f"Telemetry posted successfully to {url}")
+                    logger.info(f"Telemetry posted successfully to remote")
                     return True
                 else:
                     logger.warning(
                         f"Telemetry post failed (attempt {attempt + 1}/{self.http_retries}): "
-                        f"status={response.status_code}, response={response.text[:200]}"
+                        f"status={response.status_code}, response={response.text[:500]}"
                     )
                     
             except requests.exceptions.Timeout:
@@ -275,7 +286,7 @@ class RemoteClient:
                 
                 if response.status_code == 200:
                     data = response.json()
-                    logger.debug(f"Got desired state: version={data.get('version')}")
+                    logger.debug(f"Got desired state from remote: version={data.get('version')}")
                     return data
                 elif response.status_code == 404:
                     logger.debug("No desired state configured yet")
@@ -283,7 +294,7 @@ class RemoteClient:
                 else:
                     logger.warning(
                         f"Get desired state failed (attempt {attempt + 1}/{self.http_retries}): "
-                        f"status={response.status_code}, response={response.text[:200]}"
+                        f"status={response.status_code}, response={response.text[:500]}"
                     )
                     
             except requests.exceptions.Timeout:
@@ -365,12 +376,12 @@ class RemoteClient:
                 )
                 
                 if response.status_code == 200:
-                    logger.info(f"State acknowledged: version={applied_version}")
+                    logger.info(f"State acknowledged to remote: version={applied_version}")
                     return True
                 else:
                     logger.warning(
                         f"Ack state failed (attempt {attempt + 1}/{self.http_retries}): "
-                        f"status={response.status_code}, response={response.text[:200]}"
+                        f"status={response.status_code}, response={response.text[:500]}"
                     )
                     
             except requests.exceptions.Timeout:
