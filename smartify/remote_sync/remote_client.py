@@ -75,6 +75,13 @@ class RemoteClient:
         self.device_token = os.getenv("SMARTIFY_DEVICE_TOKEN", "").strip()
         self.supabase_anon_key = os.getenv("SMARTIFY_SUPABASE_ANON_KEY", "").strip()
         
+        # Read device_id from environment (multiple possible names for compatibility)
+        self.device_id = (
+            os.getenv("SMARTIFY_DEVICE_ID", "").strip() or
+            os.getenv("DEVICE_ID", "").strip() or
+            os.getenv("REMOTE_DEVICE_ID", "").strip()
+        )
+        
         # Validate required configuration
         if not self.base_url:
             logger.error("SMARTIFY_REMOTE_BASE_URL not set for HTTP mode")
@@ -87,6 +94,10 @@ class RemoteClient:
         if not self.supabase_anon_key:
             logger.error("SMARTIFY_SUPABASE_ANON_KEY not set for HTTP mode")
             raise ValueError("SMARTIFY_SUPABASE_ANON_KEY is required for HTTP mode")
+        
+        if not self.device_id:
+            logger.warning("SMARTIFY_DEVICE_ID not set - getDesiredState will not work properly")
+            # Don't raise error - allow telemetry to work, just warn about desired_state
         
         # Remove trailing slash from base URL
         self.base_url = self.base_url.rstrip('/')
@@ -108,6 +119,8 @@ class RemoteClient:
         self.http_backoff = 0.5  # seconds
         
         logger.info(f"HTTP mode initialized: base_url={self.base_url}")
+        if self.device_id:
+            logger.info(f"Device ID configured: {self.device_id}")
         logger.debug(f"Device token configured (length={len(self.device_token)})")
         logger.debug(f"Supabase anon key configured (length={len(self.supabase_anon_key)})")
 
@@ -274,13 +287,32 @@ class RemoteClient:
             return None
     
     def _get_desired_state_http(self) -> Optional[Dict[str, Any]]:
-        """Get desired state in HTTP mode (from Supabase Edge Function)"""
+        """
+        Get desired state in HTTP mode (from Supabase Edge Function)
+        
+        Sends device_id in POST request body to identify which device's settings to fetch.
+        
+        Returns:
+            Dictionary with 'version' and 'desired_state' keys, or None if failed
+        """
+        # Check if device_id is configured
+        if not self.device_id:
+            logger.error("SMARTIFY_DEVICE_ID not set - cannot fetch desired state")
+            return {"version": 0, "desired_state": {}}
+        
         url = f"{self.base_url}/getDesiredState"
+        
+        # Prepare request payload with device_id
+        payload = {
+            "device_id": self.device_id
+        }
         
         for attempt in range(self.http_retries):
             try:
-                response = self.session.get(
+                # Use POST with JSON body (Edge Function expects device_id in body)
+                response = self.session.post(
                     url,
+                    json=payload,
                     timeout=self.http_timeout
                 )
                 
