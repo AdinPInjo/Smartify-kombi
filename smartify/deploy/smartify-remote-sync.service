@@ -1,5 +1,5 @@
 [Unit]
-Description=Smartify Remote Sync Service (Local Mode)
+Description=Smartify Remote Sync Service
 Documentation=https://github.com/your-repo/smartify
 After=network.target
 
@@ -12,9 +12,8 @@ WorkingDirectory=__WORKING_DIR__
 # Main command
 ExecStart=/usr/bin/python3 __WORKING_DIR__/remote_sync/runner.py
 
-# Environment - default to local mode with HTTP API fallback
-Environment="SMARTIFY_REMOTE_MODE=local"
-Environment="SMARTIFY_LOCAL_API_BASE=http://127.0.0.1:8000"
+# Load environment from config file
+EnvironmentFile=/etc/smartify/remote_sync.env
 
 # Restart policy - always restart on failure
 Restart=always
