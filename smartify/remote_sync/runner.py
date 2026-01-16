@@ -411,17 +411,25 @@ def settings_loop(client: RemoteClient, state_manager: StateManager, interval: i
                         if actions:
                             logger.info(f"Applied: {'; '.join(actions)}")
                         
-                        # Acknowledge (TASK 4)
-                        if client.ack_state(remote_version, current_state):
-                            state_manager.save_applied_version(remote_version)
-                            logger.info(f"Successfully applied and acknowledged version {remote_version}")
-                            
-                            # Log relay states after change
-                            relays = current_state.get("relays", {})
-                            if relays:
-                                logger.info(f"Relay states after change: {relays}")
+                        # Check if any critical actions FAILED
+                        has_failures = any("FAILED" in action for action in actions)
+                        
+                        if has_failures:
+                            logger.error(f"Settings application had FAILURES - NOT acknowledging version {remote_version}")
+                            logger.error(f"Failed actions: {[a for a in actions if 'FAILED' in a]}")
+                            # Do NOT ack - will retry next cycle
                         else:
-                            logger.warning(f"Failed to acknowledge version {remote_version}")
+                            # Acknowledge (TASK 4) - only if no failures
+                            if client.ack_state(remote_version, current_state):
+                                state_manager.save_applied_version(remote_version)
+                                logger.info(f"Successfully applied and acknowledged version {remote_version}")
+                                
+                                # Log relay states after change
+                                relays = current_state.get("relays", {})
+                                if relays:
+                                    logger.info(f"Relay states after change: {relays}")
+                            else:
+                                logger.warning(f"Failed to acknowledge version {remote_version}")
                     else:
                         logger.debug("Settings up to date")
                 else:

@@ -353,32 +353,78 @@ def set_relay_state(relay_name: str, state: str, mode: str = "manual", duration_
         return False
 
 
-def apply_heater_setting(enabled: bool) -> bool:
+def apply_heater_setting(enabled: bool, verify: bool = True) -> bool:
     """
-    Enable or disable heater
+    Enable or disable heater with state verification
     
     Args:
         enabled: True to enable, False to disable
+        verify: If True, verify state change by re-reading relay states
     
     Returns:
-        True if successful, False otherwise
+        True if successful and verified, False otherwise
     """
     state = "on" if enabled else "off"
-    return set_relay_state("heater", state, mode="manual")
+    
+    # Apply the setting
+    if not set_relay_state("heater", state, mode="manual"):
+        logger.error(f"Failed to set heater to {state}")
+        return False
+    
+    if not verify:
+        return True
+    
+    # Verify the state change (retry up to 5 times)
+    import time
+    for attempt in range(5):
+        time.sleep(0.2)  # Wait for relay to switch
+        relays = read_relay_states()
+        if relays:
+            heater_state = relays.get("heater", {}).get("state", "unknown")
+            if heater_state == state:
+                logger.debug(f"Heater state verified: {state}")
+                return True
+            logger.debug(f"Heater state check attempt {attempt + 1}: expected={state}, actual={heater_state}")
+    
+    logger.error(f"Failed to verify heater state change to {state} after 5 attempts")
+    return False
 
 
-def apply_pump_setting(enabled: bool) -> bool:
+def apply_pump_setting(enabled: bool, verify: bool = True) -> bool:
     """
-    Enable or disable water pump
+    Enable or disable water pump with state verification
     
     Args:
         enabled: True to enable, False to disable
+        verify: If True, verify state change by re-reading relay states
     
     Returns:
-        True if successful, False otherwise
+        True if successful and verified, False otherwise
     """
     state = "on" if enabled else "off"
-    return set_relay_state("pump", state, mode="manual")
+    
+    # Apply the setting
+    if not set_relay_state("pump", state, mode="manual"):
+        logger.error(f"Failed to set pump to {state}")
+        return False
+    
+    if not verify:
+        return True
+    
+    # Verify the state change (retry up to 5 times)
+    import time
+    for attempt in range(5):
+        time.sleep(0.2)  # Wait for relay to switch
+        relays = read_relay_states()
+        if relays:
+            pump_state = relays.get("pump", {}).get("state", "unknown")
+            if pump_state == state:
+                logger.debug(f"Pump state verified: {state}")
+                return True
+            logger.debug(f"Pump state check attempt {attempt + 1}: expected={state}, actual={pump_state}")
+    
+    logger.error(f"Failed to verify pump state change to {state} after 5 attempts")
+    return False
 
 
 def apply_lighting_mode(mode: str) -> bool:
@@ -504,23 +550,57 @@ def build_current_state() -> Dict[str, Any]:
     return current_state
 
 
+def normalize_relay_value(value: Any) -> Optional[str]:
+    """
+    Normalize relay value to "on" or "off"
+    
+    Accepts: "on"/"off" (case-insensitive), True/False, 1/0
+    
+    Returns:
+        "on", "off", or None if invalid
+    """
+    if isinstance(value, str):
+        value_lower = value.lower().strip()
+        if value_lower in ("on", "true", "1"):
+            return "on"
+        elif value_lower in ("off", "false", "0"):
+            return "off"
+    elif isinstance(value, bool):
+        return "on" if value else "off"
+    elif isinstance(value, (int, float)):
+        return "on" if value else "off"
+    
+    return None
+
+
 def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None) -> Dict[str, Any]:
     """
     Apply desired state to device with heater automation rules (TASK 4 & 5)
     
-    Supported desired_state fields:
+    Supported desired_state schemas (backward/forward compatible):
+    
+    Schema 1 - Direct relay control (MANUAL override, highest priority):
+    - relays: {"heater": "on"|"off", "pump": "on"|"off"}
+      → Treated as MANUAL override (heater_force="on"/"off", heater_auto=false)
+      → Applies IMMEDIATELY (no hold-time)
+    
+    Schema 2 - Automation control:
     - heater_auto: bool (enable automatic heater control)
     - heater_on_below_c: float (turn heater on below this temp)
     - heater_off_above_c: float (turn heater off above this temp)
     - heater_force: "on" | "off" | "auto" (override auto mode)
     - pump_force: "on" | "off"
     - lights_mode: "off" | "dim" | "on"
-    - gps_enabled: bool (optional, for future use)
+    
+    Priority:
+    1. relays.heater (MANUAL override) - applies immediately, no hold-time
+    2. heater_force "on"/"off" - applies immediately, no hold-time
+    3. heater_auto + thresholds - applies with hold-time (prevents oscillation)
     
     Heater automation rules (TASK 5):
     - Force modes override auto
     - Auto mode uses temperature thresholds with hysteresis
-    - Minimum hold time (5 minutes) prevents oscillation
+    - Minimum hold time (5 minutes) prevents oscillation for AUTO decisions only
     - Invalid config (on_below >= off_above) is ignored
     
     Args:
@@ -533,7 +613,44 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
     logger.info(f"Applying desired state: {desired_state}")
     
     actions_taken = []
-    MIN_HOLD_TIME_S = 300  # 5 minutes minimum between heater changes
+    MIN_HOLD_TIME_S = 300  # 5 minutes minimum between heater changes (AUTO mode only)
+    
+    # =========================================================================
+    # STEP 1: Normalize relays schema to standard fields
+    # =========================================================================
+    relays_cmd = desired_state.get("relays", {})
+    if isinstance(relays_cmd, dict) and relays_cmd:
+        logger.info(f"Detected relays override: {relays_cmd}")
+        
+        # Map relays.heater to heater_force (MANUAL override)
+        if "heater" in relays_cmd:
+            heater_value = normalize_relay_value(relays_cmd["heater"])
+            if heater_value:
+                desired_state["heater_force"] = heater_value
+                desired_state["heater_auto"] = False  # Disable auto when manual override
+                logger.info(f"Mapped relays.heater={relays_cmd['heater']} -> heater_force={heater_value}, heater_auto=false")
+            else:
+                logger.warning(f"Invalid relays.heater value: {relays_cmd['heater']}")
+        
+        # Map relays.pump to pump_force
+        if "pump" in relays_cmd:
+            pump_value = normalize_relay_value(relays_cmd["pump"])
+            if pump_value:
+                desired_state["pump_force"] = pump_value
+                logger.info(f"Mapped relays.pump={relays_cmd['pump']} -> pump_force={pump_value}")
+            else:
+                logger.warning(f"Invalid relays.pump value: {relays_cmd['pump']}")
+        
+        # Map relays.lights to lights_mode (optional)
+        if "lights" in relays_cmd:
+            lights_value = normalize_relay_value(relays_cmd["lights"])
+            if lights_value:
+                desired_state["lights_mode"] = lights_value
+                logger.info(f"Mapped relays.lights={relays_cmd['lights']} -> lights_mode={lights_value}")
+    
+    # =========================================================================
+    # STEP 2: Apply settings with verification
+    # =========================================================================
     
     try:
         # Heater control with automation (TASK 5)
@@ -551,7 +668,7 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
         relays = read_relay_states()
         current_heater_state = relays.get("heater", {}).get("state", "unknown") if relays else "unknown"
         
-        # Check minimum hold time
+        # Check minimum hold time (only for AUTO mode)
         last_change_ts = None
         if state_manager:
             last_change_ts = state_manager.get_last_relay_change("heater")
@@ -560,28 +677,33 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
         if last_change_ts:
             time_since_change = time.time() - last_change_ts
         
-        # Determine desired heater state
+        # Determine desired heater state and mode (MANUAL vs AUTO)
         desired_heater_state = None
         reason = None
+        is_manual_override = False  # MANUAL overrides apply immediately (no hold-time)
         
         if heater_force == "on":
             desired_heater_state = True
             reason = "forced ON"
+            is_manual_override = True  # MANUAL: no hold-time
         
         elif heater_force == "off":
             desired_heater_state = False
             reason = "forced OFF"
+            is_manual_override = True  # MANUAL: no hold-time
         
         elif (heater_force == "auto" or heater_force not in ("on", "off")) and heater_auto:
-            # Automatic heater control based on temperature
+            # Automatic heater control based on temperature (AUTO mode: with hold-time)
             temp = read_temperature()
             if temp is not None:
                 if temp < heater_on_below_c:
                     desired_heater_state = True
                     reason = f"auto ON (temp {temp:.1f}°C < {heater_on_below_c}°C)"
+                    is_manual_override = False  # AUTO: enforce hold-time
                 elif temp > heater_off_above_c:
                     desired_heater_state = False
                     reason = f"auto OFF (temp {temp:.1f}°C > {heater_off_above_c}°C)"
+                    is_manual_override = False  # AUTO: enforce hold-time
                 else:
                     # In hysteresis range - keep current state
                     reason = f"auto HOLD (temp {temp:.1f}°C in range [{heater_on_below_c}°C - {heater_off_above_c}°C])"
@@ -594,20 +716,25 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
             current_is_on = current_heater_state == "on"
             
             if desired_heater_state != current_is_on:
-                # State needs to change - check hold time
-                if time_since_change is not None and time_since_change < MIN_HOLD_TIME_S:
+                # State needs to change
+                # Check hold time ONLY for AUTO mode (not for MANUAL override)
+                if not is_manual_override and time_since_change is not None and time_since_change < MIN_HOLD_TIME_S:
                     remaining = MIN_HOLD_TIME_S - time_since_change
-                    logger.info(f"Heater change blocked by hold time: {remaining:.0f}s remaining")
+                    logger.info(f"Heater AUTO change blocked by hold time: {remaining:.0f}s remaining")
                     actions_taken.append(f"heater {reason} (blocked: {remaining:.0f}s hold time)")
                 else:
-                    # Apply change
-                    if apply_heater_setting(desired_heater_state):
+                    # Apply change (MANUAL applies immediately, AUTO applies after hold-time)
+                    if is_manual_override:
+                        logger.info(f"Applying MANUAL heater override (no hold-time): {reason}")
+                    
+                    if apply_heater_setting(desired_heater_state, verify=True):
                         actions_taken.append(f"heater {reason}")
                         # Record change time
                         if state_manager:
                             state_manager.save_relay_change("heater")
                     else:
                         actions_taken.append(f"heater {reason} FAILED")
+                        logger.error(f"Heater state change FAILED: desired={desired_heater_state}, reason={reason}")
             else:
                 # State already correct
                 actions_taken.append(f"heater {reason} (already {current_heater_state})")
@@ -618,17 +745,25 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
         # Pump control
         pump_force = desired_state.get("pump_force")
         if pump_force == "on":
-            if apply_pump_setting(True):
+            if apply_pump_setting(True, verify=True):
                 actions_taken.append("pump forced ON")
+            else:
+                actions_taken.append("pump forced ON FAILED")
+                logger.error("Pump state change FAILED: desired=on")
         elif pump_force == "off":
-            if apply_pump_setting(False):
+            if apply_pump_setting(False, verify=True):
                 actions_taken.append("pump forced OFF")
+            else:
+                actions_taken.append("pump forced OFF FAILED")
+                logger.error("Pump state change FAILED: desired=off")
         
         # Lights control
         lights_mode = desired_state.get("lights_mode")
         if lights_mode:
             if apply_lighting_mode(lights_mode):
                 actions_taken.append(f"lights set to '{lights_mode}'")
+            else:
+                actions_taken.append(f"lights set to '{lights_mode}' FAILED")
         
         # Log what was done
         if actions_taken:
@@ -639,9 +774,13 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
     except Exception as e:
         logger.error(f"Error applying desired state: {e}", exc_info=True)
     
-    # Build and return current state
+    # Build and return current state with FRESH relay states (post-change verification)
     current_state = build_current_state()
     if actions_taken:
         current_state["actions_taken"] = actions_taken
+    
+    # Log fresh relay states after changes
+    if current_state.get("relays"):
+        logger.info(f"Relay states after change (verified): {current_state['relays']}")
     
     return current_state
