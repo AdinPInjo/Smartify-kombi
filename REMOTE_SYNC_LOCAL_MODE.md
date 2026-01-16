@@ -90,8 +90,8 @@ Telemetry Loop (60s)          Settings Loop (15s)
 ### Quick Install
 
 ```bash
-cd /home/pi/smartify/deploy
-./install_remote_sync.sh
+cd /home/pi/Smartify-kombi
+bash smartify/deploy/install_remote_sync.sh
 ```
 
 This will:
@@ -320,8 +320,8 @@ To add cloud sync later:
 
 ## Next Steps
 
-1. ✅ Run `./deploy/install_remote_sync.sh` on Pi
-2. ✅ Update sensor imports in `adapters.py`
+1. ✅ Run `bash smartify/deploy/install_remote_sync.sh` on Pi
+2. ✅ Update sensor imports in `adapters.py` (or use HTTP API fallback)
 3. ✅ Update control functions in `adapters.py`
 4. ✅ Test settings update by editing `desired_state.json`
 5. ✅ Monitor telemetry in JSONL file

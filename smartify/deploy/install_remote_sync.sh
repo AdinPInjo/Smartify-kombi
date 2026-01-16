@@ -7,11 +7,24 @@ echo "🚐 Smartify Remote Sync Installation"
 echo "====================================="
 echo ""
 
+# Detect the actual user (not root even if using sudo)
+if [ -n "$SUDO_USER" ]; then
+    ACTUAL_USER="$SUDO_USER"
+elif [ -n "$LOGNAME" ]; then
+    ACTUAL_USER="$LOGNAME"
+else
+    ACTUAL_USER="$(logname 2>/dev/null || whoami)"
+fi
+
 # Check if running as root
 if [ "$EUID" -eq 0 ]; then
-    echo "⚠️  Please run as pi user (not root)!"
+    echo "⚠️  Running as root with SUDO."
+    echo "   Service will run as user: $ACTUAL_USER"
+    echo ""
+else
+    echo "ℹ️  Running as user: $ACTUAL_USER"
     echo "   This script will use sudo when needed."
-    exit 1
+    echo ""
 fi
 
 # Get script directory
@@ -21,6 +34,7 @@ SMARTIFY_DIR="$(dirname "$SCRIPT_DIR")"
 echo "📁 Directories:"
 echo "   Smartify: $SMARTIFY_DIR"
 echo "   Deploy:   $SCRIPT_DIR"
+echo "   User:     $ACTUAL_USER"
 echo ""
 
 # Create required directories
@@ -30,11 +44,11 @@ sudo mkdir -p /var/lib/smartify
 sudo mkdir -p /etc/smartify
 
 # Set permissions
-sudo chown $USER:$USER /var/log/smartify
-sudo chown $USER:$USER /var/lib/smartify
-sudo chown $USER:$USER /etc/smartify
+sudo chown $ACTUAL_USER:$ACTUAL_USER /var/log/smartify
+sudo chown $ACTUAL_USER:$ACTUAL_USER /var/lib/smartify
+sudo chown $ACTUAL_USER:$ACTUAL_USER /etc/smartify
 
-echo "   ✓ Directories created with proper permissions"
+echo "   ✓ Directories created with proper permissions for $ACTUAL_USER"
 echo ""
 
 # Create default desired_state.json if it doesn't exist
@@ -46,19 +60,20 @@ if [ ! -f /etc/smartify/desired_state.json ]; then
   "desired_state": {}
 }
 EOF
+    sudo chown $ACTUAL_USER:$ACTUAL_USER /etc/smartify/desired_state.json
     echo "   ✓ Created /etc/smartify/desired_state.json"
 else
     echo "📝 desired_state.json already exists, skipping"
 fi
 echo ""
 
-# Copy systemd service file
+# Copy systemd service file and substitute user/paths
 echo "⚙️  Installing systemd service..."
 
-# Update paths in service file
+# Create temporary service file with substitutions
 TEMP_SERVICE=$(mktemp)
-sed "s|WorkingDirectory=.*|WorkingDirectory=$SMARTIFY_DIR|g" "$SCRIPT_DIR/smartify-remote-sync.service" > "$TEMP_SERVICE"
-sed -i "s|ExecStart=.*|ExecStart=/usr/bin/python3 $SMARTIFY_DIR/remote_sync/runner.py|g" "$TEMP_SERVICE"
+sed "s|__USER__|$ACTUAL_USER|g" "$SCRIPT_DIR/smartify-remote-sync.service" > "$TEMP_SERVICE"
+sed -i "s|__WORKING_DIR__|$SMARTIFY_DIR|g" "$TEMP_SERVICE"
 
 # Install service
 sudo cp "$TEMP_SERVICE" /etc/systemd/system/smartify-remote-sync.service
@@ -67,7 +82,7 @@ rm "$TEMP_SERVICE"
 # Reload systemd
 sudo systemctl daemon-reload
 
-echo "   ✓ Service installed"
+echo "   ✓ Service installed for user: $ACTUAL_USER"
 echo ""
 
 # Enable service
@@ -119,4 +134,3 @@ echo "   Edit /etc/smartify/desired_state.json and increment the version"
 echo "   The runner will detect and apply changes within 15 seconds"
 echo ""
 echo "🚀 Your device is now running in local mode!"
-

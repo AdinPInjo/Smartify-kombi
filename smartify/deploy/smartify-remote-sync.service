@@ -5,15 +5,16 @@ After=network.target
 
 [Service]
 Type=simple
-User=pi
-Group=pi
-WorkingDirectory=/home/pi/smartify
+User=__USER__
+Group=__USER__
+WorkingDirectory=__WORKING_DIR__
 
 # Main command
-ExecStart=/usr/bin/python3 /home/pi/smartify/remote_sync/runner.py
+ExecStart=/usr/bin/python3 __WORKING_DIR__/remote_sync/runner.py
 
-# Environment - default to local mode
+# Environment - default to local mode with HTTP API fallback
 Environment="SMARTIFY_REMOTE_MODE=local"
+Environment="SMARTIFY_LOCAL_API_BASE=http://127.0.0.1:5000"
 
 # Restart policy - always restart on failure
 Restart=always
@@ -36,4 +37,3 @@ CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target
-
