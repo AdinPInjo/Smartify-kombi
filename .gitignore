@@ -17,3 +17,6 @@ __pycache__/
 # Local data
 *.db
 *.log
+
+# Ignore .DS_Store everywhere
+**/.DS_Store
