@@ -26,7 +26,10 @@ from remote_sync.adapters import (
     read_temperature,
     read_water_level,
     read_gps_location,
+    read_individual_temperatures,
+    read_relay_states,
     apply_desired_state,
+    build_current_state,
 )
 
 # Configure logging
@@ -201,6 +204,21 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                 
                 if success:
                     logger.info("Telemetry posted successfully")
+                    
+                    # Build and update current state snapshot for device_state
+                    current_state = build_current_state()
+                    
+                    # Update device_state.current_state via ackState
+                    # Use current applied_version (doesn't increment version, just updates state)
+                    applied_version = state_manager.get_applied_version()
+                    if client.ack_state(applied_version, current_state):
+                        logger.debug(f"Device state updated")
+                        # Log key metrics
+                        relays = current_state.get("relays", {})
+                        temps = current_state.get("temps", {})
+                        logger.debug(f"State: relays={relays}, temps={temps}")
+                    else:
+                        logger.debug("Device state update skipped (expected in local mode)")
                 else:
                     logger.warning("Failed to post telemetry")
                 
@@ -246,15 +264,26 @@ def settings_loop(client: RemoteClient, state_manager: StateManager, interval: i
                     
                     if remote_version > local_version:
                         logger.info(f"New settings version {remote_version} detected, applying...")
+                        logger.info(f"Desired state: {desired.get('desired_state', {})}")
                         
                         # Apply settings
                         desired_state = desired.get("desired_state", {})
                         current_state = apply_desired_state(desired_state)
                         
+                        # Log what was applied
+                        actions = current_state.get("actions_taken", [])
+                        if actions:
+                            logger.info(f"Applied: {'; '.join(actions)}")
+                        
                         # Acknowledge
                         if client.ack_state(remote_version, current_state):
                             state_manager.save_applied_version(remote_version)
                             logger.info(f"Successfully applied and acknowledged version {remote_version}")
+                            
+                            # Log relay states after change
+                            relays = current_state.get("relays", {})
+                            if relays:
+                                logger.info(f"Relay states after change: {relays}")
                         else:
                             logger.warning(f"Failed to acknowledge version {remote_version}")
                     else:

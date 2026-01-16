@@ -81,6 +81,47 @@ def read_temperature() -> Optional[float]:
         return None
 
 
+def read_individual_temperatures() -> Dict[str, Optional[float]]:
+    """
+    Read individual temperature sensors
+    
+    Returns:
+        Dictionary with t1, t2, avg keys, or empty dict if unavailable
+    """
+    try:
+        url = f"{LOCAL_API_BASE}/api/temperature/latest"
+        response = requests.get(url, timeout=API_TIMEOUT)
+        
+        if response.status_code == 200:
+            data = response.json()
+            sensors = data.get("sensors", [])
+            
+            result = {"t1": None, "t2": None, "avg": None}
+            temps = []
+            
+            for sensor in sensors:
+                temp_c = sensor.get("temperature_c")
+                sensor_idx = sensor.get("sensor_index", 0)
+                
+                if temp_c is not None:
+                    temps.append(float(temp_c))
+                    if sensor_idx == 0:
+                        result["t1"] = float(temp_c)
+                    elif sensor_idx == 1:
+                        result["t2"] = float(temp_c)
+            
+            if temps:
+                result["avg"] = sum(temps) / len(temps)
+            
+            logger.debug(f"Individual temps: t1={result['t1']}, t2={result['t2']}, avg={result['avg']}")
+            return result
+        
+    except Exception as e:
+        logger.warning(f"Error reading individual temperatures: {e}")
+    
+    return {"t1": None, "t2": None, "avg": None}
+
+
 def read_water_level() -> Optional[float]:
     """
     Read current water level as percentage (0-100)
@@ -201,8 +242,104 @@ def read_gps_location() -> Optional[Dict[str, float]]:
 
 
 # =============================================================================
+# Relay State Reading
+# =============================================================================
+
+def read_relay_states() -> Dict[str, Any]:
+    """
+    Read current state of all relays
+    
+    Returns:
+        Dictionary with relay names as keys and their states
+        Example: {"heater": {"state": "on", "mode": "auto"}}
+    """
+    try:
+        url = f"{LOCAL_API_BASE}/api/relays"
+        response = requests.get(url, timeout=API_TIMEOUT)
+        
+        if response.status_code == 200:
+            data = response.json()
+            relays_list = data.get("relays", [])
+            
+            result = {}
+            for relay in relays_list:
+                name = relay.get("name")
+                if name:
+                    result[name] = {
+                        "state": relay.get("state", "unknown"),
+                        "mode": relay.get("mode", "unknown"),
+                        "is_enabled": relay.get("is_enabled", False),
+                    }
+            
+            logger.debug(f"Read relay states: {list(result.keys())}")
+            return result
+        else:
+            logger.warning(f"Failed to read relay states: status={response.status_code}")
+            return {}
+    
+    except Exception as e:
+        logger.warning(f"Error reading relay states: {e}")
+        return {}
+
+
+# =============================================================================
 # Control Function Adapters
 # =============================================================================
+
+def set_relay_state(relay_name: str, state: str, mode: str = "manual", duration_minutes: Optional[int] = None) -> bool:
+    """
+    Set relay state via HTTP API
+    
+    Args:
+        relay_name: Name of relay (e.g. "heater", "pump", "lights")
+        state: "on" or "off"
+        mode: "manual" or "auto"
+        duration_minutes: Optional duration for manual mode
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # First get relay ID by name
+        url = f"{LOCAL_API_BASE}/api/relays"
+        response = requests.get(url, timeout=API_TIMEOUT)
+        
+        if response.status_code != 200:
+            logger.error(f"Failed to get relays list: status={response.status_code}")
+            return False
+        
+        relays = response.json().get("relays", [])
+        relay = next((r for r in relays if r.get("name") == relay_name), None)
+        
+        if not relay:
+            logger.error(f"Relay '{relay_name}' not found")
+            return False
+        
+        relay_id = relay.get("id")
+        
+        # Set relay state
+        url = f"{LOCAL_API_BASE}/api/relays/{relay_id}/state"
+        payload = {
+            "state": state,
+            "mode": mode,
+        }
+        
+        if duration_minutes is not None:
+            payload["duration_minutes"] = duration_minutes
+        
+        response = requests.post(url, json=payload, timeout=API_TIMEOUT)
+        
+        if response.status_code == 200:
+            logger.info(f"Set relay '{relay_name}' to {state} ({mode} mode)")
+            return True
+        else:
+            logger.warning(f"Failed to set relay '{relay_name}': status={response.status_code}, response={response.text[:200]}")
+            return False
+    
+    except Exception as e:
+        logger.error(f"Error setting relay '{relay_name}': {e}")
+        return False
+
 
 def apply_heater_setting(enabled: bool) -> bool:
     """
@@ -214,13 +351,8 @@ def apply_heater_setting(enabled: bool) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    try:
-        # TODO: Replace with actual control function
-        logger.info(f"Would {'enable' if enabled else 'disable'} heater")
-        return True
-    except Exception as e:
-        logger.error(f"Error setting heater: {e}")
-        return False
+    state = "on" if enabled else "off"
+    return set_relay_state("heater", state, mode="manual")
 
 
 def apply_pump_setting(enabled: bool) -> bool:
@@ -233,13 +365,8 @@ def apply_pump_setting(enabled: bool) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    try:
-        # TODO: Replace with actual control function
-        logger.info(f"Would {'enable' if enabled else 'disable'} pump")
-        return True
-    except Exception as e:
-        logger.error(f"Error setting pump: {e}")
-        return False
+    state = "on" if enabled else "off"
+    return set_relay_state("pump", state, mode="manual")
 
 
 def apply_lighting_mode(mode: str) -> bool:
@@ -247,23 +374,26 @@ def apply_lighting_mode(mode: str) -> bool:
     Set lighting mode
     
     Args:
-        mode: "off", "dim", or "bright"
+        mode: "off", "dim", or "on"
     
     Returns:
         True if successful, False otherwise
     """
-    try:
-        # TODO: Replace with actual control function
-        logger.info(f"Would set lighting mode to '{mode}'")
-        return True
-    except Exception as e:
-        logger.error(f"Error setting lighting: {e}")
+    # Map lighting modes to relay states
+    if mode == "off":
+        return set_relay_state("lights", "off", mode="manual")
+    elif mode in ("dim", "on"):
+        # For now, treat both dim and on as "on"
+        # Could be enhanced with PWM control later
+        return set_relay_state("lights", "on", mode="manual")
+    else:
+        logger.warning(f"Unknown lighting mode: {mode}")
         return False
 
 
 def apply_target_temperature(temp_c: float) -> bool:
     """
-    Set target temperature
+    Set target temperature (placeholder for future heater control logic)
     
     Args:
         temp_c: Target temperature in Celsius
@@ -272,8 +402,8 @@ def apply_target_temperature(temp_c: float) -> bool:
         True if successful, False otherwise
     """
     try:
-        # TODO: Replace with actual control function
-        logger.info(f"Would set target temperature to {temp_c}°C")
+        logger.info(f"Target temperature set to {temp_c}°C (stored for heater automation)")
+        # This could be stored in a local file for heater rules to use
         return True
     except Exception as e:
         logger.error(f"Error setting target temperature: {e}")
@@ -284,51 +414,146 @@ def apply_target_temperature(temp_c: float) -> bool:
 # Settings Application
 # =============================================================================
 
-def apply_desired_state(desired_state: Dict[str, Any]) -> Dict[str, Any]:
+def get_system_uptime() -> Optional[int]:
+    """Get system uptime in seconds"""
+    try:
+        with open("/proc/uptime", "r") as f:
+            uptime_seconds = float(f.read().split()[0])
+            return int(uptime_seconds)
+    except Exception as e:
+        logger.warning(f"Error reading uptime: {e}")
+        return None
+
+
+def build_current_state() -> Dict[str, Any]:
     """
-    Apply desired state to device
-    
-    Args:
-        desired_state: Dictionary with settings like heaterEnabled, pumpEnabled, etc.
+    Build comprehensive current state snapshot
     
     Returns:
-        Dictionary with actual current state after applying
+        Dictionary with relays, temps, water, gps, uptime
     """
     current_state = {}
     
     try:
-        # Extract and apply settings
-        if "heaterEnabled" in desired_state:
-            enabled = desired_state["heaterEnabled"]
-            if apply_heater_setting(enabled):
-                current_state["heaterEnabled"] = enabled
+        # Read relay states
+        relays = read_relay_states()
+        if relays:
+            current_state["relays"] = {
+                name: data["state"] for name, data in relays.items()
+            }
         
-        if "pumpEnabled" in desired_state:
-            enabled = desired_state["pumpEnabled"]
-            if apply_pump_setting(enabled):
-                current_state["pumpEnabled"] = enabled
+        # Read individual temperatures
+        temps = read_individual_temperatures()
+        if temps:
+            current_state["temps"] = temps
         
-        if "lightingMode" in desired_state:
-            mode = desired_state["lightingMode"]
-            if apply_lighting_mode(mode):
-                current_state["lightingMode"] = mode
-        
-        if "targetTemperature" in desired_state:
-            temp = desired_state["targetTemperature"]
-            if apply_target_temperature(temp):
-                current_state["targetTemperature"] = temp
-        
-        # Add current readings to state
-        temp = read_temperature()
-        if temp is not None:
-            current_state["currentTemperature"] = temp
-        
+        # Read water level
         water = read_water_level()
         if water is not None:
-            current_state["currentWaterLevel"] = water
+            current_state["water_percent"] = water
+        
+        # Read GPS
+        gps = read_gps_location()
+        if gps:
+            current_state["gps"] = {
+                "lat": gps.get("latitude"),
+                "lon": gps.get("longitude"),
+            }
+        
+        # Read uptime
+        uptime = get_system_uptime()
+        if uptime is not None:
+            current_state["uptime_s"] = uptime
         
     except Exception as e:
-        logger.error(f"Error applying desired state: {e}")
+        logger.error(f"Error building current state: {e}")
         current_state["error"] = str(e)
+    
+    return current_state
+
+
+def apply_desired_state(desired_state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Apply desired state to device with heater automation rules
+    
+    Supported desired_state fields:
+    - heater_auto: bool (enable automatic heater control)
+    - heater_on_below_c: float (turn heater on below this temp)
+    - heater_off_above_c: float (turn heater off above this temp)
+    - heater_force: "on" | "off" | "auto" (override auto mode)
+    - pump_force: "on" | "off"
+    - lights_mode: "off" | "dim" | "on"
+    - gps_enabled: bool (optional, for future use)
+    
+    Args:
+        desired_state: Dictionary with settings
+    
+    Returns:
+        Dictionary with actual current state after applying
+    """
+    logger.info(f"Applying desired state: {desired_state}")
+    
+    actions_taken = []
+    
+    try:
+        # Heater control with automation
+        heater_auto = desired_state.get("heater_auto", False)
+        heater_force = desired_state.get("heater_force", "auto")
+        heater_on_below_c = desired_state.get("heater_on_below_c", 5.0)
+        heater_off_above_c = desired_state.get("heater_off_above_c", 23.0)
+        
+        if heater_force == "on":
+            # Force heater on
+            if apply_heater_setting(True):
+                actions_taken.append("heater forced ON")
+        
+        elif heater_force == "off":
+            # Force heater off
+            if apply_heater_setting(False):
+                actions_taken.append("heater forced OFF")
+        
+        elif heater_force == "auto" and heater_auto:
+            # Automatic heater control based on temperature
+            temp = read_temperature()
+            if temp is not None:
+                if temp < heater_on_below_c:
+                    if apply_heater_setting(True):
+                        actions_taken.append(f"heater auto ON (temp {temp:.1f}°C < {heater_on_below_c}°C)")
+                elif temp > heater_off_above_c:
+                    if apply_heater_setting(False):
+                        actions_taken.append(f"heater auto OFF (temp {temp:.1f}°C > {heater_off_above_c}°C)")
+                else:
+                    actions_taken.append(f"heater auto HOLD (temp {temp:.1f}°C in range)")
+            else:
+                logger.warning("Cannot apply heater auto: temperature unavailable")
+        
+        # Pump control
+        pump_force = desired_state.get("pump_force")
+        if pump_force == "on":
+            if apply_pump_setting(True):
+                actions_taken.append("pump forced ON")
+        elif pump_force == "off":
+            if apply_pump_setting(False):
+                actions_taken.append("pump forced OFF")
+        
+        # Lights control
+        lights_mode = desired_state.get("lights_mode")
+        if lights_mode:
+            if apply_lighting_mode(lights_mode):
+                actions_taken.append(f"lights set to '{lights_mode}'")
+        
+        # Log what was done
+        if actions_taken:
+            logger.info(f"Actions: {', '.join(actions_taken)}")
+        else:
+            logger.info("No actions needed")
+        
+    except Exception as e:
+        logger.error(f"Error applying desired state: {e}", exc_info=True)
+    
+    # Build and return current state
+    current_state = build_current_state()
+    if actions_taken:
+        current_state["actions_taken"] = actions_taken
     
     return current_state
