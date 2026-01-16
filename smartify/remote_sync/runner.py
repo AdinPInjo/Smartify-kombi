@@ -411,12 +411,17 @@ def settings_loop(client: RemoteClient, state_manager: StateManager, interval: i
                         if actions:
                             logger.info(f"Applied: {'; '.join(actions)}")
                         
-                        # Check if any critical actions FAILED
+                        # Check if apply failed (exception) or any critical actions FAILED
+                        apply_failed = current_state.get("apply_failed", False)
                         has_failures = any("FAILED" in action for action in actions)
                         
-                        if has_failures:
-                            logger.error(f"Settings application had FAILURES - NOT acknowledging version {remote_version}")
-                            logger.error(f"Failed actions: {[a for a in actions if 'FAILED' in a]}")
+                        if apply_failed or has_failures:
+                            logger.error(f"Apply failed - skipping ACK for version {remote_version}")
+                            if apply_failed:
+                                error_msg = current_state.get("apply_error", "unknown error")
+                                logger.error(f"Apply exception: {error_msg}")
+                            if has_failures:
+                                logger.error(f"Failed actions: {[a for a in actions if 'FAILED' in a]}")
                             # Do NOT ack - will retry next cycle
                         else:
                             # Acknowledge (TASK 4) - only if no failures

@@ -8,6 +8,7 @@ Supports two methods:
 """
 
 import os
+import time
 import logging
 import requests
 from typing import Optional, Dict, Any
@@ -613,6 +614,7 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
     logger.info(f"Applying desired state: {desired_state}")
     
     actions_taken = []
+    apply_failed = False  # Track if apply failed with exception
     MIN_HOLD_TIME_S = 300  # 5 minutes minimum between heater changes (AUTO mode only)
     
     # =========================================================================
