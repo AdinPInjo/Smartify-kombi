@@ -91,12 +91,10 @@ sudo systemctl enable smartify-remote-sync
 echo "   ✓ Service enabled"
 echo ""
 
-# Ask if user wants to start now
-read -p "Start service now? (y/n): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo "▶️  Starting service..."
-    sudo systemctl start smartify-remote-sync
+# Check if service is already running
+if sudo systemctl is-active --quiet smartify-remote-sync; then
+    echo "🔄 Service is already running. Restarting to apply changes..."
+    sudo systemctl restart smartify-remote-sync
     sleep 2
     
     # Show status
@@ -105,10 +103,27 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     sudo systemctl status smartify-remote-sync --no-pager -l || true
     echo ""
     
-    echo "✅ Service started!"
+    echo "✅ Service restarted!"
 else
-    echo "⏸️  Service not started. Start manually with:"
-    echo "   sudo systemctl start smartify-remote-sync"
+    # Ask if user wants to start now
+    read -p "Start service now? (y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "▶️  Starting service..."
+        sudo systemctl start smartify-remote-sync
+        sleep 2
+        
+        # Show status
+        echo ""
+        echo "📊 Service status:"
+        sudo systemctl status smartify-remote-sync --no-pager -l || true
+        echo ""
+        
+        echo "✅ Service started!"
+    else
+        echo "⏸️  Service not started. Start manually with:"
+        echo "   sudo systemctl start smartify-remote-sync"
+    fi
 fi
 
 echo ""

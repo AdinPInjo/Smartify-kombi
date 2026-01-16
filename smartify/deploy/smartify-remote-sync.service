@@ -14,7 +14,7 @@ ExecStart=/usr/bin/python3 __WORKING_DIR__/remote_sync/runner.py
 
 # Environment - default to local mode with HTTP API fallback
 Environment="SMARTIFY_REMOTE_MODE=local"
-Environment="SMARTIFY_LOCAL_API_BASE=http://127.0.0.1:5000"
+Environment="SMARTIFY_LOCAL_API_BASE=http://127.0.0.1:8000"
 
 # Restart policy - always restart on failure
 Restart=always

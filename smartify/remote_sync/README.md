@@ -321,13 +321,18 @@ The adapter will:
 Set the base URL via environment variable:
 
 ```bash
-export SMARTIFY_LOCAL_API_BASE="http://127.0.0.1:5000"
+export SMARTIFY_LOCAL_API_BASE="http://127.0.0.1:8000"
 ```
 
 Or in the systemd service file (already included):
 
 ```ini
-Environment="SMARTIFY_LOCAL_API_BASE=http://127.0.0.1:5000"
+Environment="SMARTIFY_LOCAL_API_BASE=http://127.0.0.1:8000"
+```
+
+**Note:** The Smartify API runs on port **8000** by default (uvicorn). Verify with:
+```bash
+curl -s http://127.0.0.1:8000/api/water/level/live
 ```
 
 ## Integrating Your Code
