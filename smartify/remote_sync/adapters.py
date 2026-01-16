@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 # HTTP API configuration
-LOCAL_API_BASE = os.getenv("SMARTIFY_LOCAL_API_BASE", "http://127.0.0.1:5000")
+LOCAL_API_BASE = os.getenv("SMARTIFY_LOCAL_API_BASE", "http://127.0.0.1:8000")
 API_TIMEOUT = 5  # seconds
 
 

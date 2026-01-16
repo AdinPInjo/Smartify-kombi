@@ -60,15 +60,27 @@ grep "from direct import\|from HTTP API" /var/log/smartify/remote_sync.log | tai
 
 ### 5. Test API Endpoints (If Using HTTP Fallback)
 
+**Important:** The Smartify API runs on port **8000** by default.
+
 ```bash
+# Test API is reachable
+curl -s http://127.0.0.1:8000/api/water/level/live
+
 # Temperature
-curl -s http://127.0.0.1:5000/api/temperature/latest | jq '.sensors[].temperature_c'
+curl -s http://127.0.0.1:8000/api/temperature/latest | jq '.sensors[].temperature_c'
 
 # Water level
-curl -s http://127.0.0.1:5000/api/water/level/live | jq '.level_percent'
+curl -s http://127.0.0.1:8000/api/water/level/live | jq '.level_percent'
 
 # GPS
-curl -s http://127.0.0.1:5000/api/gps/current | jq '{lat, lon, ok}'
+curl -s http://127.0.0.1:8000/api/gps/current | jq '{lat, lon, ok}'
+```
+
+If these return "Connection refused", check that the main Smartify app is running:
+```bash
+sudo systemctl status smartify-app
+# or
+ps aux | grep uvicorn
 ```
 
 ## Common Issues & Fixes
@@ -83,8 +95,8 @@ curl -s http://127.0.0.1:5000/api/gps/current | jq '{lat, lon, ok}'
 sudo systemctl status smartify-app
 
 # Check if APIs respond
-curl http://127.0.0.1:5000/api/temperature/latest
-curl http://127.0.0.1:5000/api/water/level/live
+curl http://127.0.0.1:8000/api/temperature/latest
+curl http://127.0.0.1:8000/api/water/level/live
 
 # Check detailed logs
 grep "Error reading\|HTTP API" /var/log/smartify/remote_sync.log | tail -20
@@ -116,10 +128,15 @@ bash smartify/deploy/install_remote_sync.sh
 # Check if app is running
 sudo systemctl status smartify-app
 
-# Check what port it's using
+# Check what port it's using (should be 8000)
 sudo netstat -tlnp | grep python
+# or
+sudo ss -tlnp | grep uvicorn
 
-# If different port, update environment in service file:
+# Test API manually
+curl -s http://127.0.0.1:8000/api/water/level/live
+
+# If API is on a different port, update environment in service file:
 sudo nano /etc/systemd/system/smartify-remote-sync.service
 # Change: Environment="SMARTIFY_LOCAL_API_BASE=http://127.0.0.1:XXXX"
 sudo systemctl daemon-reload

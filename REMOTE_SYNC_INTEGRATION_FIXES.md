@@ -52,7 +52,7 @@ All integration issues have been fixed in the Smartify-kombi remote sync module.
 
 **Configuration:**
 ```bash
-export SMARTIFY_LOCAL_API_BASE="http://127.0.0.1:5000"
+export SMARTIFY_LOCAL_API_BASE="http://127.0.0.1:8000"
 ```
 
 ## 4. Environment Variables in Service File ✅
@@ -61,8 +61,10 @@ Added to `deploy/smartify-remote-sync.service`:
 
 ```ini
 Environment="SMARTIFY_REMOTE_MODE=local"
-Environment="SMARTIFY_LOCAL_API_BASE=http://127.0.0.1:5000"
+Environment="SMARTIFY_LOCAL_API_BASE=http://127.0.0.1:8000"
 ```
+
+**Note:** The Smartify API runs on port **8000** (uvicorn default).
 
 ## 5. API Documentation ✅
 
@@ -182,10 +184,10 @@ tail -10 /var/log/smartify/telemetry_outbox.jsonl | jq '{temperature_c, water_pe
 ### 4. Check API Fallback Behavior
 
 ```bash
-# Test if API endpoints are accessible
-curl http://127.0.0.1:5000/api/temperature/latest
-curl http://127.0.0.1:5000/api/water/level/live
-curl http://127.0.0.1:5000/api/gps/current
+# Test if API endpoints are accessible (port 8000 is default)
+curl http://127.0.0.1:8000/api/temperature/latest
+curl http://127.0.0.1:8000/api/water/level/live
+curl http://127.0.0.1:8000/api/gps/current
 
 # Check logs for "HTTP API" messages
 grep "HTTP API" /var/log/smartify/remote_sync.log | tail -10
@@ -219,8 +221,8 @@ HTTP API returned no valid temperature readings
 ### No Temperature Data
 
 ```bash
-# Check if temperature API works
-curl http://127.0.0.1:5000/api/temperature/latest | jq
+# Check if temperature API works (port 8000 is default)
+curl http://127.0.0.1:8000/api/temperature/latest | jq
 
 # Check if app is running
 sudo systemctl status smartify-app
@@ -232,11 +234,11 @@ grep "temperature" /var/log/smartify/remote_sync.log | tail -20
 ### No Water Level Data
 
 ```bash
-# Check if water API works
-curl http://127.0.0.1:5000/api/water/level/live | jq
+# Check if water API works (port 8000 is default)
+curl http://127.0.0.1:8000/api/water/level/live | jq
 
 # Check if level_percent is in response
-curl -s http://127.0.0.1:5000/api/water/level/live | jq '.level_percent'
+curl -s http://127.0.0.1:8000/api/water/level/live | jq '.level_percent'
 
 # Check adapter logs
 grep "water" /var/log/smartify/remote_sync.log | tail -20
