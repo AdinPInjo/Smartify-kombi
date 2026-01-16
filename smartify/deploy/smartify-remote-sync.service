@@ -1,0 +1,39 @@
+[Unit]
+Description=Smartify Remote Sync Service (Local Mode)
+Documentation=https://github.com/your-repo/smartify
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/smartify
+
+# Main command
+ExecStart=/usr/bin/python3 /home/pi/smartify/remote_sync/runner.py
+
+# Environment - default to local mode
+Environment="SMARTIFY_REMOTE_MODE=local"
+
+# Restart policy - always restart on failure
+Restart=always
+RestartSec=10s
+StartLimitInterval=400s
+StartLimitBurst=5
+
+# Logging
+StandardOutput=append:/var/log/smartify/remote_sync_stdout.log
+StandardError=append:/var/log/smartify/remote_sync_stderr.log
+SyslogIdentifier=smartify-remote-sync
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
+
