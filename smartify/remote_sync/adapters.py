@@ -8,7 +8,7 @@ Supports two methods:
 """
 
 import os
-import time
+import time as pytime
 import logging
 import requests
 from typing import Optional, Dict, Any
@@ -376,9 +376,8 @@ def apply_heater_setting(enabled: bool, verify: bool = True) -> bool:
         return True
     
     # Verify the state change (retry up to 5 times)
-    import time
     for attempt in range(5):
-        time.sleep(0.2)  # Wait for relay to switch
+        pytime.sleep(0.2)  # Wait for relay to switch
         relays = read_relay_states()
         if relays:
             heater_state = relays.get("heater", {}).get("state", "unknown")
@@ -413,9 +412,8 @@ def apply_pump_setting(enabled: bool, verify: bool = True) -> bool:
         return True
     
     # Verify the state change (retry up to 5 times)
-    import time
     for attempt in range(5):
-        time.sleep(0.2)  # Wait for relay to switch
+        pytime.sleep(0.2)  # Wait for relay to switch
         relays = read_relay_states()
         if relays:
             pump_state = relays.get("pump", {}).get("state", "unknown")
@@ -611,10 +609,14 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
     Returns:
         Dictionary with actual current state after applying
     """
-    logger.info(f"Applying desired state: {desired_state}")
+    # Proof: Log which file is running
+    logger.info("apply_desired_state() using adapters.py: %s", __file__)
+    logger.debug("pytime available: %s", "yes" if pytime else "no")
+    logger.info("Applying desired state: %s", desired_state)
     
     actions_taken = []
     apply_failed = False  # Track if apply failed with exception
+    apply_error = None  # Store error message
     MIN_HOLD_TIME_S = 300  # 5 minutes minimum between heater changes (AUTO mode only)
     
     # =========================================================================
@@ -677,7 +679,7 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
         
         time_since_change = None
         if last_change_ts:
-            time_since_change = time.time() - last_change_ts
+            time_since_change = pytime.time() - last_change_ts
         
         # Determine desired heater state and mode (MANUAL vs AUTO)
         desired_heater_state = None
@@ -769,20 +771,28 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
         
         # Log what was done
         if actions_taken:
-            logger.info(f"Actions: {', '.join(actions_taken)}")
+            logger.info("Actions: %s", ', '.join(actions_taken))
         else:
             logger.info("No actions needed")
         
-    except Exception as e:
-        logger.error(f"Error applying desired state: {e}", exc_info=True)
+    except Exception as err:
+        apply_failed = True
+        apply_error = str(err)
+        actions_taken.append(f"FAILED: {apply_error}")
+        logger.error("Error applying desired state: %s", apply_error, exc_info=True)
     
     # Build and return current state with FRESH relay states (post-change verification)
     current_state = build_current_state()
     if actions_taken:
         current_state["actions_taken"] = actions_taken
     
+    # Include failure flag if apply failed
+    if apply_failed:
+        current_state["apply_failed"] = True
+        current_state["apply_error"] = apply_error
+    
     # Log fresh relay states after changes
     if current_state.get("relays"):
-        logger.info(f"Relay states after change (verified): {current_state['relays']}")
+        logger.info("Relay states after change (verified): %s", current_state['relays'])
     
     return current_state
