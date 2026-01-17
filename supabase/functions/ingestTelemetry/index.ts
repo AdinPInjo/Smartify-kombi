@@ -8,6 +8,31 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { corsHeaders } from '../_shared/cors.ts'
 import { validateDeviceToken } from '../_shared/auth.ts'
 
+/**
+ * Extract device token from request headers
+ * Priority:
+ * 1. x-device-token header (preferred)
+ * 2. Authorization: Bearer <token> (fallback)
+ */
+function extractDeviceToken(req: Request): string | null {
+  // Try x-device-token header first (preferred)
+  const xDeviceToken = req.headers.get('x-device-token')
+  if (xDeviceToken && xDeviceToken.trim()) {
+    return xDeviceToken.trim()
+  }
+
+  // Fallback to Authorization Bearer token
+  const authHeader = req.headers.get('Authorization')
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7).trim()
+    if (token) {
+      return token
+    }
+  }
+
+  return null
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -21,9 +46,20 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    // Validate device token
-    const authHeader = req.headers.get('Authorization')
-    const { device_id, error: authError } = await validateDeviceToken(supabase, authHeader)
+    // Extract and validate device token
+    const deviceToken = extractDeviceToken(req)
+    
+    if (!deviceToken) {
+      return new Response(
+        JSON.stringify({ error: 'Missing device token' }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      )
+    }
+
+    const { device_id, error: authError } = await validateDeviceToken(supabase, deviceToken)
 
     if (authError || !device_id) {
       return new Response(
