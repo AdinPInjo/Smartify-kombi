@@ -10,6 +10,7 @@ import os
 import sys
 import time
 import json
+import copy
 import logging
 import signal
 import threading
@@ -100,6 +101,7 @@ class StateManager:
         self.last_gps_fix_file = self.state_dir / "last_gps_fix.json"
         self.applied_version_file = self.state_dir / "applied_version.txt"
         self.last_relay_change_file = self.state_dir / "last_relay_change.json"
+        self.last_override_state_file = self.state_dir / "last_override_state.json"
     
     def get_last_gps_fix(self) -> Optional[Dict[str, Any]]:
         """
@@ -196,6 +198,26 @@ class StateManager:
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving relay change: {e}")
+
+    def get_last_override_state(self) -> Optional[Dict[str, Any]]:
+        """Get last reported relay override state"""
+        try:
+            if self.last_override_state_file.exists():
+                with open(self.last_override_state_file, "r") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
+        except Exception as e:
+            logger.error(f"Error reading last override state: {e}")
+        return None
+
+    def save_override_state(self, overrides: Dict[str, Any]):
+        """Save last reported relay override state"""
+        try:
+            with open(self.last_override_state_file, "w") as f:
+                json.dump(overrides, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving last override state: {e}")
 
 
 # =============================================================================
@@ -400,6 +422,17 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                     # Update device_state.current_state via ackState
                     # Use current applied_version (doesn't increment version, just updates state)
                     applied_version = state_manager.get_applied_version()
+                    relay_overrides = current_state.get("relay_overrides")
+                    if isinstance(relay_overrides, dict):
+                        last_override = state_manager.get_last_override_state()
+                        if relay_overrides != last_override:
+                            desired_state_override = {
+                                key: relay_overrides.get(key)
+                                for key in ("heater_force", "pump_force")
+                                if key in relay_overrides
+                            }
+                            logger.info("[remote-sync] relay overrides -> desired_state: %s", desired_state_override)
+                            state_manager.save_override_state(relay_overrides)
                     if client.ack_state(applied_version, current_state):
                         logger.debug("Device state updated")
                         # Log key metrics
@@ -454,11 +487,13 @@ def settings_loop(client: RemoteClient, state_manager: StateManager, interval: i
                     
                     if remote_version > local_version:
                         logger.info(f"New settings version {remote_version} detected, applying...")
-                        logger.info(f"Desired state: {desired.get('desired_state', {})}")
+                        desired_state_raw = desired.get("desired_state", {}) or {}
+                        logger.info("[remote-sync] desired_state from supabase: %s", desired_state_raw)
                         
                         # Apply settings (TASK 4 & 5)
-                        desired_state = desired.get("desired_state", {})
+                        desired_state = copy.deepcopy(desired_state_raw)
                         current_state = apply_desired_state(desired_state, state_manager)
+                        logger.info("[remote-sync] mapped desired_state to kombi: %s", desired_state)
                         
                         # Log what was applied
                         actions = current_state.get("actions_taken", []) or []
