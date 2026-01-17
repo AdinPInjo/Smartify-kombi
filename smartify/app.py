@@ -2842,22 +2842,31 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
         # Check sensor status for AUTO mode relays (if rules depend on sensors)
         if mode == "auto" and not pending:
             rules = db_list_relay_rules(relay_id)
-            enabled_rules = [r for r in rules if r.get("is_enabled", True)]
+            # Safely filter enabled rules - coerce each to dict first
+            enabled_rules = []
+            for r in rules:
+                if not isinstance(r, dict):
+                    r = coerce_to_dict(r, context="_get_relay_pending_state.filter_rules")
+                    if not r:
+                        continue  # Skip invalid rules
+                if r.get("is_enabled", True):
+                    enabled_rules.append(r)
             
             # Check if any rule depends on a sensor that is stale or warming up
             for rule in enabled_rules:
-                # Safety: Ensure rule is a dict
+                # rule is already validated above, but double-check for safety
                 if not isinstance(rule, dict):
-                    rule = coerce_to_dict(rule, context="_get_relay_pending_state.rule")
-                    if not rule:
-                        continue  # Skip invalid rules
+                    print(f"[_get_relay_pending_state] Skipping invalid rule type={type(rule).__name__}")
+                    continue
                 
-                condition = rule.get("condition", {})
-                # Safety: Ensure condition is a dict
-                if not isinstance(condition, dict):
-                    condition = coerce_to_dict(condition, context="_get_relay_pending_state.condition")
-                
-                if condition.get("type") == "temperature":
+                # Wrap per-rule evaluation to prevent one bad rule from crashing
+                try:
+                    condition = rule.get("condition", {})
+                    # Safety: Ensure condition is a dict
+                    if not isinstance(condition, dict):
+                        condition = coerce_to_dict(condition, context="_get_relay_pending_state.condition")
+                    
+                    if condition.get("type") == "temperature":
                     sensor_name = condition.get("sensor", "")
                     if sensor_name:
                         snapshot = get_sensor_snapshot(sensor_name)
@@ -2890,21 +2899,37 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
                             pending_message = f"No valid temperature reading for {age_min} minute{'s' if age_min != 1 else ''}. Relay forced OFF for safety."
                             source = "sensor"
                             break
+                
+                except Exception as rule_err:
+                    # Don't let one bad rule crash the whole pending state check
+                    rule_id_str = rule.get("id", "unknown") if isinstance(rule, dict) else "unknown"
+                    print(f"[_get_relay_pending_state] Eval error for rule {rule_id_str}: {rule_err}")
+                    continue  # Skip this rule, check others
             
             # Check cooldown (only if sensor is OK)
             if not pending:
                 for rule in enabled_rules:
-                    last_triggered = rule.get("last_triggered_at")
-                    if last_triggered:
-                        age = now - last_triggered
-                        cooldown_sec = rule.get("cooldown_seconds", 60)
-                        if age < cooldown_sec:
-                            pending = True
-                            pending_reason = "cooldown"
-                            cooldown_remaining = cooldown_sec - age
-                            pending_message = f"Cooldown active: {cooldown_remaining}s remaining"
-                            source = "rule"
-                            break
+                    # Double-check rule is dict (should be, but be defensive)
+                    if not isinstance(rule, dict):
+                        continue
+                    
+                    try:
+                        last_triggered = rule.get("last_triggered_at")
+                        if last_triggered:
+                            age = now - last_triggered
+                            cooldown_sec = rule.get("cooldown_seconds", 60)
+                            if age < cooldown_sec:
+                                pending = True
+                                pending_reason = "cooldown"
+                                cooldown_remaining = cooldown_sec - age
+                                pending_message = f"Cooldown active: {cooldown_remaining}s remaining"
+                                source = "rule"
+                                break
+                    except Exception as cooldown_err:
+                        # Don't let one bad rule crash cooldown check
+                        rule_id_str = rule.get("id", "unknown") if isinstance(rule, dict) else "unknown"
+                        print(f"[_get_relay_pending_state] Cooldown check error for rule {rule_id_str}: {cooldown_err}")
+                        continue
         
         # Ensure source is always defined
         final_source = source if source is not None else mode
