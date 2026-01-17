@@ -295,6 +295,20 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                 water_percent = read_water_level()
                 gps_location = read_gps_location()
                 
+                # Read relay states (for bi-directional sync)
+                relay_states_raw = read_relay_states()
+                
+                # Normalize relay states to simple dict: {"heater": "on"|"off", ...}
+                relays = {}
+                for relay_name, relay_info in relay_states_raw.items():
+                    if isinstance(relay_info, dict):
+                        state = relay_info.get("state", "unknown")
+                    else:
+                        state = str(relay_info)
+                    relays[relay_name] = state
+                
+                logger.debug(f"Read relay states: {relays}")
+                
                 # Calculate delta_km with safety checks (TASK 6)
                 delta_km = None
                 gps_lat = None
@@ -362,9 +376,10 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                 
                 # Post telemetry (TASK 1)
                 # Include GPS coordinates in telemetry table when available
-                logger.info("Posting telemetry: temp=%s, water=%s, delta_km=%s, gps_lat=%s, gps_lon=%s, gps_fix=%s",
+                # Include relay states for bi-directional sync
+                logger.info("Posting telemetry: temp=%s, water=%s, delta_km=%s, gps_lat=%s, gps_lon=%s, gps_fix=%s, relays=%s",
                            temperature_c, water_percent, delta_km, gps_lat, gps_lon, 
-                           'yes' if gps_has_fix else 'no')
+                           'yes' if gps_has_fix else 'no', relays)
                 
                 success = client.post_telemetry(
                     temperature_c=temperature_c,
@@ -372,6 +387,7 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                     delta_km=delta_km,
                     gps_lat=gps_lat,  # Send GPS coords to telemetry table
                     gps_lon=gps_lon,  # Send GPS coords to telemetry table
+                    relays=relays,    # Send relay states for bi-directional sync
                 )
                 
                 if success:

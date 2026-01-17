@@ -131,6 +131,7 @@ class RemoteClient:
         delta_km: Optional[float] = None,
         gps_lat: Optional[float] = None,
         gps_lon: Optional[float] = None,
+        relays: Optional[dict] = None,
         ts: Optional[str] = None,
     ) -> bool:
         """
@@ -145,6 +146,7 @@ class RemoteClient:
             delta_km: Kilometers traveled since last reading
             gps_lat: GPS latitude
             gps_lon: GPS longitude
+            relays: Relay states dict, e.g. {"heater": "on", "pump": "off"}
             ts: ISO timestamp, defaults to now()
 
         Returns:
@@ -152,11 +154,11 @@ class RemoteClient:
         """
         if self.mode == "local":
             return self._post_telemetry_local(
-                temperature_c, water_percent, delta_km, gps_lat, gps_lon, ts
+                temperature_c, water_percent, delta_km, gps_lat, gps_lon, relays, ts
             )
         elif self.mode == "http":
             return self._post_telemetry_http(
-                temperature_c, water_percent, delta_km, gps_lat, gps_lon, ts
+                temperature_c, water_percent, delta_km, gps_lat, gps_lon, relays, ts
             )
         return False
 
@@ -167,6 +169,7 @@ class RemoteClient:
         delta_km: Optional[float],
         gps_lat: Optional[float],
         gps_lon: Optional[float],
+        relays: Optional[dict],
         ts: Optional[str],
     ) -> bool:
         """Post telemetry in local mode (append to JSONL file)"""
@@ -178,6 +181,7 @@ class RemoteClient:
                 "delta_km": delta_km,
                 "gps_lat": gps_lat,
                 "gps_lon": gps_lon,
+                "relays": relays,
             }
             
             # Remove None values
@@ -201,6 +205,7 @@ class RemoteClient:
         delta_km: Optional[float],
         gps_lat: Optional[float],
         gps_lon: Optional[float],
+        relays: Optional[dict],
         ts: Optional[str],
     ) -> bool:
         """Post telemetry in HTTP mode (to Supabase Edge Function)"""
@@ -210,6 +215,7 @@ class RemoteClient:
             "delta_km": delta_km,
             "gps_lat": gps_lat,
             "gps_lon": gps_lon,
+            "relays": relays,
             "ts": ts or datetime.now().isoformat(),
         }
         
