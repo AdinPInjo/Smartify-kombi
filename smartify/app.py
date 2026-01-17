@@ -180,6 +180,60 @@ if STATIC_DIR.exists():
 # DB helpers
 # =========================
 
+def validate_rule_condition(condition: Any) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Validate a rule condition payload.
+    
+    Returns:
+        (is_valid, error_message, normalized_condition)
+    
+    Rules:
+    - condition must be a dict (not string, list, etc.)
+    - condition must have "type" field
+    - For "temperature" type: must have "sensor", "operator", "value"
+    - operator must be one of: "<", ">", "<=", ">="
+    - value must be a number
+    """
+    # Must be a dict
+    if not isinstance(condition, dict):
+        return (False, f"condition must be a dict, got {type(condition).__name__}", None)
+    
+    # Must have "type" field
+    condition_type = condition.get("type")
+    if not condition_type:
+        return (False, "condition missing required field: type", None)
+    
+    # Validate by type
+    if condition_type == "temperature":
+        # Required fields for temperature condition
+        sensor = condition.get("sensor")
+        operator = condition.get("operator")
+        value = condition.get("value")
+        
+        if not sensor:
+            return (False, "temperature condition missing required field: sensor", None)
+        
+        if operator not in ("<", ">", "<=", ">="):
+            return (False, f"invalid operator '{operator}', must be one of: <, >, <=, >=", None)
+        
+        if not isinstance(value, (int, float)):
+            return (False, f"value must be a number, got {type(value).__name__}", None)
+        
+        # Normalize condition
+        normalized = {
+            "type": "temperature",
+            "sensor": str(sensor),
+            "operator": str(operator),
+            "value": float(value)
+        }
+        return (True, None, normalized)
+    
+    else:
+        # Unknown condition type - allow for extensibility but warn
+        print(f"[validate_rule_condition] Unknown condition type: {condition_type}")
+        return (True, None, condition)
+
+
 def _run_schema_migrations(conn: sqlite3.Connection, cur: sqlite3.Cursor) -> None:
     """
     Run automatic schema migrations.
@@ -3312,7 +3366,17 @@ def api_relay_rule_create(
     if not name:
         return JSONResponse({"ok": False, "error": "name_required"}, status_code=400)
     
-    condition = body.get("condition", {})
+    # Validate condition (must be a dict with proper structure)
+    condition_raw = body.get("condition", {})
+    is_valid, error_msg, condition = validate_rule_condition(condition_raw)
+    if not is_valid:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_condition",
+            "message": error_msg,
+            "received_type": type(condition_raw).__name__
+        }, status_code=400)
+    
     action = body.get("action", "")
     if action not in ("turn_on", "turn_off"):
         return JSONResponse({"ok": False, "error": "invalid_action"}, status_code=400)
@@ -3350,11 +3414,23 @@ def api_rule_update(
         return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
     
     name = body.get("name")
-    condition = body.get("condition")
+    condition_raw = body.get("condition")
     action = body.get("action")
     priority = body.get("priority")
     cooldown_seconds = body.get("cooldown_seconds")
     is_enabled = body.get("is_enabled")
+    
+    # Validate condition if provided (must be a dict with proper structure)
+    condition = None
+    if condition_raw is not None:
+        is_valid, error_msg, condition = validate_rule_condition(condition_raw)
+        if not is_valid:
+            return JSONResponse({
+                "ok": False,
+                "error": "invalid_condition",
+                "message": error_msg,
+                "received_type": type(condition_raw).__name__
+            }, status_code=400)
     
     if action and action not in ("turn_on", "turn_off"):
         return JSONResponse({"ok": False, "error": "invalid_action"}, status_code=400)
