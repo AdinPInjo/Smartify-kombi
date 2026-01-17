@@ -90,13 +90,23 @@ def coerce_to_dict(value: Any, *, context: str = "") -> dict:
             return result
         
         # Check if all items are 2-element sequences (key-value pairs)
+        # CRITICAL: Exclude strings! Strings have __len__ but dict("force") crashes
+        # with "ValueError: dictionary update sequence element #0 has length 5; 2 is required"
         try:
-            if all(hasattr(item, '__len__') and len(item) == 2 for item in value):
+            # Verify items are sequences (tuple/list) but NOT strings, and have exactly length 2
+            if all(
+                not isinstance(item, str) and 
+                hasattr(item, '__len__') and 
+                len(item) == 2 
+                for item in value
+            ):
                 return dict(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            # This should never happen now, but keep defensive catch
+            print(f"[coerce_to_dict] Unexpected error converting list to dict for {context}: {e}")
             pass
         
-        # List of non-dict, non-pairs (e.g., list of strings)
+        # List of non-dict, non-pairs (e.g., list of strings, or wrong-length items)
         sample = value[:3] if len(value) > 3 else value
         print(f"[coerce_to_dict] Invalid dict-like payload for {context}: "
               f"got type=list with non-dict items (sample={sample}, dropping)")
@@ -106,6 +116,49 @@ def coerce_to_dict(value: Any, *, context: str = "") -> dict:
     print(f"[coerce_to_dict] Invalid dict-like payload for {context}: "
           f"got type={type(value).__name__} value={repr(value)[:100]} (dropping)")
     return {}
+
+
+def _debug_test_coerce_to_dict():
+    """
+    Manual test function for coerce_to_dict - NOT run on import.
+    Tests that coerce_to_dict handles all malformed inputs safely without ValueError.
+    
+    Usage (in Python REPL or debugger):
+        from smartify.app import _debug_test_coerce_to_dict
+        _debug_test_coerce_to_dict()
+    """
+    print("\n=== Testing coerce_to_dict ===")
+    
+    test_cases = [
+        ("force", "String length 5"),
+        ("heater", "String length 6"),
+        (["force"], "List with one string"),
+        (["force", "heater"], "List with multiple strings"),
+        ([("key", "val")], "List with one tuple pair"),
+        ([("a", "b"), ("c", "d")], "List with multiple tuple pairs"),
+        ({"valid": "dict"}, "Valid dict"),
+        (None, "None"),
+        (123, "Integer"),
+        ([], "Empty list"),
+        ('{"json": "string"}', "JSON string"),
+        ("not json", "Non-JSON string"),
+    ]
+    
+    passed = 0
+    failed = 0
+    
+    for value, description in test_cases:
+        try:
+            result = coerce_to_dict(value, context=f"test:{description}")
+            assert isinstance(result, dict), f"Result is not dict: {type(result)}"
+            print(f"✓ PASS: {description} -> {result}")
+            passed += 1
+        except Exception as e:
+            print(f"✗ FAIL: {description} -> Exception: {e}")
+            failed += 1
+    
+    print(f"\n=== Results: {passed} passed, {failed} failed ===\n")
+    return failed == 0
 
 
 # =========================
@@ -2842,6 +2895,22 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
         # Check sensor status for AUTO mode relays (if rules depend on sensors)
         if mode == "auto" and not pending:
             rules = db_list_relay_rules(relay_id)
+            
+            # Normalize rules input - ensure it's always a list
+            if rules is None:
+                rules = []
+            elif isinstance(rules, str):
+                # Rules should never be a string, but handle gracefully
+                print(f"[_get_relay_pending_state] WARNING: rules is string, not list (value={rules[:50]}...)")
+                rules = []
+            elif isinstance(rules, dict):
+                # Rules should never be a dict, but handle gracefully
+                print(f"[_get_relay_pending_state] WARNING: rules is dict, not list")
+                rules = [rules]  # Wrap in list
+            elif not isinstance(rules, (list, tuple)):
+                print(f"[_get_relay_pending_state] WARNING: rules is {type(rules).__name__}, not list")
+                rules = []
+            
             # Safely filter enabled rules - coerce each to dict first
             enabled_rules = []
             for r in rules:
@@ -2867,38 +2936,38 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
                         condition = coerce_to_dict(condition, context="_get_relay_pending_state.condition")
                     
                     if condition.get("type") == "temperature":
-                    sensor_name = condition.get("sensor", "")
-                    if sensor_name:
-                        snapshot = get_sensor_snapshot(sensor_name)
-                        if not snapshot:
-                            continue  # Skip if snapshot missing
-                        
-                        # Extract sensor info for response
-                        sensor_age_seconds = snapshot.get("age_seconds", 0)
-                        sensor_sample_count = snapshot.get("sample_count", 0)
-                        sensor_is_ready = snapshot.get("is_ready", False)
-                        sensor_is_stale = snapshot.get("is_stale", False)
-                        
-                        # Check is_ready first (before age calculations)
-                        if not sensor_is_ready:
-                            pending = True
-                            pending_reason = "sensor_warming_up"
-                            pending_message = f"Waiting for temperature snapshot… collected {sensor_sample_count}/{SENSOR_WARMUP_SAMPLES} samples"
-                            source = "sensor"
-                            break
-                        
-                        # Now safe to check is_stale and use age_seconds
-                        if sensor_is_stale:
-                            pending = True
-                            # Safely coerce age_seconds to int (should never be None, but defensive)
-                            if sensor_age_seconds is None:
-                                sensor_age_seconds = 0
-                            sensor_age_seconds = int(sensor_age_seconds)
-                            age_min = sensor_age_seconds // 60
-                            pending_reason = "sensor_stale"
-                            pending_message = f"No valid temperature reading for {age_min} minute{'s' if age_min != 1 else ''}. Relay forced OFF for safety."
-                            source = "sensor"
-                            break
+                        sensor_name = condition.get("sensor", "")
+                        if sensor_name:
+                            snapshot = get_sensor_snapshot(sensor_name)
+                            if not snapshot:
+                                continue  # Skip if snapshot missing
+                            
+                            # Extract sensor info for response
+                            sensor_age_seconds = snapshot.get("age_seconds", 0)
+                            sensor_sample_count = snapshot.get("sample_count", 0)
+                            sensor_is_ready = snapshot.get("is_ready", False)
+                            sensor_is_stale = snapshot.get("is_stale", False)
+                            
+                            # Check is_ready first (before age calculations)
+                            if not sensor_is_ready:
+                                pending = True
+                                pending_reason = "sensor_warming_up"
+                                pending_message = f"Waiting for temperature snapshot… collected {sensor_sample_count}/{SENSOR_WARMUP_SAMPLES} samples"
+                                source = "sensor"
+                                break
+                            
+                            # Now safe to check is_stale and use age_seconds
+                            if sensor_is_stale:
+                                pending = True
+                                # Safely coerce age_seconds to int (should never be None, but defensive)
+                                if sensor_age_seconds is None:
+                                    sensor_age_seconds = 0
+                                sensor_age_seconds = int(sensor_age_seconds)
+                                age_min = sensor_age_seconds // 60
+                                pending_reason = "sensor_stale"
+                                pending_message = f"No valid temperature reading for {age_min} minute{'s' if age_min != 1 else ''}. Relay forced OFF for safety."
+                                source = "sensor"
+                                break
                 
                 except Exception as rule_err:
                     # Don't let one bad rule crash the whole pending state check
