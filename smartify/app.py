@@ -608,11 +608,11 @@ def db_update_sensor_snapshot(
 def db_get_sensor_snapshot(sensor_name: str) -> Optional[Dict[str, Any]]:
     """Get sensor snapshot."""
     conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    conn.row_factory = sqlite3.Row  # CRITICAL: Set BEFORE creating cursor
     cur = conn.cursor()
     cur.execute("PRAGMA journal_mode=WAL")
     cur.execute("PRAGMA busy_timeout=5000")
     cur.execute("PRAGMA synchronous=NORMAL")
-    conn.row_factory = sqlite3.Row
     cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
     row = cur.fetchone()
     conn.close()
@@ -734,16 +734,14 @@ def db_list_relay_devices() -> List[Dict[str, Any]]:
 def db_get_relay_state_new(relay_id: str) -> Optional[Dict[str, Any]]:
     """Get relay state (new table)."""
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row  # CRITICAL: Set IMMEDIATELY after connect
     conn.execute("PRAGMA busy_timeout=5000")
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("SELECT * FROM relay_state_new WHERE relay_id = ?", (relay_id,))
     row = cur.fetchone()
     conn.close()
     if row:
-        state_dict = _safe_dict_from_row(row, context="db_get_relay_state_new")
-        if not state_dict:
-            return None  # Conversion failed
+        state_dict = dict(row)  # Now safe - row is sqlite3.Row
         
         # Ensure backward compatibility: if new columns are NULL, use old 'state' field
         if state_dict.get("actual_state") is None:
