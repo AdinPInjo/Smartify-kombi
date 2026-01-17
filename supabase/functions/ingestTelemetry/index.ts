@@ -79,6 +79,7 @@ serve(async (req) => {
       delta_km,
       gps_lat,
       gps_lon,
+      relays,
       ts,
     } = payload
 
@@ -106,12 +107,36 @@ serve(async (req) => {
       )
     }
 
-    // Update device last_seen in device_state
+    // Update device last_seen and current_state in device_state
+    // Build current_state snapshot with relay states for bi-directional sync
+    const currentState: any = {}
+    
+    // Add relay states if provided (for bi-directional sync)
+    if (relays && typeof relays === 'object') {
+      currentState.relays = relays
+    }
+    
+    // Add other telemetry data to current_state
+    if (temperature_c !== undefined && temperature_c !== null) {
+      currentState.temperature_c = temperature_c
+    }
+    if (water_percent !== undefined && water_percent !== null) {
+      currentState.water_percent = water_percent
+    }
+    if (gps_lat !== undefined && gps_lat !== null && gps_lon !== undefined && gps_lon !== null) {
+      currentState.gps = {
+        lat: gps_lat,
+        lon: gps_lon,
+        fix: true,
+      }
+    }
+    
     await supabase
       .from('device_state')
       .upsert({
         device_id,
         last_seen: new Date().toISOString(),
+        current_state: currentState,
       }, {
         onConflict: 'device_id'
       })
