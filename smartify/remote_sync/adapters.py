@@ -490,6 +490,8 @@ def build_current_state() -> Dict[str, Any]:
     - gps: null if no fix, otherwise {lat, lon, fix, sats, hdop, speed_kmh}
     - temps: {t1, t2, avg}
     - relays: {heater: "on"/"off", pump: "on"/"off", ...}
+    - relay_modes: {heater: "auto"/"manual", pump: "auto"/"manual", ...}
+    - relay_overrides: {heater_force: "on"/"off"|null, pump_force: "on"/"off"|null}
     - water_percent: float
     - uptime_s: int
     
@@ -529,10 +531,26 @@ def build_current_state() -> Dict[str, Any]:
         relays = read_relay_states()
         if relays:
             current_state["relays"] = {
-                name: data["state"] for name, data in relays.items()
+                name: data.get("state", "unknown") for name, data in relays.items()
             }
+            current_state["relay_modes"] = {
+                name: data.get("mode", "unknown") for name, data in relays.items()
+            }
+
+            relay_overrides: Dict[str, Optional[str]] = {}
+            for relay_name in ("heater", "pump"):
+                relay_info = relays.get(relay_name, {})
+                mode = relay_info.get("mode")
+                state = relay_info.get("state")
+                if mode == "manual" and state in ("on", "off"):
+                    relay_overrides[f"{relay_name}_force"] = state
+                else:
+                    relay_overrides[f"{relay_name}_force"] = None
+
+            current_state["relay_overrides"] = relay_overrides
         else:
             current_state["relays"] = {}
+            current_state["relay_modes"] = {}
         
         # Read water level
         water = read_water_level()
@@ -652,6 +670,17 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
                 desired_state["lights_mode"] = lights_value
                 logger.info(f"Mapped relays.lights={relays_cmd['lights']} -> lights_mode={lights_value}")
     
+    # Explicit override clears (NULL from remote) should not be ignored
+    if "heater_force" in desired_state and desired_state["heater_force"] is None:
+        logger.info("Heater override cleared (heater_force=null)")
+        # Treat null as AUTO override cleared; preserve explicit heater_auto if provided
+        desired_state["heater_force"] = "auto"
+        if "heater_auto" not in desired_state:
+            desired_state["heater_auto"] = True
+
+    if "pump_force" in desired_state and desired_state["pump_force"] is None:
+        logger.info("Pump override cleared (pump_force=null)")
+
     # =========================================================================
     # STEP 2: Apply settings with verification
     # =========================================================================

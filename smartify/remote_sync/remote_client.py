@@ -399,6 +399,7 @@ class RemoteClient:
     ) -> bool:
         """Acknowledge state in HTTP mode (to Supabase Edge Function)"""
         payload = {
+            "token": self.device_token,
             "applied_version": applied_version,
             "current_state": current_state,
         }
