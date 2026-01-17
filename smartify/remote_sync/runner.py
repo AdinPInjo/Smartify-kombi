@@ -309,6 +309,12 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                     # Get last valid GPS fix
                     last_fix = state_manager.get_last_gps_fix()
                     
+                    if last_fix:
+                        logger.debug(f"Last GPS fix: lat={last_fix.get('lat')}, lon={last_fix.get('lon')}, "
+                                   f"age={now - last_fix.get('ts', 0):.0f}s")
+                    else:
+                        logger.debug("No previous GPS fix found, will establish baseline")
+                    
                     # Calculate delta_km with safety checks
                     delta_km = calculate_delta_km_safe(gps_location, last_fix, now)
                     
@@ -318,14 +324,19 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                     if delta_km is not None:
                         logger.info(f"GPS movement: {delta_km:.3f} km")
                     else:
-                        logger.debug("GPS fix available but delta_km filtered (jitter/invalid)")
+                        logger.debug("GPS fix available but delta_km filtered (jitter/invalid/first fix)")
                 else:
                     logger.debug("No GPS fix available, delta_km = None")
                 
+                # Safety check: warn if GPS fix reported but coordinates missing
+                if gps_has_fix and (gps_lat is None or gps_lon is None):
+                    logger.warning("GPS fix reported but gps_lat/gps_lon missing - check GPS reader")
+                
                 # Post telemetry (TASK 1)
                 # Include GPS coordinates in telemetry table when available
-                logger.info("Posting telemetry: temp=%s, water=%s, delta_km=%s, gps_lat=%s, gps_lon=%s",
-                           temperature_c, water_percent, delta_km, gps_lat, gps_lon)
+                logger.info("Posting telemetry: temp=%s, water=%s, delta_km=%s, gps_lat=%s, gps_lon=%s, gps_fix=%s",
+                           temperature_c, water_percent, delta_km, gps_lat, gps_lon, 
+                           'yes' if gps_has_fix else 'no')
                 
                 success = client.post_telemetry(
                     temperature_c=temperature_c,
