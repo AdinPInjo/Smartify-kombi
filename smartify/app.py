@@ -2364,6 +2364,26 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             "cooldown_remaining": 0
         }
     
+    # Prepare basic fields for runtime_status (used even during cooldown)
+    condition_type = condition.get("type", "")
+    sensor_name = condition.get("sensor", "") if condition_type == "temperature" else None
+    operator_raw = condition.get("operator", "") if condition_type == "temperature" else None
+    normalized_operator = _normalize_operator(operator_raw) if condition_type == "temperature" else None
+    threshold = condition.get("value") if condition_type == "temperature" else None
+    snapshot_temp = None
+    age_seconds = 0
+    sample_count = 0
+    if sensor_name:
+        try:
+            snapshot = get_sensor_snapshot(sensor_name)
+            if snapshot:
+                snapshot_temp = snapshot.get("avg_temp")
+                age_seconds = int(snapshot.get("age_seconds", 0) or 0)
+                sample_count = int(snapshot.get("sample_count", 0) or 0)
+        except Exception:
+            # Best-effort only; cooldown status should still render
+            pass
+
     # Check cooldown first (even if condition is met, cooldown blocks execution)
     last_triggered = rule.get("last_triggered_at")
     cooldown_seconds = rule.get("cooldown_seconds", 60)
@@ -2377,18 +2397,16 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "matched": False,
                 "reason_code": "cooldown",
                 "message": f"Cooldown… {cooldown_remaining}s",
-                "sensor_name": None,
-                "snapshot_temp": None,
-                "threshold": None,
-                "operator": None,
-                "age_seconds": 0,
-                "sample_count": 0,
+                "sensor_name": sensor_name,
+                "snapshot_temp": snapshot_temp,
+                "threshold": threshold,
+                "operator": normalized_operator or operator_raw,
+                "age_seconds": age_seconds,
+                "sample_count": sample_count,
                 "cooldown_remaining": cooldown_remaining
             }
     
     # Evaluate condition
-    condition_type = condition.get("type", "")
-    
     if condition_type == "temperature":
         sensor_name = condition.get("sensor", "")
         if not sensor_name:
@@ -2778,9 +2796,13 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         )
         
         # Update rule's last_triggered_at only if we actually changed hardware state
-        # (cooldown was already checked in evaluate_rules, but we only update timestamp on actual state change)
+        # and can verify the updated state in DB.
         if matched_rule is not None and isinstance(matched_rule, dict) and "id" in matched_rule:
-            db_update_rule_last_triggered(matched_rule["id"])
+            updated_state = db_get_relay_state_new(relay_id)
+            if updated_state and updated_state.get("actual_state") == desired_state:
+                db_update_rule_last_triggered(matched_rule["id"])
+            else:
+                print(f"[Reconcile] Skipping last_triggered_at update; state not verified for relay {relay_id}")
         
         # Log event (always log hardware applies, including startup)
         rule_id = None
