@@ -323,17 +323,16 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                     logger.debug("No GPS fix available, delta_km = None")
                 
                 # Post telemetry (TASK 1)
-                # NOTE: We do NOT include GPS coordinates in telemetry table
-                # GPS coords are ONLY in device_state.current_state (admin-only)
-                logger.info(f"Posting telemetry: temp={temperature_c}, water={water_percent}, "
-                           f"delta_km={delta_km}, gps_fix={'yes' if gps_has_fix else 'no'}")
+                # Include GPS coordinates in telemetry table when available
+                logger.info("Posting telemetry: temp=%s, water=%s, delta_km=%s, gps_lat=%s, gps_lon=%s",
+                           temperature_c, water_percent, delta_km, gps_lat, gps_lon)
                 
                 success = client.post_telemetry(
                     temperature_c=temperature_c,
                     water_percent=water_percent,
                     delta_km=delta_km,
-                    gps_lat=None,  # DO NOT send GPS coords to telemetry table
-                    gps_lon=None,  # GPS coords only in device_state (see below)
+                    gps_lat=gps_lat,  # Send GPS coords to telemetry table
+                    gps_lon=gps_lon,  # Send GPS coords to telemetry table
                 )
                 
                 if success:
