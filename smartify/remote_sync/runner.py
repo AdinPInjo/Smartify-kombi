@@ -302,9 +302,35 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                 gps_has_fix = False
                 
                 if gps_location and gps_location.get('fix'):
-                    gps_lat = gps_location['latitude']
-                    gps_lon = gps_location['longitude']
                     gps_has_fix = True
+                    
+                    # Diagnostic: Log full GPS location structure
+                    logger.info("GPS fix detected, raw data: %s", gps_location)
+                    
+                    # Robust extraction: try multiple possible key names
+                    # Try: latitude/longitude, lat/lon, gps_lat/gps_lon
+                    lat_value = (gps_location.get('latitude') or 
+                                gps_location.get('lat') or 
+                                gps_location.get('gps_lat'))
+                    lon_value = (gps_location.get('longitude') or 
+                                gps_location.get('lon') or 
+                                gps_location.get('gps_lon'))
+                    
+                    # Cast to float if string
+                    try:
+                        if lat_value is not None:
+                            gps_lat = float(lat_value)
+                        if lon_value is not None:
+                            gps_lon = float(lon_value)
+                    except (ValueError, TypeError) as e:
+                        logger.error("Failed to parse GPS coordinates: lat=%s, lon=%s, error=%s", 
+                                   lat_value, lon_value, e)
+                        gps_lat = None
+                        gps_lon = None
+                    
+                    # Log parsed values
+                    logger.info("GPS parsed: gps_lat=%s, gps_lon=%s, gps_has_fix=%s", 
+                              gps_lat, gps_lon, gps_has_fix)
                     
                     # Get last valid GPS fix
                     last_fix = state_manager.get_last_gps_fix()
@@ -330,7 +356,9 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                 
                 # Safety check: warn if GPS fix reported but coordinates missing
                 if gps_has_fix and (gps_lat is None or gps_lon is None):
-                    logger.warning("GPS fix reported but gps_lat/gps_lon missing - check GPS reader")
+                    available_keys = list(gps_location.keys()) if gps_location else []
+                    logger.warning("GPS fix reported but gps_lat/gps_lon missing - available keys: %s", 
+                                 available_keys)
                 
                 # Post telemetry (TASK 1)
                 # Include GPS coordinates in telemetry table when available
