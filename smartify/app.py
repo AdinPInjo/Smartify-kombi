@@ -1,5 +1,6 @@
 import os
 import time
+import logging
 import sqlite3
 import threading
 import subprocess
@@ -32,6 +33,8 @@ except Exception as e:
 # =========================
 # Helper Functions
 # =========================
+
+logger = logging.getLogger(__name__)
 
 def coerce_to_dict(value: Any, *, context: str = "") -> dict:
     """
@@ -115,6 +118,37 @@ def coerce_to_dict(value: Any, *, context: str = "") -> dict:
     # Other types (int, float, bool, etc.) -> log warning and return empty dict
     print(f"[coerce_to_dict] Invalid dict-like payload for {context}: "
           f"got type={type(value).__name__} value={repr(value)[:100]} (dropping)")
+    return {}
+
+
+def safe_dict(value: Any, context: str) -> dict:
+    """
+    Safely coerce a value to dict without ever calling dict() on strings
+    or list/tuple of strings. Returns {} on invalid inputs and logs details.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        logger.warning("[safe_dict] Rejecting string input for %s: %s", context, value[:200])
+        return {}
+    if isinstance(value, (list, tuple)):
+        # Only allow iterable of 2-item tuples/lists (not strings)
+        if all(isinstance(item, (list, tuple)) and len(item) == 2 and not isinstance(item, str) for item in value):
+            try:
+                return dict(value)
+            except Exception as e:
+                logger.error("[safe_dict] Failed to convert pairs for %s: %s", context, e)
+                return {}
+        sample = value[:10] if len(value) > 10 else value
+        logger.warning(
+            "[safe_dict] Rejecting list/tuple input for %s: sample=%s",
+            context,
+            [repr(x)[:50] for x in sample],
+        )
+        return {}
+    logger.warning("[safe_dict] Rejecting unsupported type for %s: %s", context, type(value).__name__)
     return {}
 
 
@@ -602,7 +636,90 @@ def db_update_sensor_snapshot(
     updated_at: int
 ) -> None:
     """Update or insert sensor snapshot (alias for db_upsert_sensor_snapshot)."""
-    db_upsert_sensor_snapshot(sensor_name, avg_temp, avg_humidity, sample_count, window_start, window_end, last_good_at, updated_at)
+    db_upsert_sensor_snapshot(
+        sensor_name,
+        avg_temp,
+        avg_humidity,
+        sample_count,
+        window_start,
+        window_end,
+        last_good_at,
+        updated_at,
+    )
+
+
+def db_upsert_sensor_snapshot(
+    sensor_name: str,
+    avg_temp: Optional[float],
+    avg_humidity: Optional[float],
+    sample_count: int,
+    window_start: int,
+    window_end: int,
+    last_good_at: int,
+    updated_at: int,
+) -> None:
+    """
+    Insert/update sensor snapshot with row_factory set before cursor creation.
+    Uses ON CONFLICT to upsert.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    conn.row_factory = sqlite3.Row  # CRITICAL: set before any cursor/execute
+    cur = conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=5000")
+    cur.execute("PRAGMA synchronous=NORMAL")
+
+    # Forensics: verify row type if existing snapshot fetch returns unexpected type
+    try:
+        cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
+        row = cur.fetchone()
+        if row is not None and not isinstance(row, sqlite3.Row) and not hasattr(row, "keys"):
+            columns = [d[0] for d in cur.description] if cur.description else []
+            sample = row[:10] if isinstance(row, (list, tuple)) else None
+            logger.error(
+                "[db_upsert_sensor_snapshot] Unexpected row type: type=%s repr=%s columns=%s sample=%s",
+                type(row).__name__,
+                repr(row)[:200],
+                columns,
+                sample,
+            )
+    except Exception as e:
+        logger.error("[db_upsert_sensor_snapshot] Forensics fetch failed: %s", e, exc_info=True)
+
+    try:
+        cur.execute(
+            """
+            INSERT INTO sensor_snapshot (
+                sensor_name, avg_temp, avg_humidity, sample_count,
+                window_start, window_end, last_good_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(sensor_name) DO UPDATE SET
+                avg_temp=excluded.avg_temp,
+                avg_humidity=excluded.avg_humidity,
+                sample_count=excluded.sample_count,
+                window_start=excluded.window_start,
+                window_end=excluded.window_end,
+                last_good_at=excluded.last_good_at,
+                updated_at=excluded.updated_at
+            """,
+            (
+                sensor_name,
+                avg_temp,
+                avg_humidity,
+                sample_count,
+                window_start,
+                window_end,
+                last_good_at,
+                updated_at,
+            ),
+        )
+    except Exception as e:
+        logger.error("[db_upsert_sensor_snapshot] Failed to upsert snapshot: %s", e, exc_info=True)
+        conn.close()
+        return
+
+    conn.commit()
+    conn.close()
 
 
 def db_get_sensor_snapshot(sensor_name: str) -> Optional[Dict[str, Any]]:
@@ -1251,18 +1368,23 @@ def _sensor_sampler_thread() -> None:
                             sample_count = len(valid_samples)
                             last_good_at = now
                             
-                            # Update snapshot
-                            db_update_sensor_snapshot(
-                                sensor_name=sensor_name,
-                                avg_temp=avg_temp,
-                                avg_humidity=avg_humidity,
-                                sample_count=sample_count,
-                                window_start=window_start,
-                                window_end=window_end,
-                                last_good_at=last_good_at,
-                                updated_at=now
-                            )
-                            print(f"[Sensor Snapshot] Updated {sensor_name}: {avg_temp:.1f}°C (from {sample_count} samples)")
+                            # Update snapshot (defensive: never let this crash sampler thread)
+                            try:
+                                db_update_sensor_snapshot(
+                                    sensor_name=sensor_name,
+                                    avg_temp=avg_temp,
+                                    avg_humidity=avg_humidity,
+                                    sample_count=sample_count,
+                                    window_start=window_start,
+                                    window_end=window_end,
+                                    last_good_at=last_good_at,
+                                    updated_at=now,
+                                )
+                                print(f"[Sensor Snapshot] Updated {sensor_name}: {avg_temp:.1f}°C (from {sample_count} samples)")
+                            except Exception as e:
+                                logger.error("[Sensor Sampler] Snapshot update failed for %s: %s", sensor_name, e)
+                                import traceback
+                                traceback.print_exc()
                         else:
                             # No valid samples in this window - keep previous snapshot (do NOT overwrite)
                             existing = db_get_sensor_snapshot(sensor_name)
