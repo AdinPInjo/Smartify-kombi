@@ -293,6 +293,21 @@ if STATIC_DIR.exists():
 # DB helpers
 # =========================
 
+def _normalize_operator(operator: Any) -> Optional[str]:
+    """Normalize operator to canonical symbols. Returns None if invalid."""
+    if operator is None:
+        return None
+    operator_aliases = {
+        "below": "<",
+        "above": ">",
+        "<": "<",
+        ">": ">",
+        "<=": "<=",
+        ">=": ">=",
+    }
+    return operator_aliases.get(str(operator).strip().lower())
+
+
 def validate_rule_condition(condition: Any) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
     """
     Validate a rule condition payload.
@@ -329,17 +344,7 @@ def validate_rule_condition(condition: Any) -> Tuple[bool, Optional[str], Option
         if not sensor:
             return (False, "temperature condition missing required field: sensor", None)
         
-        # Normalize operator aliases from UI (below -> <, above -> >)
-        operator_aliases = {
-            "below": "<",
-            "above": ">",
-            "<": "<",
-            ">": ">",
-            "<=": "<=",
-            ">=": ">="
-        }
-        
-        normalized_operator = operator_aliases.get(str(operator).lower())
+        normalized_operator = _normalize_operator(operator)
         if not normalized_operator:
             return (False, f"invalid operator '{operator}', must be one of: <, >, <=, >= (or aliases: below, above)", None)
         
@@ -359,6 +364,17 @@ def validate_rule_condition(condition: Any) -> Tuple[bool, Optional[str], Option
         # Unknown condition type - allow for extensibility but warn
         print(f"[validate_rule_condition] Unknown condition type: {condition_type}")
         return (True, None, condition)
+
+
+def _debug_test_rule_operators() -> bool:
+    """Manual regression test for operator normalization/evaluation."""
+    assert _normalize_operator(">") == ">"
+    assert _normalize_operator("<") == "<"
+    assert _normalize_operator(">=") == ">="
+    assert _normalize_operator("<=") == "<="
+    assert _normalize_operator("above") == ">"
+    assert _normalize_operator("below") == "<"
+    return True
 
 
 def _run_schema_migrations(conn: sqlite3.Connection, cur: sqlite3.Cursor) -> None:
@@ -635,33 +651,7 @@ def db_update_sensor_snapshot(
     last_good_at: int,
     updated_at: int
 ) -> None:
-    """Update or insert sensor snapshot (alias for db_upsert_sensor_snapshot)."""
-    db_upsert_sensor_snapshot(
-        sensor_name,
-        avg_temp,
-        avg_humidity,
-        sample_count,
-        window_start,
-        window_end,
-        last_good_at,
-        updated_at,
-    )
-
-
-def db_upsert_sensor_snapshot(
-    sensor_name: str,
-    avg_temp: Optional[float],
-    avg_humidity: Optional[float],
-    sample_count: int,
-    window_start: int,
-    window_end: int,
-    last_good_at: int,
-    updated_at: int,
-) -> None:
-    """
-    Insert/update sensor snapshot with row_factory set before cursor creation.
-    Uses ON CONFLICT to upsert.
-    """
+    """Update or insert sensor snapshot (canonical upsert implementation)."""
     conn = sqlite3.connect(DB_PATH, timeout=5.0)
     conn.row_factory = sqlite3.Row  # CRITICAL: set before any cursor/execute
     cur = conn.cursor()
@@ -677,14 +667,14 @@ def db_upsert_sensor_snapshot(
             columns = [d[0] for d in cur.description] if cur.description else []
             sample = row[:10] if isinstance(row, (list, tuple)) else None
             logger.error(
-                "[db_upsert_sensor_snapshot] Unexpected row type: type=%s repr=%s columns=%s sample=%s",
+                "[db_update_sensor_snapshot] Unexpected row type: type=%s repr=%s columns=%s sample=%s",
                 type(row).__name__,
                 repr(row)[:200],
                 columns,
                 sample,
             )
     except Exception as e:
-        logger.error("[db_upsert_sensor_snapshot] Forensics fetch failed: %s", e, exc_info=True)
+        logger.error("[db_update_sensor_snapshot] Forensics fetch failed: %s", e, exc_info=True)
 
     try:
         cur.execute(
@@ -714,12 +704,36 @@ def db_upsert_sensor_snapshot(
             ),
         )
     except Exception as e:
-        logger.error("[db_upsert_sensor_snapshot] Failed to upsert snapshot: %s", e, exc_info=True)
+        logger.error("[db_update_sensor_snapshot] Failed to upsert snapshot: %s", e, exc_info=True)
         conn.close()
         return
 
     conn.commit()
     conn.close()
+    logger.debug("[db_update_sensor_snapshot] Saved snapshot for %s", sensor_name)
+
+
+def db_upsert_sensor_snapshot(
+    sensor_name: str,
+    avg_temp: Optional[float],
+    avg_humidity: Optional[float],
+    sample_count: int,
+    window_start: int,
+    window_end: int,
+    last_good_at: int,
+    updated_at: int,
+) -> None:
+    """Alias for db_update_sensor_snapshot (kept for backward compatibility)."""
+    db_update_sensor_snapshot(
+        sensor_name,
+        avg_temp,
+        avg_humidity,
+        sample_count,
+        window_start,
+        window_end,
+        last_good_at,
+        updated_at,
+    )
 
 
 def db_get_sensor_snapshot(sensor_name: str) -> Optional[Dict[str, Any]]:
@@ -2205,15 +2219,24 @@ def _evaluate_temperature_condition(condition: Dict[str, Any]) -> Tuple[bool, Op
     if temp is None:
         return (False, f"sensor_no_data")
     
+    # Normalize operator (supports below/above and symbols)
+    normalized_operator = _normalize_operator(operator)
+    if not normalized_operator:
+        return (False, f"Invalid operator: {operator}")
+
     # Evaluate condition
-    if operator == "below":
+    if normalized_operator == "<":
         result = temp < value
-    elif operator == "above":
+    elif normalized_operator == ">":
         result = temp > value
+    elif normalized_operator == "<=":
+        result = temp <= value
+    elif normalized_operator == ">=":
+        result = temp >= value
     else:
         return (False, f"Invalid operator: {operator}")
     
-    print(f"[Rule Engine] Evaluating snapshot {sensor_name}: {temp:.1f}°C {operator} {value}°C = {result}")
+    print(f"[Rule Engine] Evaluating snapshot {sensor_name}: {temp:.1f}°C {normalized_operator} {value}°C = {result}")
     return (result, None)
 
 
@@ -2458,10 +2481,15 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 "cooldown_remaining": 0
             }
         
-        if operator == "below":
+        normalized_operator = _normalize_operator(operator)
+        if normalized_operator == "<":
             condition_met = snapshot_temp < threshold
-        elif operator == "above":
+        elif normalized_operator == ">":
             condition_met = snapshot_temp > threshold
+        elif normalized_operator == "<=":
+            condition_met = snapshot_temp <= threshold
+        elif normalized_operator == ">=":
+            condition_met = snapshot_temp >= threshold
         else:
             return {
                 "can_evaluate": False,
