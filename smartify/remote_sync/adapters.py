@@ -354,6 +354,48 @@ def set_relay_state(relay_name: str, state: str, mode: str = "manual", duration_
         return False
 
 
+def set_relay_mode_auto(relay_name: str) -> bool:
+    """
+    Set relay mode to auto via HTTP API (clears manual overrides).
+    
+    Args:
+        relay_name: Name of relay (e.g. "heater", "pump", "lights")
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # First get relay ID by name
+        url = f"{LOCAL_API_BASE}/api/relays"
+        response = requests.get(url, timeout=API_TIMEOUT)
+        
+        if response.status_code != 200:
+            logger.error(f"Failed to get relays list: status={response.status_code}")
+            return False
+        
+        relays = response.json().get("relays", [])
+        relay = next((r for r in relays if r.get("name") == relay_name), None)
+        
+        if not relay:
+            logger.error(f"Relay '{relay_name}' not found")
+            return False
+        
+        relay_id = relay.get("id")
+        url = f"{LOCAL_API_BASE}/api/relays/{relay_id}/auto"
+        response = requests.post(url, timeout=API_TIMEOUT)
+        
+        if response.status_code == 200:
+            logger.info(f"Set relay '{relay_name}' to auto mode")
+            return True
+        else:
+            logger.warning(f"Failed to set relay '{relay_name}' to auto: status={response.status_code}, response={response.text[:200]}")
+            return False
+    
+    except Exception as e:
+        logger.error(f"Error setting relay '{relay_name}' to auto: {e}")
+        return False
+
+
 def apply_heater_setting(enabled: bool, verify: bool = True) -> bool:
     """
     Enable or disable heater with state verification
@@ -700,6 +742,19 @@ def apply_desired_state(desired_state: Dict[str, Any], state_manager: Any = None
         # Get current heater state
         relays = read_relay_states()
         current_heater_state = relays.get("heater", {}).get("state", "unknown") if relays else "unknown"
+        current_heater_mode = relays.get("heater", {}).get("mode", "unknown") if relays else "unknown"
+
+        # Ensure AUTO clears manual override/mode on the device
+        is_auto_requested = heater_auto and (heater_force == "auto" or heater_force not in ("on", "off"))
+        if is_auto_requested:
+            if current_heater_mode == "manual":
+                if set_relay_mode_auto("heater"):
+                    actions_taken.append("heater mode set to auto")
+                else:
+                    actions_taken.append("heater mode set to auto FAILED")
+                    logger.error("Failed to set heater mode to auto")
+            else:
+                logger.debug(f"Heater already in auto mode (mode={current_heater_mode})")
         
         # Check minimum hold time (only for AUTO mode)
         last_change_ts = None
