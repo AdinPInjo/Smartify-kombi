@@ -90,7 +90,7 @@ def coerce_to_dict(value: Any, *, context: str = "") -> dict:
             return result
         
         # Check if all items are 2-element sequences (key-value pairs)
-        # CRITICAL: Exclude strings! Strings have __len__ but dict("force") crashes
+        # CRITICAL: Exclude strings! Strings have __len__ but dict(['force']) crashes
         # with "ValueError: dictionary update sequence element #0 has length 5; 2 is required"
         try:
             # Verify items are sequences (tuple/list) but NOT strings, and have exactly length 2
@@ -106,7 +106,7 @@ def coerce_to_dict(value: Any, *, context: str = "") -> dict:
             print(f"[coerce_to_dict] Unexpected error converting list to dict for {context}: {e}")
             pass
         
-        # List of non-dict, non-pairs (e.g., list of strings, or wrong-length items)
+        # List of non-dict, non-pairs (e.g., list of strings)
         sample = value[:3] if len(value) > 3 else value
         print(f"[coerce_to_dict] Invalid dict-like payload for {context}: "
               f"got type=list with non-dict items (sample={sample}, dropping)")
