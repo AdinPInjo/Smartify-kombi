@@ -28,6 +28,86 @@ except ImportError as e:
 except Exception as e:
     print(f"[Startup] ERROR loading ads1115 module: {e}")
 
+
+# =========================
+# Helper Functions
+# =========================
+
+def coerce_to_dict(value: Any, *, context: str = "") -> dict:
+    """
+    Normalize user/db JSON-ish values into a dict safely.
+    Accepts dict, JSON string, list/tuple of pairs, list of dicts.
+    If value is list of strings or plain string that isn't JSON object, return {} and log warning.
+    Never raises ValueError from dict(value).
+    
+    Args:
+        value: The value to coerce to dict
+        context: Context string for logging (e.g., "rule.params", "pending_state")
+    
+    Returns:
+        dict: The coerced dictionary, or empty dict if coercion fails
+    """
+    # None -> empty dict
+    if value is None:
+        return {}
+    
+    # Already a dict -> return as-is
+    if isinstance(value, dict):
+        return value
+    
+    # String -> try JSON parse
+    if isinstance(value, str):
+        # Empty string -> empty dict
+        if not value.strip():
+            return {}
+        
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+            else:
+                # JSON parsed but not a dict (e.g., list, string, number)
+                print(f"[coerce_to_dict] Invalid dict-like payload for {context}: "
+                      f"JSON parsed to {type(parsed).__name__}, not dict (value={value[:100]}...)")
+                return {}
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            # Not valid JSON - could be a plain string like "heater" or "force"
+            print(f"[coerce_to_dict] Invalid dict-like payload for {context}: "
+                  f"got type=str value='{value[:100]}' (not valid JSON, dropping)")
+            return {}
+    
+    # List or tuple -> try to convert
+    if isinstance(value, (list, tuple)):
+        # Empty list/tuple -> empty dict
+        if not value:
+            return {}
+        
+        # Check if all items are dicts -> merge them
+        if all(isinstance(item, dict) for item in value):
+            result = {}
+            for item in value:
+                result.update(item)
+            return result
+        
+        # Check if all items are 2-element sequences (key-value pairs)
+        try:
+            if all(hasattr(item, '__len__') and len(item) == 2 for item in value):
+                return dict(value)
+        except (TypeError, ValueError):
+            pass
+        
+        # List of non-dict, non-pairs (e.g., list of strings)
+        sample = value[:3] if len(value) > 3 else value
+        print(f"[coerce_to_dict] Invalid dict-like payload for {context}: "
+              f"got type=list with non-dict items (sample={sample}, dropping)")
+        return {}
+    
+    # Other types (int, float, bool, etc.) -> log warning and return empty dict
+    print(f"[coerce_to_dict] Invalid dict-like payload for {context}: "
+          f"got type={type(value).__name__} value={repr(value)[:100]} (dropping)")
+    return {}
+
+
 # =========================
 # Config (no hardcoded IPs)
 # =========================
@@ -1882,6 +1962,24 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
     """
     now = int(time.time())
     
+    # Safety: Ensure rule is a dict (coerce if needed)
+    if not isinstance(rule, dict):
+        rule = coerce_to_dict(rule, context="evaluate_single_rule.rule")
+        if not rule:
+            return {
+                "can_evaluate": False,
+                "matched": False,
+                "reason_code": "error",
+                "message": "Rule error: invalid rule format (not a dict)",
+                "sensor_name": None,
+                "snapshot_temp": None,
+                "threshold": None,
+                "operator": None,
+                "age_seconds": 0,
+                "sample_count": 0,
+                "cooldown_remaining": 0
+            }
+    
     # Check if rule is disabled
     if not rule.get("is_enabled", True):
         return {
@@ -2170,8 +2268,18 @@ def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, cu
     # Evaluate each rule in priority order
     now = int(time.time())
     for rule in enabled_rules:
+        # Safety: Ensure rule is a dict
+        if not isinstance(rule, dict):
+            rule = coerce_to_dict(rule, context="evaluate_rules.rule")
+            if not rule:
+                continue  # Skip invalid rules
+        
         # Evaluate condition using snapshot (not raw temp_data)
         condition = rule.get("condition", {})
+        # Safety: Ensure condition is a dict
+        if not isinstance(condition, dict):
+            condition = coerce_to_dict(condition, context="evaluate_rules.condition")
+        
         condition_result, reason = _evaluate_temperature_condition(condition)
         
         # If condition evaluation failed due to sensor issues (stale/warming), force OFF
@@ -2295,6 +2403,10 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
             if matched_rule is not None:
                 # Build reason string using snapshot data
                 condition = matched_rule.get("condition", {})
+                # Safety: Ensure condition is a dict
+                if not isinstance(condition, dict):
+                    condition = coerce_to_dict(condition, context="reconcile_relay.matched_rule.condition")
+                
                 sensor_name = condition.get("sensor", "")
                 operator = condition.get("operator", "")
                 value = condition.get("value")
@@ -2652,7 +2764,17 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
             
             # Check if any rule depends on a sensor that is stale or warming up
             for rule in enabled_rules:
+                # Safety: Ensure rule is a dict
+                if not isinstance(rule, dict):
+                    rule = coerce_to_dict(rule, context="_get_relay_pending_state.rule")
+                    if not rule:
+                        continue  # Skip invalid rules
+                
                 condition = rule.get("condition", {})
+                # Safety: Ensure condition is a dict
+                if not isinstance(condition, dict):
+                    condition = coerce_to_dict(condition, context="_get_relay_pending_state.condition")
+                
                 if condition.get("type") == "temperature":
                     sensor_name = condition.get("sensor", "")
                     if sensor_name:
@@ -3108,8 +3230,16 @@ def api_relay_rules_list(
         rules_with_status = []
         for rule in rules:
             try:
-                runtime_status = evaluate_single_rule(rule, relay_id)
-                rule_with_status = dict(rule)  # Copy rule dict
+                # Safely coerce rule to dict (in case it's a string or invalid type)
+                rule_dict = coerce_to_dict(rule, context=f"api_relay_rules_list.rule")
+                if not rule_dict:
+                    # Skip invalid rules
+                    print(f"[API] Skipping invalid rule (not a dict): {type(rule).__name__}")
+                    continue
+                
+                runtime_status = evaluate_single_rule(rule_dict, relay_id)
+                # Copy rule dict safely
+                rule_with_status = dict(rule_dict) if isinstance(rule_dict, dict) else {}
                 rule_with_status["runtime_status"] = {
                     "can_evaluate": runtime_status["can_evaluate"],
                     "matched": runtime_status["matched"],
@@ -3126,10 +3256,13 @@ def api_relay_rules_list(
                 rules_with_status.append(rule_with_status)
             except Exception as e:
                 # If evaluating one rule fails, mark it as error but continue with others
-                print(f"[API] Error evaluating rule {rule.get('id', 'unknown')}: {e}")
+                rule_id = rule.get('id', 'unknown') if isinstance(rule, dict) else 'unknown'
+                print(f"[API] Error evaluating rule {rule_id}: {e}")
                 import traceback
                 traceback.print_exc()
-                rule_with_status = dict(rule)
+                # Safely coerce rule to dict for error response
+                rule_dict = coerce_to_dict(rule, context=f"api_relay_rules_list.error.rule")
+                rule_with_status = dict(rule_dict) if isinstance(rule_dict, dict) else {"id": "unknown"}
                 rule_with_status["runtime_status"] = {
                     "can_evaluate": False,
                     "matched": False,
