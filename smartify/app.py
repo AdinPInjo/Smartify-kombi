@@ -191,16 +191,19 @@ def validate_rule_condition(condition: Any) -> Tuple[bool, Optional[str], Option
     - condition must be a dict (not string, list, etc.)
     - condition must have "type" field
     - For "temperature" type: must have "sensor", "operator", "value"
-    - operator must be one of: "<", ">", "<=", ">="
+    - operator must be one of: "<", ">", "<=", ">=" (also accepts aliases: "below", "above")
     - value must be a number
     """
     # Must be a dict
     if not isinstance(condition, dict):
+        preview = repr(condition)[:120]
+        print(f"[validate_rule_condition] condition must be dict, got {type(condition).__name__}: {preview}")
         return (False, f"condition must be a dict, got {type(condition).__name__}", None)
     
     # Must have "type" field
     condition_type = condition.get("type")
     if not condition_type:
+        print(f"[validate_rule_condition] condition missing 'type' field: {condition}")
         return (False, "condition missing required field: type", None)
     
     # Validate by type
@@ -213,8 +216,19 @@ def validate_rule_condition(condition: Any) -> Tuple[bool, Optional[str], Option
         if not sensor:
             return (False, "temperature condition missing required field: sensor", None)
         
-        if operator not in ("<", ">", "<=", ">="):
-            return (False, f"invalid operator '{operator}', must be one of: <, >, <=, >=", None)
+        # Normalize operator aliases from UI (below -> <, above -> >)
+        operator_aliases = {
+            "below": "<",
+            "above": ">",
+            "<": "<",
+            ">": ">",
+            "<=": "<=",
+            ">=": ">="
+        }
+        
+        normalized_operator = operator_aliases.get(str(operator).lower())
+        if not normalized_operator:
+            return (False, f"invalid operator '{operator}', must be one of: <, >, <=, >= (or aliases: below, above)", None)
         
         if not isinstance(value, (int, float)):
             return (False, f"value must be a number, got {type(value).__name__}", None)
@@ -223,7 +237,7 @@ def validate_rule_condition(condition: Any) -> Tuple[bool, Optional[str], Option
         normalized = {
             "type": "temperature",
             "sensor": str(sensor),
-            "operator": str(operator),
+            "operator": normalized_operator,  # Store normalized operator
             "value": float(value)
         }
         return (True, None, normalized)
@@ -3272,7 +3286,11 @@ def api_relay_rules_list(
     request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    """List rules for a relay with runtime status. NEVER returns 500."""
+    """
+    List rules for a relay with runtime status.
+    ALWAYS returns 200 OK with JSON, never 500.
+    Each rule is wrapped in try/except so one bad rule doesn't break the list.
+    """
     err = require_auth(request, x_api_key)
     if err:
         return err
@@ -3285,65 +3303,103 @@ def api_relay_rules_list(
         for rule in rules:
             try:
                 # Safely coerce rule to dict (in case it's a string or invalid type)
-                rule_dict = coerce_to_dict(rule, context=f"api_relay_rules_list.rule")
-                if not rule_dict:
-                    # Skip invalid rules
-                    print(f"[API] Skipping invalid rule (not a dict): {type(rule).__name__}")
-                    continue
+                if not isinstance(rule, dict):
+                    rule = coerce_to_dict(rule, context="api_relay_rules_list.rule")
+                    if not rule:
+                        # Skip invalid rules
+                        print(f"[API] Skipping invalid rule (not a dict): {type(rule).__name__}")
+                        continue
                 
-                runtime_status = evaluate_single_rule(rule_dict, relay_id)
-                # Copy rule dict safely
-                rule_with_status = dict(rule_dict) if isinstance(rule_dict, dict) else {}
-                rule_with_status["runtime_status"] = {
-                    "can_evaluate": runtime_status["can_evaluate"],
-                    "matched": runtime_status["matched"],
-                    "reason_code": runtime_status["reason_code"],
-                    "message": runtime_status["message"],
-                    "sensor_name": runtime_status["sensor_name"],
-                    "snapshot_temp": runtime_status["snapshot_temp"],
-                    "threshold": runtime_status["threshold"],
-                    "operator": runtime_status["operator"],
-                    "age_seconds": runtime_status["age_seconds"],
-                    "sample_count": runtime_status["sample_count"],
-                    "cooldown_remaining": runtime_status["cooldown_remaining"]
+                # Ensure rule has required fields with defaults
+                rule_dict = {
+                    "id": rule.get("id", "unknown"),
+                    "relay_id": rule.get("relay_id", relay_id),
+                    "name": rule.get("name", "Unnamed Rule"),
+                    "condition": rule.get("condition", {}),
+                    "action": rule.get("action", "turn_off"),
+                    "priority": rule.get("priority", 100),
+                    "cooldown_seconds": rule.get("cooldown_seconds", 60),
+                    "is_enabled": rule.get("is_enabled", False),
+                    "last_triggered_at": rule.get("last_triggered_at"),
+                    "created_at": rule.get("created_at"),
+                    "updated_at": rule.get("updated_at")
                 }
-                rules_with_status.append(rule_with_status)
+                
+                # Safely evaluate runtime status (wrapped in try/except)
+                try:
+                    runtime_status = evaluate_single_rule(rule_dict, relay_id)
+                except Exception as eval_error:
+                    # If evaluate_single_rule itself crashes, return safe error status
+                    print(f"[API] evaluate_single_rule crashed for rule {rule_dict.get('id')}: {eval_error}")
+                    import traceback
+                    traceback.print_exc()
+                    runtime_status = {
+                        "can_evaluate": False,
+                        "matched": False,
+                        "reason_code": "error",
+                        "message": f"Evaluation error: {str(eval_error)[:200]}",
+                        "sensor_name": None,
+                        "snapshot_temp": None,
+                        "threshold": None,
+                        "operator": None,
+                        "age_seconds": 0,
+                        "sample_count": 0,
+                        "cooldown_remaining": 0
+                    }
+                
+                # Attach runtime status to rule
+                rule_dict["runtime_status"] = runtime_status
+                rules_with_status.append(rule_dict)
+                
             except Exception as e:
-                # If evaluating one rule fails, mark it as error but continue with others
+                # If processing one rule fails completely, include it with error status
                 rule_id = rule.get('id', 'unknown') if isinstance(rule, dict) else 'unknown'
-                print(f"[API] Error evaluating rule {rule_id}: {e}")
+                rule_name = rule.get('name', 'Unknown') if isinstance(rule, dict) else 'Unknown'
+                print(f"[API] Error processing rule {rule_id}: {e}")
                 import traceback
                 traceback.print_exc()
-                # Safely coerce rule to dict for error response
-                rule_dict = coerce_to_dict(rule, context=f"api_relay_rules_list.error.rule")
-                rule_with_status = dict(rule_dict) if isinstance(rule_dict, dict) else {"id": "unknown"}
-                rule_with_status["runtime_status"] = {
-                    "can_evaluate": False,
-                    "matched": False,
-                    "reason_code": "error",
-                    "message": f"Rule error: {str(e)}",
-                    "sensor_name": None,
-                    "snapshot_temp": None,
-                    "threshold": None,
-                    "operator": None,
-                    "age_seconds": 0,
-                    "sample_count": 0,
-                    "cooldown_remaining": 0
+                
+                # Create minimal safe rule representation
+                rule_dict = {
+                    "id": rule_id,
+                    "relay_id": relay_id,
+                    "name": rule_name,
+                    "condition": {},
+                    "action": "turn_off",
+                    "priority": 100,
+                    "cooldown_seconds": 60,
+                    "is_enabled": False,
+                    "runtime_status": {
+                        "can_evaluate": False,
+                        "matched": False,
+                        "reason_code": "error",
+                        "message": f"Processing error: {str(e)[:200]}",
+                        "sensor_name": None,
+                        "snapshot_temp": None,
+                        "threshold": None,
+                        "operator": None,
+                        "age_seconds": 0,
+                        "sample_count": 0,
+                        "cooldown_remaining": 0
+                    }
                 }
-                rules_with_status.append(rule_with_status)
+                rules_with_status.append(rule_dict)
         
-        return JSONResponse({"ok": True, "rules": rules_with_status})
+        # ALWAYS return 200 OK with rules list (even if all failed)
+        return JSONResponse({"ok": True, "rules": rules_with_status}, status_code=200)
+        
     except Exception as e:
-        # NEVER return 500 - always return valid JSON
-        print(f"[API] Error in /api/relays/{relay_id}/rules: {e}")
+        # Outer exception handler - if db_list_relay_rules itself fails
+        print(f"[API] Fatal error in /api/relays/{relay_id}/rules: {e}")
         import traceback
         traceback.print_exc()
+        # Still return 200 OK (dashboard expects ok:true/false, not HTTP 500)
         return JSONResponse({
             "ok": False,
             "error": "internal_error",
-            "message": f"Failed to load rules: {str(e)}",
+            "message": f"Failed to load rules: {str(e)[:200]}",
             "rules": []
-        })
+        }, status_code=200)
 
 
 @app.post("/api/relays/{relay_id}/rules")
@@ -3404,51 +3460,93 @@ def api_rule_update(
     body: Dict[str, Any] = Body(...),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    """Update a rule."""
+    """
+    Update a rule from dashboard UI.
+    Accepts: name, condition, action, priority, cooldown_seconds, is_enabled (or enabled).
+    NEVER returns 500 - returns 400 for validation errors, 200 for success.
+    """
     err = require_auth(request, x_api_key)
     if err:
         return err
     
-    rule = db_get_relay_rule(rule_id)
-    if not rule:
-        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
-    
-    name = body.get("name")
-    condition_raw = body.get("condition")
-    action = body.get("action")
-    priority = body.get("priority")
-    cooldown_seconds = body.get("cooldown_seconds")
-    is_enabled = body.get("is_enabled")
-    
-    # Validate condition if provided (must be a dict with proper structure)
-    condition = None
-    if condition_raw is not None:
-        is_valid, error_msg, condition = validate_rule_condition(condition_raw)
-        if not is_valid:
+    try:
+        rule = db_get_relay_rule(rule_id)
+        if not rule:
+            return JSONResponse({"ok": False, "error": "not_found", "message": "Rule not found"}, status_code=404)
+        
+        # Extract fields from body (support both is_enabled and enabled for UI compatibility)
+        name = body.get("name")
+        condition_raw = body.get("condition")
+        action = body.get("action")
+        priority = body.get("priority")
+        cooldown_seconds = body.get("cooldown_seconds")
+        is_enabled = body.get("is_enabled")
+        if is_enabled is None:
+            is_enabled = body.get("enabled")  # UI might send "enabled" instead
+        
+        # Validate condition if provided (must be a dict with proper structure)
+        condition = None
+        if condition_raw is not None:
+            is_valid, error_msg, condition = validate_rule_condition(condition_raw)
+            if not is_valid:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_condition",
+                    "message": error_msg,
+                    "received_type": type(condition_raw).__name__
+                }, status_code=400)
+        
+        # Validate action if provided
+        if action and action not in ("turn_on", "turn_off"):
             return JSONResponse({
                 "ok": False,
-                "error": "invalid_condition",
-                "message": error_msg,
-                "received_type": type(condition_raw).__name__
+                "error": "invalid_action",
+                "message": f"action must be 'turn_on' or 'turn_off', got '{action}'"
             }, status_code=400)
-    
-    if action and action not in ("turn_on", "turn_off"):
-        return JSONResponse({"ok": False, "error": "invalid_action"}, status_code=400)
-    
-    if cooldown_seconds is not None and cooldown_seconds < 5:
-        cooldown_seconds = 5
-    
-    updated = db_update_relay_rule(rule_id, name, condition, action, priority, cooldown_seconds, is_enabled)
-    if not updated:
-        return JSONResponse({"ok": False, "error": "update_failed"}, status_code=400)
-    
-    rule = db_get_relay_rule(rule_id)
-    relay_id = rule.get("relay_id") if rule else None
-    if relay_id:
-        # Reconcile relay to apply updated rule immediately
-        reconcile_relay(relay_id, force=True)
-    
-    return JSONResponse({"ok": True, "rule": rule})
+        
+        # Enforce minimum cooldown
+        if cooldown_seconds is not None and cooldown_seconds < 5:
+            cooldown_seconds = 5
+        
+        # Update rule in database
+        updated = db_update_relay_rule(rule_id, name, condition, action, priority, cooldown_seconds, is_enabled)
+        if not updated:
+            return JSONResponse({
+                "ok": False,
+                "error": "update_failed",
+                "message": "Failed to update rule in database"
+            }, status_code=400)
+        
+        # Get updated rule (safely)
+        try:
+            rule = db_get_relay_rule(rule_id)
+            relay_id = rule.get("relay_id") if rule else None
+        except Exception as e:
+            print(f"[API] Error fetching updated rule {rule_id}: {e}")
+            relay_id = None
+            rule = {"id": rule_id, "error": "fetch_failed"}
+        
+        # Reconcile relay to apply updated rule immediately (in background, don't block response)
+        if relay_id:
+            try:
+                reconcile_relay(relay_id, force=True)
+            except Exception as e:
+                # Don't fail the API response if reconciliation fails
+                print(f"[API] Error reconciling relay {relay_id} after rule update: {e}")
+        
+        # Return success with updated rule
+        return JSONResponse({"ok": True, "rule": rule}, status_code=200)
+        
+    except Exception as e:
+        # Catch-all for unexpected errors - return 400 (not 500)
+        print(f"[API] Unexpected error in PUT /api/rules/{rule_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({
+            "ok": False,
+            "error": "internal_error",
+            "message": f"Failed to update rule: {str(e)[:200]}"
+        }, status_code=400)
 
 
 @app.delete("/api/rules/{rule_id}")
@@ -3484,33 +3582,73 @@ def api_rule_toggle(
     body: Dict[str, Any] = Body(...),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    """Toggle rule enabled state."""
+    """
+    Toggle rule enabled state.
+    ALWAYS returns 200 OK with JSON response.
+    Does NOT compute runtime_status (to avoid evaluation errors blocking toggle).
+    """
     err = require_auth(request, x_api_key)
     if err:
         return err
     
-    is_enabled = body.get("is_enabled")
-    if not isinstance(is_enabled, bool):
-        return JSONResponse({"ok": False, "error": "invalid_is_enabled"}, status_code=400)
-    
-    # Get relay_id before updating
-    rule = db_get_relay_rule(rule_id)
-    if not rule:
-        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
-    
-    relay_id = rule.get("relay_id")
-    
-    updated = db_update_relay_rule(rule_id, is_enabled=is_enabled)
-    if not updated:
-        return JSONResponse({"ok": False, "error": "update_failed"}, status_code=400)
-    
-    rule = db_get_relay_rule(rule_id)
-    
-    if relay_id:
-        # Reconcile relay immediately when rule is enabled/disabled
-        reconcile_relay(relay_id, force=True)
-    
-    return JSONResponse({"ok": True, "rule": rule})
+    try:
+        # Get is_enabled from body (support both is_enabled and enabled for UI compatibility)
+        is_enabled = body.get("is_enabled")
+        if is_enabled is None:
+            is_enabled = body.get("enabled")
+        
+        if not isinstance(is_enabled, bool):
+            return JSONResponse({
+                "ok": False,
+                "error": "invalid_is_enabled",
+                "message": "is_enabled must be a boolean (true/false)"
+            }, status_code=400)
+        
+        # Get rule to check it exists and get relay_id
+        rule = db_get_relay_rule(rule_id)
+        if not rule:
+            return JSONResponse({
+                "ok": False,
+                "error": "not_found",
+                "message": "Rule not found"
+            }, status_code=404)
+        
+        relay_id = rule.get("relay_id")
+        
+        # Update rule enabled state in database
+        updated = db_update_relay_rule(rule_id, is_enabled=is_enabled)
+        if not updated:
+            return JSONResponse({
+                "ok": False,
+                "error": "update_failed",
+                "message": "Failed to update rule in database"
+            }, status_code=400)
+        
+        # Reconcile relay immediately when rule is enabled/disabled (in background, don't block)
+        if relay_id:
+            try:
+                reconcile_relay(relay_id, force=True)
+            except Exception as e:
+                # Don't fail the API response if reconciliation fails
+                print(f"[API] Error reconciling relay {relay_id} after toggle: {e}")
+        
+        # Return simple success response (no runtime_status to avoid evaluation errors)
+        return JSONResponse({
+            "ok": True,
+            "rule_id": rule_id,
+            "is_enabled": is_enabled
+        }, status_code=200)
+        
+    except Exception as e:
+        # Catch-all for unexpected errors - return 400 (not 500)
+        print(f"[API] Unexpected error in POST /api/rules/{rule_id}/toggle: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({
+            "ok": False,
+            "error": "internal_error",
+            "message": f"Failed to toggle rule: {str(e)[:200]}"
+        }, status_code=400)
 
 
 @app.get("/api/relays/{relay_id}/events")
