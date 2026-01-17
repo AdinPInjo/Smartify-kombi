@@ -2469,21 +2469,33 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
             desired_state = desired_state_result
             source = "rule"
             if matched_rule is not None:
-                # Build reason string using snapshot data
-                condition = matched_rule.get("condition", {})
-                # Safety: Ensure condition is a dict
-                if not isinstance(condition, dict):
-                    condition = coerce_to_dict(condition, context="reconcile_relay.matched_rule.condition")
+                # Safety: Ensure matched_rule is a dict before accessing it
+                if not isinstance(matched_rule, dict):
+                    matched_rule = coerce_to_dict(matched_rule, context="reconcile_relay.matched_rule")
                 
-                sensor_name = condition.get("sensor", "")
-                operator = condition.get("operator", "")
-                value = condition.get("value")
-                snapshot = get_sensor_snapshot(sensor_name)
-                temp = snapshot.get("avg_temp")
-                if temp is not None:
-                    reason = f"Rule '{matched_rule.get('name')}': {sensor_name.capitalize()} temp {operator} {value}°C (snapshot: {temp:.1f}°C)"
+                if matched_rule:  # Only proceed if coercion succeeded
+                    # Build reason string using snapshot data
+                    condition = matched_rule.get("condition", {})
+                    # Safety: Ensure condition is a dict
+                    if not isinstance(condition, dict):
+                        condition = coerce_to_dict(condition, context="reconcile_relay.matched_rule.condition")
+                    
+                    sensor_name = condition.get("sensor", "")
+                    operator = condition.get("operator", "")
+                    value = condition.get("value")
+                    
+                    # Safety: get_sensor_snapshot might return None
+                    snapshot = get_sensor_snapshot(sensor_name)
+                    if snapshot and isinstance(snapshot, dict):
+                        temp = snapshot.get("avg_temp")
+                        if temp is not None:
+                            reason = f"Rule '{matched_rule.get('name', 'Unknown')}': {sensor_name.capitalize()} temp {operator} {value}°C (snapshot: {temp:.1f}°C)"
+                        else:
+                            reason = f"Rule '{matched_rule.get('name', 'Unknown')}' matched"
+                    else:
+                        reason = f"Rule '{matched_rule.get('name', 'Unknown')}' matched"
                 else:
-                    reason = f"Rule '{matched_rule.get('name')}' matched"
+                    reason = "Rule matched but data invalid"
             else:
                 reason = reason_str or "No rule matched, default to off"
     
@@ -2530,11 +2542,13 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         
         # Update rule's last_triggered_at only if we actually changed hardware state
         # (cooldown was already checked in evaluate_rules, but we only update timestamp on actual state change)
-        if matched_rule is not None:
+        if matched_rule is not None and isinstance(matched_rule, dict) and "id" in matched_rule:
             db_update_rule_last_triggered(matched_rule["id"])
         
         # Log event (always log hardware applies, including startup)
-        rule_id = matched_rule.get("id") if matched_rule is not None else None
+        rule_id = None
+        if matched_rule is not None and isinstance(matched_rule, dict):
+            rule_id = matched_rule.get("id")
         db_log_relay_event(
             relay_id,
             source,
