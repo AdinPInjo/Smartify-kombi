@@ -161,6 +161,32 @@ def _debug_test_coerce_to_dict():
     return failed == 0
 
 
+def _safe_dict_from_row(row: Any, context: str = "unknown") -> Optional[dict]:
+    """
+    Safely convert sqlite3.Row to dict with forensic logging.
+    Returns None if conversion fails instead of crashing.
+    
+    This should NEVER fail with a real sqlite3.Row, but if the database
+    is corrupted or code passes wrong type, we log and continue safely.
+    """
+    if row is None:
+        return None
+    
+    try:
+        return dict(row)
+    except ValueError as e:
+        # dict() expects iterable of 2-tuples, this error means row is wrong type
+        print(f"[DB] CRITICAL: dict(row) failed at {context}: {e}")
+        print(f"[DB] CRITICAL:   type={type(row).__name__}")
+        print(f"[DB] CRITICAL:   repr={repr(row)[:200]}")
+        if isinstance(row, (list, tuple)) and row:
+            print(f"[DB] CRITICAL:   first 5 items: {[repr(x)[:50] for x in row[:5]]}")
+        return None
+    except Exception as e:
+        print(f"[DB] CRITICAL: Unexpected error converting row at {context}: {e}, type={type(row).__name__}")
+        return None
+
+
 # =========================
 # Config (no hardcoded IPs)
 # =========================
@@ -582,11 +608,11 @@ def db_update_sensor_snapshot(
 def db_get_sensor_snapshot(sensor_name: str) -> Optional[Dict[str, Any]]:
     """Get sensor snapshot."""
     conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    conn.row_factory = sqlite3.Row  # CRITICAL: Set BEFORE creating cursor
     cur = conn.cursor()
     cur.execute("PRAGMA journal_mode=WAL")
     cur.execute("PRAGMA busy_timeout=5000")
     cur.execute("PRAGMA synchronous=NORMAL")
-    conn.row_factory = sqlite3.Row
     cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
     row = cur.fetchone()
     conn.close()
@@ -622,7 +648,8 @@ def db_query_temp_since(since_ts: int, sensor_index: Optional[int] = None) -> Li
             "SELECT ts, sensor_index, temperature_c, humidity FROM temperature_readings WHERE ts >= ? AND sensor_index = ? ORDER BY ts ASC",
             (since_ts, sensor_index),
         )
-    rows = [dict(r) for r in cur.fetchall()]
+    rows = [_safe_dict_from_row(r, context="db_query_temperature") for r in cur.fetchall()]
+    rows = [r for r in rows if r is not None]  # Filter out None values from failed conversions
     conn.close()
     return rows
 
@@ -635,7 +662,8 @@ def db_query_gps_since(since_ts: int, limit: int = 1000) -> List[Dict[str, Any]]
         "SELECT ts, lat, lon, speed_kmh, course, altitude_m FROM gps_fixes WHERE ts >= ? ORDER BY ts ASC LIMIT ?",
         (since_ts, limit),
     )
-    rows = [dict(r) for r in cur.fetchall()]
+    rows = [_safe_dict_from_row(r, context="db_query_gps_since") for r in cur.fetchall()]
+    rows = [r for r in rows if r is not None]  # Filter out None values
     conn.close()
     return rows
 
@@ -649,7 +677,7 @@ def db_get_relay_state(name: str) -> Optional[Dict[str, Any]]:
     row = cur.fetchone()
     conn.close()
     if row:
-        return dict(row)
+        return _safe_dict_from_row(row, context="db_get_relay_state")
     return None
 
 
@@ -678,7 +706,7 @@ def db_get_relay_device_by_name(name: str) -> Optional[Dict[str, Any]]:
     cur.execute("SELECT * FROM relay_devices WHERE name = ?", (name,))
     row = cur.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _safe_dict_from_row(row, context="db_get_relay_device_by_name")
 
 
 def db_get_relay_device(relay_id: str) -> Optional[Dict[str, Any]]:
@@ -689,7 +717,7 @@ def db_get_relay_device(relay_id: str) -> Optional[Dict[str, Any]]:
     cur.execute("SELECT * FROM relay_devices WHERE id = ?", (relay_id,))
     row = cur.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _safe_dict_from_row(row, context="db_get_relay_device")
 
 
 def db_list_relay_devices() -> List[Dict[str, Any]]:
@@ -700,20 +728,21 @@ def db_list_relay_devices() -> List[Dict[str, Any]]:
     cur.execute("SELECT * FROM relay_devices ORDER BY name")
     rows = cur.fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    return [_safe_dict_from_row(row, context="db_list_relay_devices") for row in rows if _safe_dict_from_row(row, context="db_list_relay_devices") is not None]
 
 
 def db_get_relay_state_new(relay_id: str) -> Optional[Dict[str, Any]]:
     """Get relay state (new table)."""
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row  # CRITICAL: Set IMMEDIATELY after connect
     conn.execute("PRAGMA busy_timeout=5000")
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("SELECT * FROM relay_state_new WHERE relay_id = ?", (relay_id,))
     row = cur.fetchone()
     conn.close()
     if row:
-        state_dict = dict(row)
+        state_dict = dict(row)  # Now safe - row is sqlite3.Row
+        
         # Ensure backward compatibility: if new columns are NULL, use old 'state' field
         if state_dict.get("actual_state") is None:
             state_dict["actual_state"] = state_dict.get("state", "off")
@@ -808,7 +837,10 @@ def db_list_relay_rules(relay_id: str) -> List[Dict[str, Any]]:
     conn.close()
     result = []
     for row in rows:
-        r = dict(row)
+        r = _safe_dict_from_row(row, context="db_list_relay_rules")
+        if not r:
+            continue  # Skip if conversion failed
+        
         # Parse condition_json - handle errors gracefully
         condition_json_str = r.get("condition_json", "")
         if condition_json_str:
@@ -835,7 +867,9 @@ def db_get_relay_rule(rule_id: str) -> Optional[Dict[str, Any]]:
     row = cur.fetchone()
     conn.close()
     if row:
-        r = dict(row)
+        r = _safe_dict_from_row(row, context="db_get_relay_rule")
+        if not r:
+            return None
         r["condition"] = json.loads(r["condition_json"])
         # Convert SQLite integer boolean to Python boolean
         r["is_enabled"] = bool(r.get("is_enabled", 1))
