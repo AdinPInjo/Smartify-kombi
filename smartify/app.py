@@ -21,6 +21,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+# FastAPI app must exist before any router init calls.
+app = FastAPI()
+
 # Water level module
 from smartify.water_level import api as water_level_api, service as water_level_service
 from smartify import rule_engine
