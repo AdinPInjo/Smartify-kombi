@@ -2572,12 +2572,10 @@ def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, cu
     """
     Deterministically evaluate enabled rules for a relay using snapshot data.
     Returns (desired_state, matched_rule, sensor_data_available, reason) tuple.
-    desired_state is "on" or "off" based on first matching rule, or None if sensor data unavailable.
-    matched_rule is the rule dict that matched, or None if no rule matched.
+    desired_state is "on" or "off" based on winner selection, or None if sensor data unavailable.
+    matched_rule is the winner rule dict, or None if no rule matched.
     sensor_data_available is False if sensor data is unavailable (should preserve current state).
     reason is a string explaining why state was set (e.g., "sensor_stale", "sensor_warming_up").
-    
-    Cooldown only prevents triggering a state CHANGE, not maintaining the current state.
     """
     rules = db_list_relay_rules(relay_id)
     enabled_rules = [r for r in rules if r.get("is_enabled", True)]
@@ -2585,11 +2583,7 @@ def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, cu
     if not enabled_rules:
         return ("off", None, True, "no_rules")  # No enabled rules -> default to off
     
-    # Sort by priority (lower number = higher priority), then by creation time
-    enabled_rules.sort(key=lambda x: (x.get("priority", 100), x.get("created_at", 0)))
-    
-    # Evaluate each rule in priority order
-    now = int(time.time())
+    candidates = []
     for rule in enabled_rules:
         # Safety: Ensure rule is a dict
         if not isinstance(rule, dict):
@@ -2597,53 +2591,52 @@ def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, cu
             if not rule:
                 continue  # Skip invalid rules
         
-        # Evaluate condition using snapshot (not raw temp_data)
-        condition = rule.get("condition", {})
-        # Safety: Ensure condition is a dict
-        if not isinstance(condition, dict):
-            condition = coerce_to_dict(condition, context="evaluate_rules.condition")
-        
-        condition_result, reason = _evaluate_temperature_condition(condition)
-        
-        # If condition evaluation failed due to sensor issues (stale/warming), force OFF
-        if not condition_result and reason and ("sensor_stale" in reason or "sensor_warming_up" in reason or "sensor_no_data" in reason):
-            print(f"[Rule Engine] Sensor issue for rule '{rule.get('name')}': {reason}")
-            return ("off", None, False, reason)
-        
-        # If condition doesn't match, continue to next rule
-        if not condition_result:
+        try:
+            runtime_status = evaluate_single_rule(rule, relay_id)
+        except Exception:
             continue
         
-        # Condition matches - determine desired state
+        reason_code = runtime_status.get("reason_code")
+        message = runtime_status.get("message", "") or ""
+        
+        # If condition evaluation failed due to sensor issues (stale/warming/no data), force OFF
+        if reason_code in ("sensor_warming_up", "sensor_stale"):
+            print(f"[Rule Engine] Sensor issue for rule '{rule.get('name')}': {message}")
+            return ("off", None, False, reason_code)
+        if "no sensor data" in message or "no temperature value" in message:
+            print(f"[Rule Engine] Sensor issue for rule '{rule.get('name')}': {message}")
+            return ("off", None, False, "sensor_no_data")
+        
+        if not runtime_status.get("matched"):
+            continue
+        
+        cooldown_remaining = int(runtime_status.get("cooldown_remaining", 0) or 0)
+        if cooldown_remaining > 0:
+            continue
+        
         action = rule.get("action", "")
-        rule_desired_state = None
-        if action == "turn_on":
-            rule_desired_state = "on"
-        elif action == "turn_off":
-            rule_desired_state = "off"
-        else:
-            continue  # Invalid action
+        if action not in ("turn_on", "turn_off"):
+            continue
         
-        # Check cooldown only if this rule would CHANGE the state
-        # If it would maintain current state, cooldown doesn't apply
-        if current_state is not None and rule_desired_state == current_state:
-            # Rule wants same state as current - cooldown doesn't apply, rule matches
-            return (rule_desired_state, rule, True, None)
-        
-        # Rule would change state - check cooldown
-        last_triggered = rule.get("last_triggered_at")
-        if last_triggered:
-            age = now - last_triggered
-            cooldown_sec = rule.get("cooldown_seconds", 60)
-            if age < cooldown_sec:
-                # Still in cooldown and would change state - skip this rule
-                continue
-        
-        # Rule matches and either no cooldown or cooldown expired - first match wins
-        return (rule_desired_state, rule, True, None)
+        candidates.append((rule, runtime_status))
     
-    # No rule matched -> default to off
-    return ("off", None, True, "no_match")
+    if not candidates:
+        return ("off", None, True, "no_match")
+    
+    def _candidate_sort_key(candidate: Tuple[Dict[str, Any], Dict[str, Any]]) -> Tuple[int, int, int, str]:
+        rule, _runtime = candidate
+        priority = int(rule.get("priority", 100) or 100)
+        action = rule.get("action", "")
+        action_rank = 0 if action == "turn_off" else 1
+        created_at = int(rule.get("created_at", 0) or 0)
+        rule_id = str(rule.get("id", ""))
+        return (-priority, action_rank, created_at, rule_id)
+    
+    candidates.sort(key=_candidate_sort_key)
+    winner_rule, _winner_status = candidates[0]
+    
+    desired_state = "off" if winner_rule.get("action") == "turn_off" else "on"
+    return (desired_state, winner_rule, True, None)
 
 
 def reconcile_relay(relay_id: str, force: bool = False) -> bool:
@@ -2753,6 +2746,24 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
                     reason = "Rule matched but data invalid"
             else:
                 reason = reason_str or "No rule matched, default to off"
+            
+            if matched_rule is not None and isinstance(matched_rule, dict):
+                winner_name = matched_rule.get("name", "Unknown")
+                winner_priority = matched_rule.get("priority", "unknown")
+                winner_action = matched_rule.get("action", "unknown")
+                winner_condition = matched_rule.get("condition", {}) if matched_rule else {}
+                if not isinstance(winner_condition, dict):
+                    winner_condition = coerce_to_dict(winner_condition, context="reconcile_relay.winner_condition")
+                winner_sensor = winner_condition.get("sensor", "")
+                winner_temp = None
+                if winner_sensor:
+                    snapshot = get_sensor_snapshot(winner_sensor)
+                    if snapshot and isinstance(snapshot, dict):
+                        winner_temp = snapshot.get("avg_temp")
+                if winner_temp is not None:
+                    print(f"[Reconcile] Winner rule '{winner_name}' (priority {winner_priority}, action {winner_action}) using {winner_sensor} snapshot {winner_temp:.1f}°C")
+                else:
+                    print(f"[Reconcile] Winner rule '{winner_name}' (priority {winner_priority}, action {winner_action}) using {winner_sensor or 'unknown sensor'}")
     
     # Step 3: Update desired_state in database (only if it changed)
     if desired_state is not None and desired_state != current_desired:
