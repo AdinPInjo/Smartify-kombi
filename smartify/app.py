@@ -12,6 +12,9 @@ from typing import Optional, Dict, Any, List, Tuple
 
 # Initialize logger early (before config section uses it)
 logger = logging.getLogger("smartify")
+# Configure logging if not already set up (prevents missing logs in systemd)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # =========================
 # Configuration / Settings
@@ -3678,11 +3681,11 @@ def api_rule_update(
         if action is not None:
             is_valid_action, action_error, action = validate_rule_action(action)
             if not is_valid_action or action is None:
-                return JSONResponse({
-                    "ok": False,
-                    "error": "invalid_action",
+            return JSONResponse({
+                "ok": False,
+                "error": "invalid_action",
                     "message": action_error or "Invalid action payload"
-                }, status_code=400)
+            }, status_code=400)
         
         # Enforce minimum cooldown
         if cooldown_seconds is not None and cooldown_seconds < 5:
