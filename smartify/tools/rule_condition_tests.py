@@ -8,6 +8,7 @@ def run_rule_condition_tests() -> None:
     sensor_snapshots = {
         "kombi": {
             "avg_temp": 10.0,
+            "avg_humidity": 45.0,
             "is_ready": True,
             "is_stale": False,
             "age_seconds": 0,
@@ -15,6 +16,7 @@ def run_rule_condition_tests() -> None:
         },
         "garaza": {
             "avg_temp": 30.0,
+            "avg_humidity": 40.0,
             "is_ready": True,
             "is_stale": False,
             "age_seconds": 0,
@@ -118,13 +120,37 @@ def run_rule_condition_tests() -> None:
         assert ok and normalized, "Expected range condition to validate"
         matched, reason_code, _, _ = smartify_app._evaluate_condition(normalized)
         assert matched and reason_code == "ok", "Expected range condition to match at 10°C"
+
+        # Humidity comparison
+        cond = {
+            "type": "humidity",
+            "sensor": "kombi",
+            "operator": ">",
+            "value": 30,
+        }
+        ok, _, normalized = smartify_app.validate_rule_condition(cond)
+        matched, _, _, _ = smartify_app._evaluate_condition(normalized)
+        assert matched, "Expected humidity comparison to match"
+
+        # Humidity range
+        cond = {
+            "type": "humidity_between",
+            "sensor": "kombi",
+            "min": 20,
+            "max": 60,
+            "min_inclusive": True,
+            "max_inclusive": False,
+        }
+        ok, _, normalized = smartify_app.validate_rule_condition(cond)
+        matched, _, _, _ = smartify_app._evaluate_condition(normalized)
+        assert matched, "Expected humidity range to match"
         
         # AND/OR nesting
         cond = {
             "op": "and",
             "conditions": [
                 {"type": "temperature", "sensor": "kombi", "cmp": ">", "value": 5},
-                {"type": "temperature", "sensor": "garaza", "cmp": "<", "value": 35},
+                {"type": "humidity", "sensor": "garaza", "cmp": "<", "value": 50},
             ],
         }
         ok, _, normalized = smartify_app.validate_rule_condition(cond)
@@ -151,6 +177,43 @@ def run_rule_condition_tests() -> None:
         smartify_app.reconcile_relay(relay_id, force=True)
         assert relay_state.get("actual_state") == "on", "Expected relay to remain ON due to min_on_seconds"
         assert not apply_calls, "Expected no hardware apply due to relay cooldown"
+
+        # Multi-relay independence
+        def fake_db_list_relay_rules_multi(target_relay_id: str):
+            if target_relay_id == "relay-1":
+                return [
+                    {
+                        "id": "rule-r1",
+                        "relay_id": "relay-1",
+                        "name": "Relay1 ON",
+                        "condition": {"type": "temperature", "sensor": "kombi", "cmp": ">", "value": 5},
+                        "action": {"type": "set_state", "state": "on"},
+                        "priority": 50,
+                        "cooldown_seconds": 60,
+                        "is_enabled": True,
+                        "last_triggered_at": None,
+                        "created_at": 1,
+                    }
+                ]
+            return [
+                {
+                    "id": "rule-r2",
+                    "relay_id": "relay-2",
+                    "name": "Relay2 OFF",
+                    "condition": {"type": "temperature", "sensor": "kombi", "cmp": ">", "value": 5},
+                    "action": {"type": "set_state", "state": "off"},
+                    "priority": 50,
+                    "cooldown_seconds": 60,
+                    "is_enabled": True,
+                    "last_triggered_at": None,
+                    "created_at": 1,
+                }
+            ]
+        
+        smartify_app.db_list_relay_rules = fake_db_list_relay_rules_multi
+        desired_state_1, _, _, _, _ = smartify_app.evaluate_rules("relay-1")
+        desired_state_2, _, _, _, _ = smartify_app.evaluate_rules("relay-2")
+        assert desired_state_1 == "on" and desired_state_2 == "off", "Expected relay-specific rules to apply"
         
         print("PASS: Composite conditions, deterministic winner, and anti-flap checks.")
     finally:
