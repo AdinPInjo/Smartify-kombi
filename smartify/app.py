@@ -10,6 +10,9 @@ from collections import deque
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
+# Initialize logger early (before config section uses it)
+logger = logging.getLogger("smartify")
+
 # =========================
 # Configuration / Settings
 # =========================
@@ -98,8 +101,6 @@ except Exception as e:
 # =========================
 # Helper Functions
 # =========================
-
-logger = logging.getLogger(__name__)
 
 def coerce_to_dict(value: Any, *, context: str = "") -> dict:
     """
