@@ -841,12 +841,11 @@ def db_insert_sensor_sample(sensor_name: str, temp: Optional[float], humidity: O
         "INSERT INTO sensor_samples (sensor_name, temp, humidity, ok, created_at) VALUES (?, ?, ?, ?, ?)",
         (sensor_name, temp, humidity, 1 if ok else 0, created_at),
     )
-    conn.commit()
-    conn.close()
     
     # Keep only last 15 minutes of samples to prevent DB growth
     cutoff = created_at - (15 * 60)
     cur.execute("DELETE FROM sensor_samples WHERE created_at < ?", (cutoff,))
+    
     conn.commit()
     conn.close()
 
@@ -1698,6 +1697,7 @@ def _sensor_sampler_thread() -> None:
             
             # Log sensor sample collection periodically (rate-limited: once per snapshot interval)
             if now % SENSOR_SNAPSHOT_INTERVAL < SENSOR_SAMPLE_INTERVAL:
+                # Log individual sample readings
                 for result in results:
                     sensor_idx = result.get("sensor_index", -1)
                     sensor_name = sensor_name_map.get(sensor_idx, f"sensor_{sensor_idx}")
@@ -1705,6 +1705,12 @@ def _sensor_sampler_thread() -> None:
                     humidity = result.get("humidity")
                     ok = result.get("ok", False)
                     print(f"[Sensor Sample] sensor={sensor_name} temp={temp} hum={humidity} ok={ok}")
+                
+                # Log persistence success summary
+                sample_count_kombi = len(_sensor_samples.get("kombi", []))
+                sample_count_garaza = len(_sensor_samples.get("garaza", []))
+                logger.info("[Sensor Sampler] Persisted samples successfully - kombi: %d samples, garaza: %d samples", 
+                           sample_count_kombi, sample_count_garaza)
             
             # Check if it's time to update snapshot (every 60 seconds, aligned to minute boundary)
             current_window = (now // SENSOR_SNAPSHOT_INTERVAL) * SENSOR_SNAPSHOT_INTERVAL
