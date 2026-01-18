@@ -1,6 +1,5 @@
 import os
 import time
-import logging
 import sqlite3
 import threading
 import subprocess
@@ -10,64 +9,30 @@ from collections import deque
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
-# Initialize logger early (before config section uses it)
-logger = logging.getLogger("smartify")
-# Configure logging if not already set up (prevents missing logs in systemd)
-if not logging.getLogger().handlers:
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Import centralized logging
+from smartify.logging_setup import logger
 
-# =========================
-# Configuration / Settings
-# =========================
-# All module-level constants defined here to prevent NameError on import.
-# Override via environment variables as needed.
-
-# Paths
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DB_PATH = REPO_ROOT / "smartify" / "data" / "smartify.db"
-DB_PATH = os.getenv("SMARTIFY_DB_PATH", str(DEFAULT_DB_PATH))
-DATA_DIR = REPO_ROOT / "smartify" / "data"
-STATIC_DIR = REPO_ROOT / "smartify-ui" / "dist"
-
-# Authentication & Security
-SMARTIFY_USERNAME = os.getenv("SMARTIFY_USERNAME", "admin")
-SMARTIFY_PASSWORD = os.getenv("SMARTIFY_PASSWORD", "changeme")
-SMARTIFY_API_KEY = os.getenv("SMARTIFY_API_KEY", "")
-SMARTIFY_REQUIRE_AUTH = os.getenv("SMARTIFY_REQUIRE_AUTH", "1") in ("1", "true", "yes", "on")
-SMARTIFY_TRUST_LOCALHOST = os.getenv("SMARTIFY_TRUST_LOCALHOST", "1") in ("1", "true", "yes", "on")
-SMARTIFY_SECRET = os.getenv("SMARTIFY_SECRET", "change-this-secret-in-production")
-
-# GPS configuration
-GPS_ENABLED = os.getenv("GPS_ENABLED", "0") in ("1", "true", "yes", "on")
-GPS_DEVICE = os.getenv("GPS_DEVICE", "/dev/serial0")
-GPS_BAUD = int(os.getenv("GPS_BAUD", "9600"))
-
-# DHT22 temperature/humidity sensor pins
-DHT22_PINS_RAW = os.getenv("SMARTIFY_DHT22_PINS")
-logger.info("[Config] RAW SMARTIFY_DHT22_PINS=%r", DHT22_PINS_RAW)
-if DHT22_PINS_RAW and DHT22_PINS_RAW.strip():
-    DHT22_PINS = [int(p.strip()) for p in DHT22_PINS_RAW.split(",") if p.strip().isdigit()]
-else:
-    DHT22_PINS = []  # No DHT22 sensors configured
-logger.info("[Config] DHT22_PINS=%s", DHT22_PINS)
-
-# Sensor polling interval
-SENSOR_LOG_INTERVAL = int(os.getenv("SENSOR_LOG_INTERVAL", "30"))
-
-# Legacy header relay (single relay control)
-HEADER_RELAY_NAME = os.getenv("HEADER_RELAY_NAME", "header")
-HEADER_RELAY_PIN = int(os.getenv("HEADER_RELAY_PIN", "0"))
-
-# Thread-safety lock for relay operations
-_relay_lock = threading.Lock()
-
-# Rule evaluator thread handle (set during startup)
-_rule_evaluator_thread: Optional[threading.Thread] = None
-
-# Startup log
-print(f"[Config] DB_PATH={DB_PATH}")
-print(f"[Config] GPS_ENABLED={GPS_ENABLED}, GPS_DEVICE={GPS_DEVICE if GPS_ENABLED else 'N/A'}")
-print(f"[Config] SMARTIFY_REQUIRE_AUTH={SMARTIFY_REQUIRE_AUTH}")
+# Import centralized configuration
+from smartify.config import (
+    DB_PATH,
+    DATA_DIR,
+    STATIC_DIR,
+    SMARTIFY_USERNAME,
+    SMARTIFY_PASSWORD,
+    SMARTIFY_API_KEY,
+    SMARTIFY_REQUIRE_AUTH,
+    SMARTIFY_TRUST_LOCALHOST,
+    SMARTIFY_SECRET,
+    GPS_ENABLED,
+    GPS_DEVICE,
+    GPS_BAUD,
+    DHT22_PINS,
+    SENSOR_LOG_INTERVAL,
+    HEADER_RELAY_NAME,
+    HEADER_RELAY_PIN,
+    _relay_lock,
+    _rule_evaluator_thread,
+)
 
 from fastapi import FastAPI, Request, Form, Header, Body
 from fastapi.responses import JSONResponse, FileResponse
@@ -84,6 +49,42 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Import validators
+from smartify.validators import validate_rule_action, validate_rule_condition
+
+# Import database layer
+from smartify.db import (
+    db_init,
+    db_connect,
+    db_insert_temp,
+    db_insert_sensor_sample,
+    db_update_sensor_snapshot,
+    db_upsert_sensor_snapshot,
+    db_get_sensor_snapshot,
+    db_insert_gps,
+    db_query_temp_since,
+    db_query_gps_since,
+    db_get_relay_state,
+    db_set_relay_state,
+    db_get_relay_device_by_name,
+    db_get_relay_device,
+    db_list_relay_devices,
+    db_create_relay_device,
+    db_update_relay_device,
+    db_get_relay_state_new,
+    db_create_relay_state_new,
+    db_set_relay_state_new,
+    db_update_relay_state_new,
+    db_list_relay_rules,
+    db_get_relay_rule,
+    db_create_relay_rule,
+    db_update_relay_rule,
+    db_delete_relay_rule,
+    db_log_relay_event,
+    db_get_relay_events,
+    db_update_rule_last_triggered,
 )
 
 # Water level module
@@ -262,29 +263,6 @@ def _debug_test_coerce_to_dict():
     
     print(f"\n=== Results: {passed} passed, {failed} failed ===\n")
     return failed == 0
-
-
-def _safe_dict_from_row(row: Any, context: str = "unknown") -> Optional[dict]:
-    """
-    Safely convert sqlite3.Row to dict with forensic logging.
-    Returns None if conversion fails instead of crashing.
-    
-    This should NEVER fail with a real sqlite3.Row, but if the database
-    is corrupted or code passes wrong type, we log and continue safely.
-    """
-    if row is None:
-        return None
-    
-    try:
-        return dict(row)
-    except ValueError as e:
-        # dict() expects iterable of 2-tuples, this error means row is wrong type
-        print(f"[DB] CRITICAL: dict(row) failed at {context}: {e}")
-        print(f"[DB] CRITICAL:   type={type(row).__name__}")
-        print(f"[DB] CRITICAL:   repr={repr(row)[:200]}")
-        if isinstance(row, (list, tuple)) and row:
-            print(f"[DB] CRITICAL:   first 5 items: {[repr(x)[:50] for x in row[:5]]}")
-        return None
 
 
 def _normalize_operator(operator: str) -> str:
@@ -557,56 +535,23 @@ def _debug_test_rule_operators() -> bool:
     return True
 
 
-def _run_schema_migrations(conn: sqlite3.Connection, cur: sqlite3.Cursor) -> None:
-    """
-    Run automatic schema migrations.
-    Checks for missing columns and applies ALTER TABLE as needed.
-    This function is idempotent and safe to run on every startup.
-    Future migrations can be added here following the same pattern.
-    """
-    # Migration: active_low column in relay_devices
-    try:
-        cur.execute("PRAGMA table_info(relay_devices)")
-        columns = [row[1] for row in cur.fetchall()]  # Column name is at index 1
-        if "active_low" not in columns:
-            print("[DB] migrated: added active_low to relay_devices")
-            cur.execute("ALTER TABLE relay_devices ADD COLUMN active_low BOOLEAN NOT NULL DEFAULT 0")
-            conn.commit()
-    except sqlite3.OperationalError as e:
-        # Table might not exist yet (will be created by CREATE TABLE IF NOT EXISTS)
-        # This is safe to ignore - migration will run on next startup after table is created
-        pass
-    except Exception as e:
-        print(f"[DB Migration] Unexpected error checking/adding active_low column: {e}")
-        # Don't raise - allow startup to continue, migration will retry on next startup
-    
-    try:
-        cur.execute("PRAGMA table_info(relay_devices)")
-        columns = [row[1] for row in cur.fetchall()]
-        if "min_on_seconds" not in columns:
-            print("[DB] migrated: added min_on_seconds to relay_devices")
-            cur.execute("ALTER TABLE relay_devices ADD COLUMN min_on_seconds INTEGER NOT NULL DEFAULT 0")
-            conn.commit()
-        if "min_off_seconds" not in columns:
-            print("[DB] migrated: added min_off_seconds to relay_devices")
-            cur.execute("ALTER TABLE relay_devices ADD COLUMN min_off_seconds INTEGER NOT NULL DEFAULT 0")
-            conn.commit()
-    except Exception as e:
-        print(f"[DB Migration] Unexpected error adding min_on_seconds/min_off_seconds: {e}")
-    
-    # Future migrations can be added here:
-    # try:
-    #     cur.execute("PRAGMA table_info(relay_devices)")
-    #     columns = [row[1] for row in cur.fetchall()]
-    #     if "new_column" not in columns:
-    #         print("[DB] migrated: added new_column to relay_devices")
-    #         cur.execute("ALTER TABLE relay_devices ADD COLUMN new_column TEXT DEFAULT ''")
-    #         conn.commit()
-    # except Exception as e:
-    #     print(f"[DB Migration] Error adding new_column: {e}")
+# ===========================
+# DB Functions moved to smartify/db.py
+# ===========================
+# All database interaction functions have been moved to smartify.db module.
+# Import them at the top of this file.
 
 
-def db_init() -> None:
+# =========================
+# Auth helpers
+# =========================
+
+def is_localhost(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+def is_authenticated(request: Request, x_api_key: Optional[str]) -> bool:
     """Initialize database schema and run migrations."""
     print(f"[DB] Initializing database at: {DB_PATH}")
     conn = sqlite3.connect(DB_PATH)
