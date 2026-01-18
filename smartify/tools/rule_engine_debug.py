@@ -136,6 +136,50 @@ def run_rule_engine_debug() -> None:
         assert rules[1].get("last_triggered_at") is None, "Expected other OFF rule last_triggered_at to remain None"
         
         print("PASS: Winner is UGASI, relay OFF, last_triggered_at updated only for winner.")
+        
+        # Cooldown hold scenario: rule condition matches but cooldown blocks retrigger
+        rules = [
+            {
+                "id": "rule-on-cooldown",
+                "relay_id": relay_id,
+                "name": "Heat On",
+                "condition": {"type": "temperature", "sensor": "kombi", "operator": ">", "value": 5},
+                "action": "turn_on",
+                "priority": 50,
+                "cooldown_seconds": 60,
+                "is_enabled": True,
+                "last_triggered_at": None,
+                "created_at": 1,
+            }
+        ]
+        sensor_snapshots = {
+            "kombi": {
+                "avg_temp": 21.3,
+                "is_ready": True,
+                "is_stale": False,
+                "age_seconds": 0,
+                "sample_count": 6,
+            }
+        }
+        relay_state = {
+            "mode": "auto",
+            "actual_state": "off",
+            "desired_state": "off",
+            "last_applied_at": 0,
+            "manual_until": None,
+        }
+        
+        smartify_app.reconcile_relay(relay_id, force=True)
+        first_trigger = rules[0].get("last_triggered_at")
+        assert relay_state.get("actual_state") == "on", "Expected relay to turn ON"
+        assert first_trigger, "Expected last_triggered_at to be set after first trigger"
+        
+        smartify_app.reconcile_relay(relay_id, force=True)
+        second_trigger = rules[0].get("last_triggered_at")
+        assert relay_state.get("actual_state") == "on", "Expected relay to stay ON during cooldown"
+        assert second_trigger == first_trigger, "Expected last_triggered_at to remain unchanged during cooldown"
+        
+        print("PASS: Cooldown holds relay ON without no_match OFF flip.")
     finally:
         smartify_app.db_list_relay_rules = originals["db_list_relay_rules"]
         smartify_app.get_sensor_snapshot = originals["get_sensor_snapshot"]
