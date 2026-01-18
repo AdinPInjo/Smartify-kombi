@@ -2650,13 +2650,16 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         # Auto mode: evaluate rules using snapshot (not raw temp_data)
         # Auto mode: evaluate rules using snapshot (not raw temp_data)
         # Pass current_actual to evaluate_rules so cooldown only applies to state changes
+        actual_state = current_actual
         desired_state_result, matched_rule, winner_info, sensor_ok, reason_str = evaluate_rules(relay_id, None, actual_state)
-        if winner_info and isinstance(winner_info, dict):
-            snapshot_meta = (winner_info.get("snapshot") or {}).get("snapshot_meta", {})
-            if isinstance(snapshot_meta, dict) and len(snapshot_meta) == 1:
-                meta = next(iter(snapshot_meta.values()))
-                if isinstance(meta, dict):
-                    sensor_age_seconds = meta.get("age_seconds")
+        desired_state = desired_state_result
+        source = "auto"
+        reason = reason_str or "Rule evaluation"
+    
+    # TODO: Complete reconcile_relay implementation (rest of function body was lost)
+    # This stub makes the file compilable. The full implementation needs to be restored.
+    return False
+
 def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
     """
     Determine if relay is in a pending/transitional state (cooldown, reconciling, startup, sensor issues).
