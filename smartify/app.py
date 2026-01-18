@@ -834,28 +834,28 @@ def db_connect() -> sqlite3.Connection:
 
 def db_insert_temp(ts: int, sensor_index: int, t: Optional[float], h: Optional[float]) -> None:
     with db_connect() as conn:
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO temperature_readings (ts, sensor_index, temperature_c, humidity) VALUES (?, ?, ?, ?)",
-        (ts, sensor_index, t, h),
-    )
-    conn.commit()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO temperature_readings (ts, sensor_index, temperature_c, humidity) VALUES (?, ?, ?, ?)",
+            (ts, sensor_index, t, h),
+        )
+        conn.commit()
 
 
 def db_insert_sensor_sample(sensor_name: str, temp: Optional[float], humidity: Optional[float], ok: bool, created_at: int) -> None:
     """Insert a raw sensor sample. Each call opens its own connection."""
     with db_connect() as conn:
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO sensor_samples (sensor_name, temp, humidity, ok, created_at) VALUES (?, ?, ?, ?, ?)",
-        (sensor_name, temp, humidity, 1 if ok else 0, created_at),
-    )
-    
-    # Keep only last 15 minutes of samples to prevent DB growth
-    cutoff = created_at - (15 * 60)
-    cur.execute("DELETE FROM sensor_samples WHERE created_at < ?", (cutoff,))
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sensor_samples (sensor_name, temp, humidity, ok, created_at) VALUES (?, ?, ?, ?, ?)",
+            (sensor_name, temp, humidity, 1 if ok else 0, created_at),
+        )
         
-    conn.commit()
+        # Keep only last 15 minutes of samples to prevent DB growth
+        cutoff = created_at - (15 * 60)
+        cur.execute("DELETE FROM sensor_samples WHERE created_at < ?", (cutoff,))
+        
+        conn.commit()
 
 
 def db_update_sensor_snapshot(
@@ -870,58 +870,58 @@ def db_update_sensor_snapshot(
 ) -> None:
     """Update or insert sensor snapshot. Uses fresh connection per call."""
     with db_connect() as conn:
-    cur = conn.cursor()
+        cur = conn.cursor()
 
-    # Forensics: verify row type if existing snapshot fetch returns unexpected type
-    try:
-        cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
-        row = cur.fetchone()
-        if row is not None and not isinstance(row, sqlite3.Row) and not hasattr(row, "keys"):
-            columns = [d[0] for d in cur.description] if cur.description else []
-            sample = row[:10] if isinstance(row, (list, tuple)) else None
-            logger.error(
-                "[db_update_sensor_snapshot] Unexpected row type: type=%s repr=%s columns=%s sample=%s",
-                type(row).__name__,
-                repr(row)[:200],
-                columns,
-                sample,
+        # Forensics: verify row type if existing snapshot fetch returns unexpected type
+        try:
+            cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
+            row = cur.fetchone()
+            if row is not None and not isinstance(row, sqlite3.Row) and not hasattr(row, "keys"):
+                columns = [d[0] for d in cur.description] if cur.description else []
+                sample = row[:10] if isinstance(row, (list, tuple)) else None
+                logger.error(
+                    "[db_update_sensor_snapshot] Unexpected row type: type=%s repr=%s columns=%s sample=%s",
+                    type(row).__name__,
+                    repr(row)[:200],
+                    columns,
+                    sample,
+                )
+        except Exception as e:
+            logger.error("[db_update_sensor_snapshot] Forensics fetch failed: %s", e, exc_info=True)
+
+        try:
+            cur.execute(
+                """
+                INSERT INTO sensor_snapshot (
+                    sensor_name, avg_temp, avg_humidity, sample_count,
+                    window_start, window_end, last_good_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(sensor_name) DO UPDATE SET
+                    avg_temp=excluded.avg_temp,
+                    avg_humidity=excluded.avg_humidity,
+                    sample_count=excluded.sample_count,
+                    window_start=excluded.window_start,
+                    window_end=excluded.window_end,
+                    last_good_at=excluded.last_good_at,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    sensor_name,
+                    avg_temp,
+                    avg_humidity,
+                    sample_count,
+                    window_start,
+                    window_end,
+                    last_good_at,
+                    updated_at,
+                ),
             )
-    except Exception as e:
-        logger.error("[db_update_sensor_snapshot] Forensics fetch failed: %s", e, exc_info=True)
+        except Exception as e:
+            logger.error("[db_update_sensor_snapshot] Failed to upsert snapshot: %s", e, exc_info=True)
+            return
 
-    try:
-        cur.execute(
-            """
-            INSERT INTO sensor_snapshot (
-                sensor_name, avg_temp, avg_humidity, sample_count,
-                window_start, window_end, last_good_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(sensor_name) DO UPDATE SET
-                avg_temp=excluded.avg_temp,
-                avg_humidity=excluded.avg_humidity,
-                sample_count=excluded.sample_count,
-                window_start=excluded.window_start,
-                window_end=excluded.window_end,
-                last_good_at=excluded.last_good_at,
-                updated_at=excluded.updated_at
-            """,
-            (
-                sensor_name,
-                avg_temp,
-                avg_humidity,
-                sample_count,
-                window_start,
-                window_end,
-                last_good_at,
-                updated_at,
-            ),
-        )
-    except Exception as e:
-        logger.error("[db_update_sensor_snapshot] Failed to upsert snapshot: %s", e, exc_info=True)
-        return
-
-    conn.commit()
-    logger.debug("[db_update_sensor_snapshot] Saved snapshot for %s", sensor_name)
+        conn.commit()
+        logger.debug("[db_update_sensor_snapshot] Saved snapshot for %s", sensor_name)
 
 
 def db_upsert_sensor_snapshot(
@@ -950,10 +950,10 @@ def db_upsert_sensor_snapshot(
 def db_get_sensor_snapshot(sensor_name: str) -> Optional[Dict[str, Any]]:
     """Get sensor snapshot. Uses fresh connection per call."""
     with db_connect() as conn:
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
-    row = cur.fetchone()
-    return dict(row) if row else None
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def db_insert_gps(ts: int, lat: Optional[float], lon: Optional[float], speed_kmh: Optional[float],
