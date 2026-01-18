@@ -2862,6 +2862,22 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             "snapshot_meta": {},
         }
     
+    # Normalize action (legacy turn_on/off or temperature_band)
+    normalized_action = None
+    ok_action, _action_err, normalized_action = validate_rule_action(rule.get("action"))
+    if ok_action and isinstance(normalized_action, dict) and normalized_action.get("type") == "temperature_band":
+        band_condition = {
+            "type": "temperature_between",
+            "sensor": normalized_action.get("sensor"),
+            "min": normalized_action.get("min"),
+            "max": normalized_action.get("max"),
+            "min_inclusive": normalized_action.get("min_inclusive", True),
+            "max_inclusive": normalized_action.get("max_inclusive", False),
+        }
+        ok_band, _band_err, normalized_band = validate_rule_condition(band_condition)
+        if ok_band and normalized_band is not None:
+            normalized_condition = normalized_band
+    
     # Compute cooldown but do not block condition matching
     last_triggered = rule.get("last_triggered_at")
     cooldown_seconds = rule.get("cooldown_seconds", 60)
@@ -2914,24 +2930,28 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
         reason_code = "cooldown"
         message = f"Cooldown… {cooldown_remaining}s"
     
-    return {
-        "can_evaluate": True,
+    if normalized_action and normalized_action.get("type") == "temperature_band":
+        if snapshot_temp is not None and min_val is not None and max_val is not None:
+            message = f"{sensor_name} {snapshot_temp:.1f}°C in [{min_val},{max_val}] => {'on' if condition_matched else 'off'}"
+    
+            return {
+                "can_evaluate": True,
         "matched": condition_matched,
         "condition_matched": condition_matched,
         "can_trigger": can_trigger,
         "reason_code": reason_code,
         "message": message,
-        "sensor_name": sensor_name,
-        "snapshot_temp": snapshot_temp,
+                "sensor_name": sensor_name,
+                "snapshot_temp": snapshot_temp,
         "snapshot_humidity": snapshot_humidity,
-        "threshold": threshold,
-        "operator": operator,
+                "threshold": threshold,
+                "operator": operator,
         "min": min_val,
         "max": max_val,
         "min_inclusive": min_inclusive,
         "max_inclusive": max_inclusive,
-        "age_seconds": age_seconds,
-        "sample_count": sample_count,
+                "age_seconds": age_seconds,
+                "sample_count": sample_count,
         "cooldown_remaining": cooldown_remaining,
         "snapshot_values": snapshot_values,
         "snapshot_meta": snapshot_meta,
@@ -2955,7 +2975,7 @@ def evaluate_rules(
     enabled_rules = [r for r in rules if r.get("is_enabled", True)]
     
     if not enabled_rules:
-        return ("off", None, True, "no_rules")  # No enabled rules -> default to off
+        return ("off", None, None, True, "no_rules")  # No enabled rules -> default to off
     
     candidates = []
     for rule in enabled_rules:
@@ -2972,7 +2992,8 @@ def evaluate_rules(
         matched, reason_code, message, snapshot_info = _evaluate_condition(normalized_condition)
         if reason_code in ("sensor_warming_up", "sensor_stale", "sensor_no_data", "sensor_no_temp", "sensor_no_humidity"):
             print(f"[Rule Engine] Sensor issue for rule '{rule.get('name')}': {message}")
-            return ("off", None, None, False, reason_code)
+            hold_state = current_state if current_state in ("on", "off") else "off"
+            return (hold_state, None, None, False, reason_code)
         
         if not matched:
             continue
@@ -3003,14 +3024,18 @@ def evaluate_rules(
         sensor = winner_action.get("sensor", "")
         snapshot = get_sensor_snapshot(sensor) if sensor else None
         if not snapshot or not isinstance(snapshot, dict):
-            return ("off", None, None, False, "sensor_no_data")
+            hold_state = current_state if current_state in ("on", "off") else "off"
+            return (hold_state, winner_rule, {"action": winner_action, "snapshot": winner_snapshot}, False, "sensor_no_data")
         if not snapshot.get("is_ready", False):
-            return ("off", None, None, False, "sensor_warming_up")
+            hold_state = current_state if current_state in ("on", "off") else "off"
+            return (hold_state, winner_rule, {"action": winner_action, "snapshot": winner_snapshot}, False, "sensor_warming_up")
         if snapshot.get("is_stale", False):
-            return ("off", None, None, False, "sensor_stale")
+            hold_state = current_state if current_state in ("on", "off") else "off"
+            return (hold_state, winner_rule, {"action": winner_action, "snapshot": winner_snapshot}, False, "sensor_stale")
         temp = snapshot.get("avg_temp")
         if temp is None:
-            return ("off", None, None, False, "sensor_no_data")
+            hold_state = current_state if current_state in ("on", "off") else "off"
+            return (hold_state, winner_rule, {"action": winner_action, "snapshot": winner_snapshot}, False, "sensor_no_data")
         min_val = float(winner_action.get("min"))
         max_val = float(winner_action.get("max"))
         min_inclusive = bool(winner_action.get("min_inclusive", True))
@@ -3088,15 +3113,16 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         desired_state_result, matched_rule, winner_info, sensor_data_available, reason_str = evaluate_rules(relay_id, None, current_actual)
         
         if not sensor_data_available:
-            # Sensor data unavailable (stale/warming) - force OFF
-            # Only log occasionally to avoid spam (every 30s or when state changes)
-            should_log = (now % 30 == 0) or (current_desired != "off")
+            # Sensor data unavailable - HOLD last desired/current state (no forced OFF)
+            hold_state = current_desired if current_desired in ("on", "off") else current_actual
+            if hold_state not in ("on", "off"):
+                hold_state = "off"
+            should_log = (now % 30 == 0) or (current_desired != hold_state)
             if should_log:
-                print(f"[Reconcile] Sensor data unavailable ({reason_str}), desired_state=OFF")
-            desired_state = "off"
+                print(f"[Reconcile] Sensor unavailable ({reason_str}) for relay {relay_id}; holding desired_state={hold_state}")
+            desired_state = hold_state
             source = "rule"
             reason = f"Sensor unavailable: {reason_str}"
-            matched_rule = None
         else:
             # Sensor data available - use the result
             desired_state = desired_state_result
@@ -3130,21 +3156,25 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
                 if not isinstance(winner_condition, dict):
                     winner_condition = coerce_to_dict(winner_condition, context="reconcile_relay.winner_condition")
                 winner_sensor = ""
-                if "type" in winner_condition and winner_condition.get("type") == "temperature":
+                if isinstance(winner_action, dict) and winner_action.get("sensor"):
+                    winner_sensor = winner_action.get("sensor", "")
+                elif "type" in winner_condition and winner_condition.get("sensor"):
                     winner_sensor = winner_condition.get("sensor", "")
                 elif winner_info and isinstance(winner_info, dict):
                     snapshot_values = (winner_info.get("snapshot") or {}).get("snapshot_values", {})
                     if isinstance(snapshot_values, dict) and len(snapshot_values) == 1:
                         winner_sensor = next(iter(snapshot_values.keys()))
+                if not winner_sensor:
+                    winner_sensor = "unknown sensor"
                 winner_temp = None
                 if winner_sensor:
                     snapshot = get_sensor_snapshot(winner_sensor)
                     if snapshot and isinstance(snapshot, dict):
                         winner_temp = snapshot.get("avg_temp")
                 if winner_temp is not None:
-                    print(f"[Reconcile] Winner rule '{winner_name}' (priority {winner_priority}, action {winner_action}) using {winner_sensor} snapshot {winner_temp:.1f}°C -> desired_state={desired_state}")
+                    print(f"[Reconcile] Winner rule '{winner_name}' (priority {winner_priority}, action {winner_action}) using {winner_sensor} {winner_temp:.1f}°C -> desired_state={desired_state}")
                 else:
-                    print(f"[Reconcile] Winner rule '{winner_name}' (priority {winner_priority}, action {winner_action}) using {winner_sensor or 'unknown sensor'} -> desired_state={desired_state}")
+                    print(f"[Reconcile] Winner rule '{winner_name}' (priority {winner_priority}, action {winner_action}) using {winner_sensor} (snapshot unavailable) -> desired_state={desired_state}")
     
     # Step 3: Update desired_state in database (only if it changed)
     if desired_state is not None and desired_state != current_desired:
@@ -3527,8 +3557,8 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
                         sensor_is_stale = meta.get("is_stale")
             if not sensor_ok:
                 pending = True
-                pending_reason = reason_str or "sensor_unavailable"
-                pending_message = f"Sensor unavailable: {pending_reason}"
+                pending_reason = "sensor_unavailable"
+                pending_message = f"Sensor unavailable: {reason_str} (holding last state)"
                 source = "sensor"
             else:
                 if desired_state_result and actual_state and desired_state_result != actual_state:
@@ -3557,11 +3587,11 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
                                 source = "rule"
                         except Exception:
                             pass
-                    if not pending:
-                        pending = True
-                        pending_reason = "reconciling"
-                        pending_message = "Applying relay state… please wait"
-                        source = "rule"
+                if not pending:
+                    pending = True
+                    pending_reason = "reconciling"
+                    pending_message = "Applying relay state… please wait"
+                    source = "rule"
         
         # Ensure source is always defined
         final_source = source if source is not None else mode
