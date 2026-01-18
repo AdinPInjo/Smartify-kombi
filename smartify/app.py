@@ -37,11 +37,13 @@ GPS_DEVICE = os.getenv("GPS_DEVICE", "/dev/serial0")
 GPS_BAUD = int(os.getenv("GPS_BAUD", "9600"))
 
 # DHT22 temperature/humidity sensor pins
-DHT22_PINS_STR = os.getenv("DHT22_PINS", "")
-if DHT22_PINS_STR.strip():
-    DHT22_PINS = [int(p.strip()) for p in DHT22_PINS_STR.split(",") if p.strip().isdigit()]
+DHT22_PINS_RAW = os.getenv("SMARTIFY_DHT22_PINS")
+logger.info("[Config] RAW SMARTIFY_DHT22_PINS=%r", DHT22_PINS_RAW)
+if DHT22_PINS_RAW and DHT22_PINS_RAW.strip():
+    DHT22_PINS = [int(p.strip()) for p in DHT22_PINS_RAW.split(",") if p.strip().isdigit()]
 else:
     DHT22_PINS = []  # No DHT22 sensors configured
+logger.info("[Config] DHT22_PINS=%s", DHT22_PINS)
 
 # Sensor polling interval
 SENSOR_LOG_INTERVAL = int(os.getenv("SENSOR_LOG_INTERVAL", "30"))
@@ -59,7 +61,6 @@ _rule_evaluator_thread: Optional[threading.Thread] = None
 # Startup log
 print(f"[Config] DB_PATH={DB_PATH}")
 print(f"[Config] GPS_ENABLED={GPS_ENABLED}, GPS_DEVICE={GPS_DEVICE if GPS_ENABLED else 'N/A'}")
-print(f"[Config] DHT22_PINS={DHT22_PINS}")
 print(f"[Config] SMARTIFY_REQUIRE_AUTH={SMARTIFY_REQUIRE_AUTH}")
 
 from fastapi import FastAPI, Request, Form, Header, Body
@@ -2664,6 +2665,7 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
     manual_until = relay_state.get("manual_until")
     
     # Initialize all variables that may be used later (prevent UnboundLocalError)
+    actual_state = current_actual  # Alias for evaluate_rules() call
     desired_state = None
     matched_rule = None
     source = "unknown"
