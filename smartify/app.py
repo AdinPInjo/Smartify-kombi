@@ -10,6 +10,11 @@ from collections import deque
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
+# Database path (must be defined before any router init)
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DB_PATH = REPO_ROOT / "smartify" / "data" / "smartify.db"
+DB_PATH = os.getenv("SMARTIFY_DB_PATH", str(DEFAULT_DB_PATH))
+
 from fastapi import FastAPI, Request, Form, Header, Body
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
