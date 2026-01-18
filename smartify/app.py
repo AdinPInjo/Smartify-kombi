@@ -2758,6 +2758,7 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
                 if desired_state_result and actual_state and desired_state_result != actual_state:
                     min_on_seconds = int(device.get("min_on_seconds", 0) or 0) if device else 0
                     min_off_seconds = int(device.get("min_off_seconds", 0) or 0) if device else 0
+
                     if actual_state == "on" and desired_state_result == "off" and min_on_seconds > 0 and (now - last_applied_at) < min_on_seconds:
                         pending = True
                         pending_reason = "min_on"
