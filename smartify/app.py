@@ -1,6 +1,5 @@
 import os
 import time
-import logging
 import sqlite3
 import threading
 import subprocess
@@ -10,55 +9,30 @@ from collections import deque
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
-# Import from new modules
+# Import centralized logging
 from smartify.logging_setup import logger
-import smartify.config as config
 
-# =========================
-# Configuration / Settings
-# =========================
-# All module-level constants now imported from smartify.config
-# Expose them at module level for backward compatibility
-
-# Paths
-DB_PATH = config.DB_PATH
-DATA_DIR = config.DATA_DIR
-STATIC_DIR = config.STATIC_DIR
-
-# Authentication & Security
-SMARTIFY_USERNAME = config.SMARTIFY_USERNAME
-SMARTIFY_PASSWORD = config.SMARTIFY_PASSWORD
-SMARTIFY_API_KEY = config.SMARTIFY_API_KEY
-SMARTIFY_REQUIRE_AUTH = config.SMARTIFY_REQUIRE_AUTH
-SMARTIFY_TRUST_LOCALHOST = config.SMARTIFY_TRUST_LOCALHOST
-SMARTIFY_SECRET = config.SMARTIFY_SECRET
-
-# GPS configuration
-GPS_ENABLED = config.GPS_ENABLED
-GPS_DEVICE = config.GPS_DEVICE
-GPS_BAUD = config.GPS_BAUD
-
-# DHT22 temperature/humidity sensor pins
-DHT22_PINS = config.DHT22_PINS
-
-# Sensor polling interval
-SENSOR_LOG_INTERVAL = config.SENSOR_LOG_INTERVAL
-
-# Legacy header relay (single relay control)
-HEADER_RELAY_NAME = config.HEADER_RELAY_NAME
-HEADER_RELAY_PIN = config.HEADER_RELAY_PIN
-
-# Thread-safety lock for relay operations
-_relay_lock = config._relay_lock
-
-# Rule evaluator thread handle (set during startup)
-_rule_evaluator_thread: Optional[threading.Thread] = None
-
-# Startup log
-logger.info("[Config] DB_PATH=%s", DB_PATH)
-logger.info("[Config] GPS_ENABLED=%s, GPS_DEVICE=%s", GPS_ENABLED, GPS_DEVICE if GPS_ENABLED else 'N/A')
-logger.info("[Config] DHT22_PINS=%s", DHT22_PINS)
-logger.info("[Config] SMARTIFY_REQUIRE_AUTH=%s", SMARTIFY_REQUIRE_AUTH)
+# Import centralized configuration
+from smartify.config import (
+    DB_PATH,
+    DATA_DIR,
+    STATIC_DIR,
+    SMARTIFY_USERNAME,
+    SMARTIFY_PASSWORD,
+    SMARTIFY_API_KEY,
+    SMARTIFY_REQUIRE_AUTH,
+    SMARTIFY_TRUST_LOCALHOST,
+    SMARTIFY_SECRET,
+    GPS_ENABLED,
+    GPS_DEVICE,
+    GPS_BAUD,
+    DHT22_PINS,
+    SENSOR_LOG_INTERVAL,
+    HEADER_RELAY_NAME,
+    HEADER_RELAY_PIN,
+    _relay_lock,
+    _rule_evaluator_thread,
+)
 
 from fastapi import FastAPI, Request, Form, Header, Body
 from fastapi.responses import JSONResponse, FileResponse
@@ -75,6 +49,42 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Import validators
+from smartify.validators import validate_rule_action, validate_rule_condition
+
+# Import database layer
+from smartify.db import (
+    db_init,
+    db_connect,
+    db_insert_temp,
+    db_insert_sensor_sample,
+    db_update_sensor_snapshot,
+    db_upsert_sensor_snapshot,
+    db_get_sensor_snapshot,
+    db_insert_gps,
+    db_query_temp_since,
+    db_query_gps_since,
+    db_get_relay_state,
+    db_set_relay_state,
+    db_get_relay_device_by_name,
+    db_get_relay_device,
+    db_list_relay_devices,
+    db_create_relay_device,
+    db_update_relay_device,
+    db_get_relay_state_new,
+    db_create_relay_state_new,
+    db_set_relay_state_new,
+    db_update_relay_state_new,
+    db_list_relay_rules,
+    db_get_relay_rule,
+    db_create_relay_rule,
+    db_update_relay_rule,
+    db_delete_relay_rule,
+    db_log_relay_event,
+    db_get_relay_events,
+    db_update_rule_last_triggered,
 )
 
 # Water level module
@@ -253,29 +263,6 @@ def _debug_test_coerce_to_dict():
     
     print(f"\n=== Results: {passed} passed, {failed} failed ===\n")
     return failed == 0
-
-
-def _safe_dict_from_row(row: Any, context: str = "unknown") -> Optional[dict]:
-    """
-    Safely convert sqlite3.Row to dict with forensic logging.
-    Returns None if conversion fails instead of crashing.
-    
-    This should NEVER fail with a real sqlite3.Row, but if the database
-    is corrupted or code passes wrong type, we log and continue safely.
-    """
-    if row is None:
-        return None
-    
-    try:
-        return dict(row)
-    except ValueError as e:
-        # dict() expects iterable of 2-tuples, this error means row is wrong type
-        print(f"[DB] CRITICAL: dict(row) failed at {context}: {e}")
-        print(f"[DB] CRITICAL:   type={type(row).__name__}")
-        print(f"[DB] CRITICAL:   repr={repr(row)[:200]}")
-        if isinstance(row, (list, tuple)) and row:
-            print(f"[DB] CRITICAL:   first 5 items: {[repr(x)[:50] for x in row[:5]]}")
-        return None
 
 
 def _normalize_operator(operator: str) -> str:
@@ -548,56 +535,23 @@ def _debug_test_rule_operators() -> bool:
     return True
 
 
-def _run_schema_migrations(conn: sqlite3.Connection, cur: sqlite3.Cursor) -> None:
-    """
-    Run automatic schema migrations.
-    Checks for missing columns and applies ALTER TABLE as needed.
-    This function is idempotent and safe to run on every startup.
-    Future migrations can be added here following the same pattern.
-    """
-    # Migration: active_low column in relay_devices
-    try:
-        cur.execute("PRAGMA table_info(relay_devices)")
-        columns = [row[1] for row in cur.fetchall()]  # Column name is at index 1
-        if "active_low" not in columns:
-            print("[DB] migrated: added active_low to relay_devices")
-            cur.execute("ALTER TABLE relay_devices ADD COLUMN active_low BOOLEAN NOT NULL DEFAULT 0")
-            conn.commit()
-    except sqlite3.OperationalError as e:
-        # Table might not exist yet (will be created by CREATE TABLE IF NOT EXISTS)
-        # This is safe to ignore - migration will run on next startup after table is created
-        pass
-    except Exception as e:
-        print(f"[DB Migration] Unexpected error checking/adding active_low column: {e}")
-        # Don't raise - allow startup to continue, migration will retry on next startup
-    
-    try:
-        cur.execute("PRAGMA table_info(relay_devices)")
-        columns = [row[1] for row in cur.fetchall()]
-        if "min_on_seconds" not in columns:
-            print("[DB] migrated: added min_on_seconds to relay_devices")
-            cur.execute("ALTER TABLE relay_devices ADD COLUMN min_on_seconds INTEGER NOT NULL DEFAULT 0")
-            conn.commit()
-        if "min_off_seconds" not in columns:
-            print("[DB] migrated: added min_off_seconds to relay_devices")
-            cur.execute("ALTER TABLE relay_devices ADD COLUMN min_off_seconds INTEGER NOT NULL DEFAULT 0")
-            conn.commit()
-    except Exception as e:
-        print(f"[DB Migration] Unexpected error adding min_on_seconds/min_off_seconds: {e}")
-    
-    # Future migrations can be added here:
-    # try:
-    #     cur.execute("PRAGMA table_info(relay_devices)")
-    #     columns = [row[1] for row in cur.fetchall()]
-    #     if "new_column" not in columns:
-    #         print("[DB] migrated: added new_column to relay_devices")
-    #         cur.execute("ALTER TABLE relay_devices ADD COLUMN new_column TEXT DEFAULT ''")
-    #         conn.commit()
-    # except Exception as e:
-    #     print(f"[DB Migration] Error adding new_column: {e}")
+# ===========================
+# DB Functions moved to smartify/db.py
+# ===========================
+# All database interaction functions have been moved to smartify.db module.
+# Import them at the top of this file.
 
 
-def db_init() -> None:
+# =========================
+# Auth helpers
+# =========================
+
+def is_localhost(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+def is_authenticated(request: Request, x_api_key: Optional[str]) -> bool:
     """Initialize database schema and run migrations."""
     print(f"[DB] Initializing database at: {DB_PATH}")
     conn = sqlite3.connect(DB_PATH)
@@ -807,39 +761,46 @@ def db_init() -> None:
     print(f"[DB] Database initialization complete at: {DB_PATH}")
 
 
+def db_connect() -> sqlite3.Connection:
+    """
+    Create a fresh SQLite connection with proper settings.
+    Each call returns a NEW connection - never cache/reuse this.
+    Caller must close the connection when done (or use with statement).
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass  # WAL may fail on some systems; continue anyway
+    conn.execute("PRAGMA busy_timeout=30000")
+    return conn
+
+
 def db_insert_temp(ts: int, sensor_index: int, t: Optional[float], h: Optional[float]) -> None:
-    conn = sqlite3.connect(DB_PATH, timeout=5.0)
-    cur = conn.cursor()
-    cur.execute("PRAGMA journal_mode=WAL")
-    cur.execute("PRAGMA busy_timeout=5000")
-    cur.execute("PRAGMA synchronous=NORMAL")
-    cur.execute(
-        "INSERT INTO temperature_readings (ts, sensor_index, temperature_c, humidity) VALUES (?, ?, ?, ?)",
-        (ts, sensor_index, t, h),
-    )
-    conn.commit()
-    conn.close()
+    with db_connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO temperature_readings (ts, sensor_index, temperature_c, humidity) VALUES (?, ?, ?, ?)",
+            (ts, sensor_index, t, h),
+        )
+        conn.commit()
 
 
 def db_insert_sensor_sample(sensor_name: str, temp: Optional[float], humidity: Optional[float], ok: bool, created_at: int) -> None:
-    """Insert a raw sensor sample (optional, for debugging)."""
-    conn = sqlite3.connect(DB_PATH, timeout=5.0)
-    cur = conn.cursor()
-    cur.execute("PRAGMA journal_mode=WAL")
-    cur.execute("PRAGMA busy_timeout=5000")
-    cur.execute("PRAGMA synchronous=NORMAL")
-    cur.execute(
-        "INSERT INTO sensor_samples (sensor_name, temp, humidity, ok, created_at) VALUES (?, ?, ?, ?, ?)",
-        (sensor_name, temp, humidity, 1 if ok else 0, created_at),
-    )
-    conn.commit()
-    conn.close()
-    
-    # Keep only last 15 minutes of samples to prevent DB growth
-    cutoff = created_at - (15 * 60)
-    cur.execute("DELETE FROM sensor_samples WHERE created_at < ?", (cutoff,))
-    conn.commit()
-    conn.close()
+    """Insert a raw sensor sample. Each call opens its own connection."""
+    with db_connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sensor_samples (sensor_name, temp, humidity, ok, created_at) VALUES (?, ?, ?, ?, ?)",
+            (sensor_name, temp, humidity, 1 if ok else 0, created_at),
+        )
+
+        # Keep only last 15 minutes of samples to prevent DB growth
+        cutoff = created_at - (15 * 60)
+        cur.execute("DELETE FROM sensor_samples WHERE created_at < ?", (cutoff,))
+
+        conn.commit()
 
 
 def db_update_sensor_snapshot(
@@ -852,66 +813,60 @@ def db_update_sensor_snapshot(
     last_good_at: int,
     updated_at: int
 ) -> None:
-    """Update or insert sensor snapshot (canonical upsert implementation)."""
-    conn = sqlite3.connect(DB_PATH, timeout=5.0)
-    conn.row_factory = sqlite3.Row  # CRITICAL: set before any cursor/execute
-    cur = conn.cursor()
-    cur.execute("PRAGMA journal_mode=WAL")
-    cur.execute("PRAGMA busy_timeout=5000")
-    cur.execute("PRAGMA synchronous=NORMAL")
+    """Update or insert sensor snapshot. Uses fresh connection per call."""
+    with db_connect() as conn:
+        cur = conn.cursor()
 
-    # Forensics: verify row type if existing snapshot fetch returns unexpected type
-    try:
-        cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
-        row = cur.fetchone()
-        if row is not None and not isinstance(row, sqlite3.Row) and not hasattr(row, "keys"):
-            columns = [d[0] for d in cur.description] if cur.description else []
-            sample = row[:10] if isinstance(row, (list, tuple)) else None
-            logger.error(
-                "[db_update_sensor_snapshot] Unexpected row type: type=%s repr=%s columns=%s sample=%s",
-                type(row).__name__,
-                repr(row)[:200],
-                columns,
-                sample,
+        # Forensics: verify row type if existing snapshot fetch returns unexpected type
+        try:
+            cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
+            row = cur.fetchone()
+            if row is not None and not isinstance(row, sqlite3.Row) and not hasattr(row, "keys"):
+                columns = [d[0] for d in cur.description] if cur.description else []
+                sample = row[:10] if isinstance(row, (list, tuple)) else None
+                logger.error(
+                    "[db_update_sensor_snapshot] Unexpected row type: type=%s repr=%s columns=%s sample=%s",
+                    type(row).__name__,
+                    repr(row)[:200],
+                    columns,
+                    sample,
+                )
+        except Exception as e:
+            logger.error("[db_update_sensor_snapshot] Forensics fetch failed: %s", e, exc_info=True)
+
+        try:
+            cur.execute(
+                """
+                INSERT INTO sensor_snapshot (
+                    sensor_name, avg_temp, avg_humidity, sample_count,
+                    window_start, window_end, last_good_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(sensor_name) DO UPDATE SET
+                    avg_temp=excluded.avg_temp,
+                    avg_humidity=excluded.avg_humidity,
+                    sample_count=excluded.sample_count,
+                    window_start=excluded.window_start,
+                    window_end=excluded.window_end,
+                    last_good_at=excluded.last_good_at,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    sensor_name,
+                    avg_temp,
+                    avg_humidity,
+                    sample_count,
+                    window_start,
+                    window_end,
+                    last_good_at,
+                    updated_at,
+                ),
             )
-    except Exception as e:
-        logger.error("[db_update_sensor_snapshot] Forensics fetch failed: %s", e, exc_info=True)
+        except Exception as e:
+            logger.error("[db_update_sensor_snapshot] Failed to upsert snapshot: %s", e, exc_info=True)
+            return
 
-    try:
-        cur.execute(
-            """
-            INSERT INTO sensor_snapshot (
-                sensor_name, avg_temp, avg_humidity, sample_count,
-                window_start, window_end, last_good_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(sensor_name) DO UPDATE SET
-                avg_temp=excluded.avg_temp,
-                avg_humidity=excluded.avg_humidity,
-                sample_count=excluded.sample_count,
-                window_start=excluded.window_start,
-                window_end=excluded.window_end,
-                last_good_at=excluded.last_good_at,
-                updated_at=excluded.updated_at
-            """,
-            (
-                sensor_name,
-                avg_temp,
-                avg_humidity,
-                sample_count,
-                window_start,
-                window_end,
-                last_good_at,
-                updated_at,
-            ),
-        )
-    except Exception as e:
-        logger.error("[db_update_sensor_snapshot] Failed to upsert snapshot: %s", e, exc_info=True)
-        conn.close()
-        return
-
-    conn.commit()
-    conn.close()
-    logger.debug("[db_update_sensor_snapshot] Saved snapshot for %s", sensor_name)
+        conn.commit()
+        logger.debug("[db_update_sensor_snapshot] Saved snapshot for %s", sensor_name)
 
 
 def db_upsert_sensor_snapshot(
@@ -938,17 +893,12 @@ def db_upsert_sensor_snapshot(
 
 
 def db_get_sensor_snapshot(sensor_name: str) -> Optional[Dict[str, Any]]:
-    """Get sensor snapshot."""
-    conn = sqlite3.connect(DB_PATH, timeout=5.0)
-    conn.row_factory = sqlite3.Row  # CRITICAL: Set BEFORE creating cursor
-    cur = conn.cursor()
-    cur.execute("PRAGMA journal_mode=WAL")
-    cur.execute("PRAGMA busy_timeout=5000")
-    cur.execute("PRAGMA synchronous=NORMAL")
-    cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
-    row = cur.fetchone()
-    conn.close()
-    return dict(row) if row else None
+    """Get sensor snapshot. Uses fresh connection per call."""
+    with db_connect() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM sensor_snapshot WHERE sensor_name = ?", (sensor_name,))
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def db_insert_gps(ts: int, lat: Optional[float], lon: Optional[float], speed_kmh: Optional[float],
@@ -1645,6 +1595,14 @@ def _sensor_sampler_thread() -> None:
                         _sensor_samples[sensor_name] = deque(maxlen=15)
                     _sensor_samples[sensor_name].append((temp, humidity, now, ok))
                     
+                    # Persist sample to DB for audit trail and debugging
+                    try:
+                        db_insert_sensor_sample(sensor_name, temp, humidity, ok, now)
+                    except Exception as e:
+                        logger.error("[Sensor Sampler] Failed to persist sample for %s: %s", sensor_name, e)
+                        import traceback
+                        traceback.print_exc()
+                    
                     # Update live status (every 5s)
                     with _sensor_live_status_lock:
                         # Update last_attempt_ts always
@@ -1681,6 +1639,27 @@ def _sensor_sampler_thread() -> None:
                     # Optionally store in DB for debugging (can be disabled for performance)
                     # db_insert_sensor_sample(sensor_name, temp, humidity, ok, now)
             
+            # Log sensor sample collection and persistence periodically (rate-limited: once per snapshot interval)
+            if now % SENSOR_SNAPSHOT_INTERVAL < SENSOR_SAMPLE_INTERVAL:
+                # Log individual sample readings
+                persisted_ok = []
+                for result in results:
+                    sensor_idx = result.get("sensor_index", -1)
+                    sensor_name = sensor_name_map.get(sensor_idx, f"sensor_{sensor_idx}")
+                    temp = result.get("temperature_c")
+                    humidity = result.get("humidity")
+                    ok = result.get("ok", False)
+                    print(f"[Sensor Sample] sensor={sensor_name} temp={temp} hum={humidity} ok={ok}")
+                    if ok and temp is not None:
+                        persisted_ok.append(sensor_name)
+                
+                # Log persistence success summary
+                if persisted_ok:
+                    sample_count_kombi = len(_sensor_samples.get("kombi", []))
+                    sample_count_garaza = len(_sensor_samples.get("garaza", []))
+                    logger.info("[Sensor Sampler] Persisted samples successfully - kombi: %d samples, garaza: %d samples", 
+                               sample_count_kombi, sample_count_garaza)
+            
             # Check if it's time to update snapshot (every 60 seconds, aligned to minute boundary)
             current_window = (now // SENSOR_SNAPSHOT_INTERVAL) * SENSOR_SNAPSHOT_INTERVAL
             if current_window > last_snapshot_time:
@@ -1715,7 +1694,7 @@ def _sensor_sampler_thread() -> None:
                                     last_good_at=last_good_at,
                                     updated_at=now,
                                 )
-                                print(f"[Sensor Snapshot] Updated {sensor_name}: {avg_temp:.1f}°C (from {sample_count} samples)")
+                                print(f"[Sensor Snapshot] Updated {sensor_name}: {avg_temp:.1f}°C, {avg_humidity:.1f}% (from {sample_count} samples)")
                             except Exception as e:
                                 logger.error("[Sensor Sampler] Snapshot update failed for %s: %s", sensor_name, e)
                                 import traceback
@@ -2644,6 +2623,7 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
     manual_until = relay_state.get("manual_until")
     
     # Initialize all variables that may be used later (prevent UnboundLocalError)
+    actual_state = current_actual  # Alias for evaluate_rules() call
     desired_state = None
     matched_rule = None
     source = "unknown"
@@ -2749,28 +2729,29 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
                         sensor_sample_count = meta.get("sample_count")
                         sensor_is_ready = meta.get("is_ready")
                         sensor_is_stale = meta.get("is_stale")
-            if not sensor_ok:
-                pending = True
+            # IMPORTANT: Only set pending=true for sensor issues if relay needs to change state.
+            # If actual_state == desired_state, relay is already in correct state (pending=false).
+            # Sensor staleness is reported via sensor_is_stale/age_seconds for visibility.
+            if not sensor_ok and desired_state_result and actual_state and desired_state_result != actual_state:
+                                pending = True
                 pending_reason = "sensor_unavailable"
                 pending_message = f"Sensor unavailable: {reason_str} (holding last state)"
-                source = "sensor"
+                                source = "sensor"
             else:
                 if desired_state_result and actual_state and desired_state_result != actual_state:
                     min_on_seconds = int(device.get("min_on_seconds", 0) or 0) if device else 0
                     min_off_seconds = int(device.get("min_off_seconds", 0) or 0) if device else 0
-
+                            
                     if actual_state == "on" and desired_state_result == "off" and min_on_seconds > 0 and (now - last_applied_at) < min_on_seconds:
-                        pending = True
+                                pending = True
                         pending_reason = "min_on"
-                        cooldown_remaining = min_on_seconds - (now - last_applied_at)
-                        pending_message = f"Min ON time active: {cooldown_remaining}s remaining"
-                        source = "rule"
+                        pending_message = f"Cooldown: min_on ({min_on_seconds}s)"
+                        cooldown_remaining = max(0, min_on_seconds - int(now - last_applied_at))
                     elif actual_state == "off" and desired_state_result == "on" and min_off_seconds > 0 and (now - last_applied_at) < min_off_seconds:
                         pending = True
                         pending_reason = "min_off"
-                        cooldown_remaining = min_off_seconds - (now - last_applied_at)
-                        pending_message = f"Min OFF time active: {cooldown_remaining}s remaining"
-                        source = "rule"
+                        pending_message = f"Cooldown: min_off ({min_off_seconds}s)"
+                        cooldown_remaining = max(0, min_off_seconds - int(now - last_applied_at))
                     elif matched_rule is not None:
                         try:
                             runtime_status = evaluate_single_rule(matched_rule, relay_id)
@@ -3655,11 +3636,11 @@ def api_rule_update(
         if action is not None:
             is_valid_action, action_error, action = validate_rule_action(action)
             if not is_valid_action or action is None:
-                return JSONResponse({
-                    "ok": False,
-                    "error": "invalid_action",
+            return JSONResponse({
+                "ok": False,
+                "error": "invalid_action",
                     "message": action_error or "Invalid action payload"
-                }, status_code=400)
+            }, status_code=400)
         
         # Enforce minimum cooldown
         if cooldown_seconds is not None and cooldown_seconds < 5:
