@@ -314,8 +314,20 @@ def _normalize_condition_schema(condition: Any) -> Tuple[bool, Optional[str], Op
         preview = repr(condition)[:120]
         return (False, f"condition must be a dict, got {type(condition).__name__}: {preview}", None)
     
-    if "op" in condition:
-        op = str(condition.get("op", "")).lower().strip()
+    # Support both {op: "and"} and {"and": [...]} style
+    if "op" in condition or "and" in condition or "or" in condition or "not" in condition:
+        op = condition.get("op")
+        if op is None:
+            if "and" in condition:
+                op = "and"
+                condition = {"op": "and", "conditions": condition.get("and")}
+            elif "or" in condition:
+                op = "or"
+                condition = {"op": "or", "conditions": condition.get("or")}
+            elif "not" in condition:
+                op = "not"
+                condition = {"op": "not", "condition": condition.get("not")}
+        op = str(op).lower().strip()
         if op in ("and", "or"):
             conditions = condition.get("conditions", [])
             if not isinstance(conditions, list):
@@ -342,10 +354,13 @@ def _normalize_condition_schema(condition: Any) -> Tuple[bool, Optional[str], Op
     if condition_type == "always":
         return (True, None, {"type": "always"})
     
-    if condition_type == "temperature":
+    if condition_type in ("temperature", "humidity"):
         sensor = condition.get("sensor")
         if not sensor:
-            return (False, "temperature condition missing required field: sensor", None)
+            return (False, f"{condition_type} condition missing required field: sensor", None)
+        sensor = str(sensor)
+        if sensor not in ("kombi", "garaza"):
+            return (False, f"unknown sensor '{sensor}'", None)
         
         if "between" in condition and isinstance(condition.get("between"), dict):
             between = condition.get("between") or {}
@@ -353,17 +368,19 @@ def _normalize_condition_schema(condition: Any) -> Tuple[bool, Optional[str], Op
             max_val = between.get("max")
             if not isinstance(min_val, (int, float)) or not isinstance(max_val, (int, float)):
                 return (False, "between.min and between.max must be numbers", None)
+            if min_val >= max_val:
+                return (False, "between.min must be less than between.max", None)
             min_inclusive = bool(between.get("min_inclusive", True))
             max_inclusive = bool(between.get("max_inclusive", False))
+            if condition_type == "humidity" and (min_val < 0 or max_val > 100):
+                return (False, "humidity between range must be within 0..100", None)
             normalized = {
-                "type": "temperature",
-                "sensor": str(sensor),
-                "between": {
-                    "min": float(min_val),
-                    "max": float(max_val),
-                    "min_inclusive": min_inclusive,
-                    "max_inclusive": max_inclusive,
-                },
+                "type": f"{condition_type}_between",
+                "sensor": sensor,
+                "min": float(min_val),
+                "max": float(max_val),
+                "min_inclusive": min_inclusive,
+                "max_inclusive": max_inclusive,
             }
             return (True, None, normalized)
         
@@ -375,14 +392,42 @@ def _normalize_condition_schema(condition: Any) -> Tuple[bool, Optional[str], Op
         value = condition.get("value")
         if not isinstance(value, (int, float)):
             return (False, f"value must be a number, got {type(value).__name__}", None)
+        if condition_type == "humidity" and (value < 0 or value > 100):
+            return (False, "humidity value must be within 0..100", None)
         
         normalized = {
-            "type": "temperature",
-            "sensor": str(sensor),
+            "type": condition_type,
+            "sensor": sensor,
             "cmp": normalized_cmp,
             "value": float(value),
         }
         return (True, None, normalized)
+    
+    if condition_type in ("temperature_between", "humidity_between"):
+        sensor = condition.get("sensor")
+        if not sensor:
+            return (False, f"{condition_type} missing required field: sensor", None)
+        sensor = str(sensor)
+        if sensor not in ("kombi", "garaza"):
+            return (False, f"unknown sensor '{sensor}'", None)
+        min_val = condition.get("min")
+        max_val = condition.get("max")
+        if not isinstance(min_val, (int, float)) or not isinstance(max_val, (int, float)):
+            return (False, "min and max must be numbers", None)
+        if min_val >= max_val:
+            return (False, "min must be less than max", None)
+        min_inclusive = bool(condition.get("min_inclusive", True))
+        max_inclusive = bool(condition.get("max_inclusive", False))
+        if condition_type == "humidity_between" and (min_val < 0 or max_val > 100):
+            return (False, "humidity between range must be within 0..100", None)
+        return (True, None, {
+            "type": condition_type,
+            "sensor": sensor,
+            "min": float(min_val),
+            "max": float(max_val),
+            "min_inclusive": min_inclusive,
+            "max_inclusive": max_inclusive,
+        })
     
     return (False, f"unknown condition type '{condition_type}'", None)
 
@@ -697,6 +742,22 @@ def db_init() -> None:
             (heater_id, "off", "auto", None, now, "off", "off", None, now)
         )
     
+    # Initialize default ventilator relay device if it doesn't exist
+    cur.execute("SELECT COUNT(*) FROM relay_devices WHERE name = 'ventilator'")
+    if cur.fetchone()[0] == 0:
+        ventilator_id = str(uuid.uuid4())
+        cur.execute(
+            """INSERT INTO relay_devices (id, name, pin, command_on, command_off, active_low, is_enabled)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (ventilator_id, "ventilator", 26, "", "", 0, 1)
+        )
+        now = int(time.time())
+        cur.execute(
+            """INSERT INTO relay_state_new (relay_id, state, mode, manual_until, updated_at, actual_state, desired_state, manual_state, last_applied_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ventilator_id, "off", "auto", None, now, "off", "off", None, now)
+        )
+    
     conn.commit()
     conn.close()
     print(f"[DB] Database initialization complete at: {DB_PATH}")
@@ -958,6 +1019,73 @@ def db_list_relay_devices() -> List[Dict[str, Any]]:
     return [_safe_dict_from_row(row, context="db_list_relay_devices") for row in rows if _safe_dict_from_row(row, context="db_list_relay_devices") is not None]
 
 
+def db_create_relay_device(
+    name: str,
+    pin: int,
+    active_low: bool = False,
+    is_enabled: bool = True,
+    min_on_seconds: int = 0,
+    min_off_seconds: int = 0,
+) -> str:
+    """Create a new relay device. Returns device ID."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    relay_id = str(uuid.uuid4())
+    cur.execute(
+        """INSERT INTO relay_devices (id, name, pin, command_on, command_off, active_low, is_enabled, min_on_seconds, min_off_seconds)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (relay_id, name, pin, "", "", 1 if active_low else 0, 1 if is_enabled else 0, min_on_seconds, min_off_seconds),
+    )
+    conn.commit()
+    conn.close()
+    return relay_id
+
+
+def db_update_relay_device(
+    relay_id: str,
+    name: Optional[str] = None,
+    pin: Optional[int] = None,
+    active_low: Optional[bool] = None,
+    is_enabled: Optional[bool] = None,
+    min_on_seconds: Optional[int] = None,
+    min_off_seconds: Optional[int] = None,
+) -> bool:
+    """Update relay device fields. Returns True if updated."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    updates = []
+    params: List[Any] = []
+    if name is not None:
+        updates.append("name = ?")
+        params.append(name)
+    if pin is not None:
+        updates.append("pin = ?")
+        params.append(pin)
+    if active_low is not None:
+        updates.append("active_low = ?")
+        params.append(1 if active_low else 0)
+    if is_enabled is not None:
+        updates.append("is_enabled = ?")
+        params.append(1 if is_enabled else 0)
+    if min_on_seconds is not None:
+        updates.append("min_on_seconds = ?")
+        params.append(min_on_seconds)
+    if min_off_seconds is not None:
+        updates.append("min_off_seconds = ?")
+        params.append(min_off_seconds)
+    
+    if not updates:
+        conn.close()
+        return False
+    
+    params.append(relay_id)
+    cur.execute(f"UPDATE relay_devices SET {', '.join(updates)} WHERE id = ?", params)
+    conn.commit()
+    updated = cur.rowcount > 0
+    conn.close()
+    return updated
+
+
 def db_get_relay_state_new(relay_id: str) -> Optional[Dict[str, Any]]:
     """Get relay state (new table)."""
     conn = sqlite3.connect(DB_PATH)
@@ -977,6 +1105,26 @@ def db_get_relay_state_new(relay_id: str) -> Optional[Dict[str, Any]]:
             state_dict["desired_state"] = state_dict.get("state", "off")
         return state_dict
     return None
+
+
+def db_create_relay_state_new(
+    relay_id: str,
+    state: str = "off",
+    mode: str = "auto",
+    manual_until: Optional[int] = None,
+    manual_state: Optional[str] = None,
+) -> None:
+    """Create relay_state_new row for a relay."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    now = int(time.time())
+    cur.execute(
+        """INSERT INTO relay_state_new (relay_id, state, mode, manual_until, updated_at, actual_state, desired_state, manual_state, last_applied_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (relay_id, state, mode, manual_until, now, state, state, manual_state, now),
+    )
+    conn.commit()
+    conn.close()
 
 
 def db_set_relay_state_new(relay_id: str, state: str, mode: str, manual_until: Optional[int] = None) -> None:
@@ -2097,6 +2245,40 @@ def api_temperature_snapshot_latest(request: Request, x_api_key: Optional[str] =
     })
 
 
+@app.get("/api/sensors/latest")
+def api_sensors_latest(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    """Return latest snapshot for all sensors (temp + humidity)."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    kombi_snapshot = get_sensor_snapshot("kombi")
+    garaza_snapshot = get_sensor_snapshot("garaza")
+    return JSONResponse({
+        "ts": int(time.time()),
+        "kombi": {
+            "temp_c": kombi_snapshot.get("avg_temp"),
+            "humidity_percent": kombi_snapshot.get("avg_humidity"),
+            "sample_count": kombi_snapshot.get("sample_count"),
+            "updated_at": kombi_snapshot.get("updated_at"),
+            "last_good_at": kombi_snapshot.get("last_good_at"),
+            "age_seconds": kombi_snapshot.get("age_seconds"),
+            "is_stale": kombi_snapshot.get("is_stale"),
+            "is_ready": kombi_snapshot.get("is_ready"),
+        },
+        "garaza": {
+            "temp_c": garaza_snapshot.get("avg_temp"),
+            "humidity_percent": garaza_snapshot.get("avg_humidity"),
+            "sample_count": garaza_snapshot.get("sample_count"),
+            "updated_at": garaza_snapshot.get("updated_at"),
+            "last_good_at": garaza_snapshot.get("last_good_at"),
+            "age_seconds": garaza_snapshot.get("age_seconds"),
+            "is_stale": garaza_snapshot.get("is_stale"),
+            "is_ready": garaza_snapshot.get("is_ready"),
+        },
+    })
+
+
 @app.get("/api/temperature/history")
 def api_temperature_history(
     request: Request,
@@ -2423,12 +2605,12 @@ def _evaluate_condition(condition: Dict[str, Any]) -> Tuple[bool, Optional[str],
     if condition_type == "always":
         return (True, "ok", "Always true", snapshot_info)
     
-    if condition_type != "temperature":
+    if condition_type not in ("temperature", "humidity", "temperature_between", "humidity_between"):
         return (False, "invalid_condition", f"Unknown condition type '{condition_type}'", snapshot_info)
     
     sensor_name = condition.get("sensor", "")
     if not sensor_name:
-        return (False, "invalid_condition", "Temperature condition missing sensor", snapshot_info)
+        return (False, "invalid_condition", "Condition missing sensor", snapshot_info)
     
     snapshot = get_sensor_snapshot(sensor_name)
     if not snapshot:
@@ -2438,9 +2620,13 @@ def _evaluate_condition(condition: Dict[str, Any]) -> Tuple[bool, Optional[str],
     is_ready = snapshot.get("is_ready", False)
     is_stale = snapshot.get("is_stale", False)
     snapshot_temp = snapshot.get("avg_temp")
+    snapshot_humidity = snapshot.get("avg_humidity")
     age_seconds = int(snapshot.get("age_seconds", 0) or 0)
     
-    snapshot_info["snapshot_values"][sensor_name] = snapshot_temp
+    snapshot_info["snapshot_values"][sensor_name] = {
+        "temp": snapshot_temp,
+        "humidity": snapshot_humidity,
+    }
     snapshot_info["snapshot_meta"][sensor_name] = {
         "age_seconds": age_seconds,
         "sample_count": sample_count,
@@ -2455,41 +2641,69 @@ def _evaluate_condition(condition: Dict[str, Any]) -> Tuple[bool, Optional[str],
         age_min = age_seconds // 60
         return (False, "sensor_stale", f"Sensor stale ({age_min} min). Forced OFF.", snapshot_info)
     
-    if snapshot_temp is None:
-        return (False, "sensor_no_data", "Rule error: no temperature value", snapshot_info)
+    if condition_type in ("temperature", "temperature_between"):
+        if snapshot_temp is None:
+            return (False, "sensor_no_temp", "Rule error: no temperature value", snapshot_info)
+        if condition_type == "temperature_between":
+            min_val = float(condition.get("min"))
+            max_val = float(condition.get("max"))
+            min_inclusive = bool(condition.get("min_inclusive", True))
+            max_inclusive = bool(condition.get("max_inclusive", False))
+            lower_ok = snapshot_temp >= min_val if min_inclusive else snapshot_temp > min_val
+            upper_ok = snapshot_temp <= max_val if max_inclusive else snapshot_temp < max_val
+            matched = lower_ok and upper_ok
+            return (matched, "ok", "Temperature range evaluated", snapshot_info)
+        cmp_op = condition.get("cmp", condition.get("operator"))
+        normalized_cmp = _normalize_operator(cmp_op)
+        if not normalized_cmp:
+            return (False, "invalid_condition", f"Invalid cmp/operator '{cmp_op}'", snapshot_info)
+        value = condition.get("value")
+        if not isinstance(value, (int, float)):
+            return (False, "invalid_condition", "Condition value is not numeric", snapshot_info)
+        if normalized_cmp == "<":
+            matched = snapshot_temp < value
+        elif normalized_cmp == ">":
+            matched = snapshot_temp > value
+        elif normalized_cmp == "<=":
+            matched = snapshot_temp <= value
+        elif normalized_cmp == ">=":
+            matched = snapshot_temp >= value
+        else:
+            return (False, "invalid_condition", f"Invalid cmp/operator '{cmp_op}'", snapshot_info)
+        return (matched, "ok", "Temperature comparison evaluated", snapshot_info)
     
-    if "between" in condition:
-        between = condition.get("between") or {}
-        min_val = float(between.get("min"))
-        max_val = float(between.get("max"))
-        min_inclusive = bool(between.get("min_inclusive", True))
-        max_inclusive = bool(between.get("max_inclusive", False))
-        lower_ok = snapshot_temp >= min_val if min_inclusive else snapshot_temp > min_val
-        upper_ok = snapshot_temp <= max_val if max_inclusive else snapshot_temp < max_val
-        matched = lower_ok and upper_ok
-        return (matched, "ok", "Temperature range evaluated", snapshot_info)
+    if condition_type in ("humidity", "humidity_between"):
+        if snapshot_humidity is None:
+            return (False, "sensor_no_humidity", "Rule error: no humidity value", snapshot_info)
+        if condition_type == "humidity_between":
+            min_val = float(condition.get("min"))
+            max_val = float(condition.get("max"))
+            min_inclusive = bool(condition.get("min_inclusive", True))
+            max_inclusive = bool(condition.get("max_inclusive", False))
+            lower_ok = snapshot_humidity >= min_val if min_inclusive else snapshot_humidity > min_val
+            upper_ok = snapshot_humidity <= max_val if max_inclusive else snapshot_humidity < max_val
+            matched = lower_ok and upper_ok
+            return (matched, "ok", "Humidity range evaluated", snapshot_info)
+        cmp_op = condition.get("cmp", condition.get("operator"))
+        normalized_cmp = _normalize_operator(cmp_op)
+        if not normalized_cmp:
+            return (False, "invalid_condition", f"Invalid cmp/operator '{cmp_op}'", snapshot_info)
+        value = condition.get("value")
+        if not isinstance(value, (int, float)):
+            return (False, "invalid_condition", "Condition value is not numeric", snapshot_info)
+        if normalized_cmp == "<":
+            matched = snapshot_humidity < value
+        elif normalized_cmp == ">":
+            matched = snapshot_humidity > value
+        elif normalized_cmp == "<=":
+            matched = snapshot_humidity <= value
+        elif normalized_cmp == ">=":
+            matched = snapshot_humidity >= value
+        else:
+            return (False, "invalid_condition", f"Invalid cmp/operator '{cmp_op}'", snapshot_info)
+        return (matched, "ok", "Humidity comparison evaluated", snapshot_info)
     
-    cmp_op = condition.get("cmp", condition.get("operator"))
-    normalized_cmp = _normalize_operator(cmp_op)
-    if not normalized_cmp:
-        return (False, "invalid_condition", f"Invalid cmp/operator '{cmp_op}'", snapshot_info)
-    
-    value = condition.get("value")
-    if not isinstance(value, (int, float)):
-        return (False, "invalid_condition", "Condition value is not numeric", snapshot_info)
-    
-    if normalized_cmp == "<":
-        matched = snapshot_temp < value
-    elif normalized_cmp == ">":
-        matched = snapshot_temp > value
-    elif normalized_cmp == "<=":
-        matched = snapshot_temp <= value
-    elif normalized_cmp == ">=":
-        matched = snapshot_temp >= value
-    else:
-        return (False, "invalid_condition", f"Invalid cmp/operator '{cmp_op}'", snapshot_info)
-    
-    return (matched, "ok", "Temperature comparison evaluated", snapshot_info)
+    return (False, "invalid_condition", "Unknown condition type", snapshot_info)
 
 
 def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
@@ -2663,14 +2877,36 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
     
     sensor_name = None
     snapshot_temp = None
+    snapshot_humidity = None
     age_seconds = 0
     sample_count = 0
     if len(snapshot_values) == 1:
         sensor_name = next(iter(snapshot_values.keys()))
-        snapshot_temp = snapshot_values.get(sensor_name)
+        sensor_value = snapshot_values.get(sensor_name)
+        if isinstance(sensor_value, dict):
+            snapshot_temp = sensor_value.get("temp")
+            snapshot_humidity = sensor_value.get("humidity")
+        else:
+            snapshot_temp = sensor_value
         meta = snapshot_meta.get(sensor_name, {})
         age_seconds = int(meta.get("age_seconds", 0) or 0)
         sample_count = int(meta.get("sample_count", 0) or 0)
+    
+    operator = None
+    threshold = None
+    min_val = None
+    max_val = None
+    min_inclusive = None
+    max_inclusive = None
+    condition_type = normalized_condition.get("type") if isinstance(normalized_condition, dict) else None
+    if condition_type in ("temperature", "humidity"):
+        operator = normalized_condition.get("cmp", normalized_condition.get("operator"))
+        threshold = normalized_condition.get("value")
+    elif condition_type in ("temperature_between", "humidity_between"):
+        min_val = normalized_condition.get("min")
+        max_val = normalized_condition.get("max")
+        min_inclusive = normalized_condition.get("min_inclusive")
+        max_inclusive = normalized_condition.get("max_inclusive")
     
     condition_matched = matched
     can_trigger = condition_matched and reason_code == "ok" and cooldown_remaining == 0
@@ -2687,8 +2923,13 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
         "message": message,
         "sensor_name": sensor_name,
         "snapshot_temp": snapshot_temp,
-        "threshold": None,
-        "operator": None,
+        "snapshot_humidity": snapshot_humidity,
+        "threshold": threshold,
+        "operator": operator,
+        "min": min_val,
+        "max": max_val,
+        "min_inclusive": min_inclusive,
+        "max_inclusive": max_inclusive,
         "age_seconds": age_seconds,
         "sample_count": sample_count,
         "cooldown_remaining": cooldown_remaining,
@@ -2729,7 +2970,7 @@ def evaluate_rules(
             continue
         
         matched, reason_code, message, snapshot_info = _evaluate_condition(normalized_condition)
-        if reason_code in ("sensor_warming_up", "sensor_stale", "sensor_no_data"):
+        if reason_code in ("sensor_warming_up", "sensor_stale", "sensor_no_data", "sensor_no_temp", "sensor_no_humidity"):
             print(f"[Rule Engine] Sensor issue for rule '{rule.get('name')}': {message}")
             return ("off", None, None, False, reason_code)
         
@@ -3271,113 +3512,56 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
             pending_message = "Applying relay state… please wait"
             source = mode  # "manual" or "rule"
         
-        # Check sensor status for AUTO mode relays (if rules depend on sensors)
+        # Check rule/sensor status for AUTO mode relays
         if mode == "auto" and not pending:
-            rules = db_list_relay_rules(relay_id)
-            
-            # Normalize rules input - ensure it's always a list
-            if rules is None:
-                rules = []
-            elif isinstance(rules, str):
-                # Rules should never be a string, but handle gracefully
-                print(f"[_get_relay_pending_state] WARNING: rules is string, not list (value={rules[:50]}...)")
-                rules = []
-            elif isinstance(rules, dict):
-                # Rules should never be a dict, but handle gracefully
-                print(f"[_get_relay_pending_state] WARNING: rules is dict, not list")
-                rules = [rules]  # Wrap in list
-            elif not isinstance(rules, (list, tuple)):
-                print(f"[_get_relay_pending_state] WARNING: rules is {type(rules).__name__}, not list")
-                rules = []
-            
-            # Safely filter enabled rules - coerce each to dict first
-            enabled_rules = []
-            for r in rules:
-                if not isinstance(r, dict):
-                    r = coerce_to_dict(r, context="_get_relay_pending_state.filter_rules")
-                    if not r:
-                        continue  # Skip invalid rules
-                if r.get("is_enabled", True):
-                    enabled_rules.append(r)
-            
-            # Check if any rule depends on a sensor that is stale or warming up
-            for rule in enabled_rules:
-                # rule is already validated above, but double-check for safety
-                if not isinstance(rule, dict):
-                    print(f"[_get_relay_pending_state] Skipping invalid rule type={type(rule).__name__}")
-                    continue
-                
-                # Wrap per-rule evaluation to prevent one bad rule from crashing
-                try:
-                    condition = rule.get("condition", {})
-                    # Safety: Ensure condition is a dict
-                    if not isinstance(condition, dict):
-                        condition = coerce_to_dict(condition, context="_get_relay_pending_state.condition")
-                    
-                    if condition.get("type") == "temperature":
-                        sensor_name = condition.get("sensor", "")
-                        if sensor_name:
-                            snapshot = get_sensor_snapshot(sensor_name)
-                            if not snapshot:
-                                continue  # Skip if snapshot missing
-                            
-                            # Extract sensor info for response
-                            sensor_age_seconds = snapshot.get("age_seconds", 0)
-                            sensor_sample_count = snapshot.get("sample_count", 0)
-                            sensor_is_ready = snapshot.get("is_ready", False)
-                            sensor_is_stale = snapshot.get("is_stale", False)
-                            
-                            # Check is_ready first (before age calculations)
-                            if not sensor_is_ready:
-                                pending = True
-                                pending_reason = "sensor_warming_up"
-                                pending_message = f"Waiting for temperature snapshot… collected {sensor_sample_count}/{SENSOR_WARMUP_SAMPLES} samples"
-                                source = "sensor"
-                                break
-                            
-                            # Now safe to check is_stale and use age_seconds
-                            if sensor_is_stale:
-                                pending = True
-                                # Safely coerce age_seconds to int (should never be None, but defensive)
-                                if sensor_age_seconds is None:
-                                    sensor_age_seconds = 0
-                                sensor_age_seconds = int(sensor_age_seconds)
-                                age_min = sensor_age_seconds // 60
-                                pending_reason = "sensor_stale"
-                                pending_message = f"No valid temperature reading for {age_min} minute{'s' if age_min != 1 else ''}. Relay forced OFF for safety."
-                                source = "sensor"
-                                break
-                
-                except Exception as rule_err:
-                    # Don't let one bad rule crash the whole pending state check
-                    rule_id_str = rule.get("id", "unknown") if isinstance(rule, dict) else "unknown"
-                    print(f"[_get_relay_pending_state] Eval error for rule {rule_id_str}: {rule_err}")
-                    continue  # Skip this rule, check others
-            
-            # Check cooldown (only if sensor is OK)
-            if not pending:
-                for rule in enabled_rules:
-                    # Double-check rule is dict (should be, but be defensive)
-                    if not isinstance(rule, dict):
-                        continue
-                    
-                    try:
-                        last_triggered = rule.get("last_triggered_at")
-                        if last_triggered:
-                            age = now - last_triggered
-                            cooldown_sec = rule.get("cooldown_seconds", 60)
-                            if age < cooldown_sec:
+            device = db_get_relay_device(relay_id)
+            desired_state_result, matched_rule, winner_info, sensor_ok, reason_str = evaluate_rules(relay_id, None, actual_state)
+            if winner_info and isinstance(winner_info, dict):
+                snapshot_meta = (winner_info.get("snapshot") or {}).get("snapshot_meta", {})
+                if isinstance(snapshot_meta, dict) and len(snapshot_meta) == 1:
+                    meta = next(iter(snapshot_meta.values()))
+                    if isinstance(meta, dict):
+                        sensor_age_seconds = meta.get("age_seconds")
+                        sensor_sample_count = meta.get("sample_count")
+                        sensor_is_ready = meta.get("is_ready")
+                        sensor_is_stale = meta.get("is_stale")
+            if not sensor_ok:
+                pending = True
+                pending_reason = reason_str or "sensor_unavailable"
+                pending_message = f"Sensor unavailable: {pending_reason}"
+                source = "sensor"
+            else:
+                if desired_state_result and actual_state and desired_state_result != actual_state:
+                    min_on_seconds = int(device.get("min_on_seconds", 0) or 0) if device else 0
+                    min_off_seconds = int(device.get("min_off_seconds", 0) or 0) if device else 0
+                    if actual_state == "on" and desired_state_result == "off" and min_on_seconds > 0 and (now - last_applied_at) < min_on_seconds:
+                        pending = True
+                        pending_reason = "min_on"
+                        cooldown_remaining = min_on_seconds - (now - last_applied_at)
+                        pending_message = f"Min ON time active: {cooldown_remaining}s remaining"
+                        source = "rule"
+                    elif actual_state == "off" and desired_state_result == "on" and min_off_seconds > 0 and (now - last_applied_at) < min_off_seconds:
+                        pending = True
+                        pending_reason = "min_off"
+                        cooldown_remaining = min_off_seconds - (now - last_applied_at)
+                        pending_message = f"Min OFF time active: {cooldown_remaining}s remaining"
+                        source = "rule"
+                    elif matched_rule is not None:
+                        try:
+                            runtime_status = evaluate_single_rule(matched_rule, relay_id)
+                            if runtime_status.get("reason_code") == "cooldown":
                                 pending = True
                                 pending_reason = "cooldown"
-                                cooldown_remaining = cooldown_sec - age
+                                cooldown_remaining = runtime_status.get("cooldown_remaining")
                                 pending_message = f"Cooldown active: {cooldown_remaining}s remaining"
                                 source = "rule"
-                                break
-                    except Exception as cooldown_err:
-                        # Don't let one bad rule crash cooldown check
-                        rule_id_str = rule.get("id", "unknown") if isinstance(rule, dict) else "unknown"
-                        print(f"[_get_relay_pending_state] Cooldown check error for rule {rule_id_str}: {cooldown_err}")
-                        continue
+                        except Exception:
+                            pass
+                    if not pending:
+                        pending = True
+                        pending_reason = "reconciling"
+                        pending_message = "Applying relay state… please wait"
+                        source = "rule"
         
         # Ensure source is always defined
         final_source = source if source is not None else mode
@@ -3410,6 +3594,18 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
             "source": "unknown"
         }
 
+
+def _public_relay_mode(relay_state: Optional[Dict[str, Any]]) -> str:
+    """Map internal mode/manual_state to public mode (off/on/auto)."""
+    if not relay_state:
+        return "auto"
+    mode = relay_state.get("mode", "auto")
+    if mode == "auto":
+        return "auto"
+    manual_state = relay_state.get("manual_state") or relay_state.get("desired_state") or relay_state.get("state")
+    return manual_state if manual_state in ("on", "off") else "off"
+
+
 @app.get("/api/relays")
 def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     """List all relays with their current state and mode."""
@@ -3440,10 +3636,13 @@ def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=
                 "pin": relay["pin"],
                 "active_low": bool(relay.get("active_low", 0)),
                 "state": hardware_state,
-                "mode": state.get("mode", "auto") if state else "auto",
+                "mode": _public_relay_mode(state),
+                "desired_state": state.get("desired_state") if state else None,
                 "manual_until": state.get("manual_until") if state else None,
                 "updated_at": state.get("updated_at") if state else None,
                 "is_enabled": bool(relay.get("is_enabled", True)),
+                "min_on_seconds": relay.get("min_on_seconds", 0),
+                "min_off_seconds": relay.get("min_off_seconds", 0),
                 "pending": pending_info["pending"],
                 "pending_reason": pending_info["pending_reason"],
                 "pending_message": pending_info["pending_message"],
@@ -3464,6 +3663,120 @@ def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=
         return JSONResponse({"ok": True, "relays": [], "error": "Failed to list relays"})
 
 
+@app.post("/api/relays")
+def api_relay_create(
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Create a new relay device and initialize state."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    name = str(body.get("name", "")).strip()
+    pin = body.get("pin")
+    if not name:
+        return JSONResponse({"ok": False, "error": "name_required"}, status_code=400)
+    if not isinstance(pin, int):
+        return JSONResponse({"ok": False, "error": "pin_required", "message": "pin must be integer"}, status_code=400)
+    
+    existing = db_get_relay_device_by_name(name)
+    if existing:
+        return JSONResponse({"ok": False, "error": "name_exists", "message": "Relay name already exists"}, status_code=400)
+    
+    active_low = bool(body.get("active_low", False))
+    is_enabled = bool(body.get("is_enabled", True))
+    min_on_seconds = int(body.get("min_on_seconds", 0) or 0)
+    min_off_seconds = int(body.get("min_off_seconds", 0) or 0)
+    
+    relay_id = db_create_relay_device(
+        name=name,
+        pin=pin,
+        active_low=active_low,
+        is_enabled=is_enabled,
+        min_on_seconds=min_on_seconds,
+        min_off_seconds=min_off_seconds,
+    )
+    db_create_relay_state_new(relay_id=relay_id, state="off", mode="auto")
+    relay = db_get_relay_device(relay_id)
+    return JSONResponse({"ok": True, "relay": relay}, status_code=201)
+
+
+@app.patch("/api/relays/{relay_id}")
+def api_relay_update(
+    relay_id: str,
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Update relay device fields (rename/config)."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    relay = db_get_relay_device(relay_id)
+    if not relay:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    
+    name = body.get("name")
+    if name is not None:
+        name = str(name).strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "name_required"}, status_code=400)
+        existing = db_get_relay_device_by_name(name)
+        if existing and existing.get("id") != relay_id:
+            return JSONResponse({"ok": False, "error": "name_exists"}, status_code=400)
+    
+    pin = body.get("pin")
+    active_low = body.get("active_low")
+    is_enabled = body.get("is_enabled")
+    min_on_seconds = body.get("min_on_seconds")
+    min_off_seconds = body.get("min_off_seconds")
+    
+    updated = db_update_relay_device(
+        relay_id=relay_id,
+        name=name,
+        pin=pin,
+        active_low=active_low,
+        is_enabled=is_enabled,
+        min_on_seconds=min_on_seconds,
+        min_off_seconds=min_off_seconds,
+    )
+    if not updated:
+        return JSONResponse({"ok": False, "error": "update_failed"}, status_code=400)
+    relay = db_get_relay_device(relay_id)
+    return JSONResponse({"ok": True, "relay": relay})
+
+
+@app.post("/api/relays/{relay_id}/mode")
+def api_relay_set_mode(
+    relay_id: str,
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Set relay mode: off | on | auto."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    relay = db_get_relay_device(relay_id)
+    if not relay:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    
+    mode = str(body.get("mode", "")).strip().lower()
+    if mode not in ("off", "on", "auto"):
+        return JSONResponse({"ok": False, "error": "invalid_mode"}, status_code=400)
+    
+    if mode == "auto":
+        db_update_relay_state_new(relay_id=relay_id, mode="auto", manual_state=None, desired_state=None)
+    else:
+        db_update_relay_state_new(relay_id=relay_id, mode="manual", manual_state=mode, desired_state=mode)
+    reconcile_relay(relay_id, force=True)
+    return JSONResponse({"ok": True, "mode": mode})
+
+
 @app.get("/api/relays/{relay_id}")
 def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     """Get relay details with pending state information. NEVER returns 500."""
@@ -3475,7 +3788,7 @@ def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = He
         relay = db_get_relay_device(relay_id)
         if not relay:
             # Return safe fallback instead of 404
-                return JSONResponse({
+            return JSONResponse({
                 "ok": True,
                 "relay": {
                     "id": relay_id,
@@ -3512,9 +3825,12 @@ def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = He
                 "active_low": bool(relay.get("active_low", 0)),
                 "is_enabled": bool(relay.get("is_enabled", True)),
                 "state": hardware_state,
-                "mode": state.get("mode", "auto") if state else "auto",
+                "mode": _public_relay_mode(state),
+                "desired_state": state.get("desired_state") if state else None,
                 "manual_until": state.get("manual_until") if state else None,
                 "updated_at": state.get("updated_at") if state else None,
+                "min_on_seconds": relay.get("min_on_seconds", 0),
+                "min_off_seconds": relay.get("min_off_seconds", 0),
                 "pending": pending_info["pending"],
                 "pending_reason": pending_info["pending_reason"],
                 "pending_message": pending_info["pending_message"],
@@ -3976,22 +4292,29 @@ def api_relay_rule_create_temperature_band(
     if not name:
         return JSONResponse({"ok": False, "error": "name_required"}, status_code=400)
     
-    action_raw = {
-        "type": "temperature_band",
+    condition_raw = {
+        "type": "temperature_between",
         "sensor": body.get("sensor"),
         "min": body.get("min"),
         "max": body.get("max"),
         "min_inclusive": body.get("min_inclusive", True),
         "max_inclusive": body.get("max_inclusive", False),
-        "on_state": body.get("on_state", "on"),
-        "else_state": body.get("else_state", "off"),
     }
+    is_valid_condition, condition_error, condition = validate_rule_condition(condition_raw)
+    if not is_valid_condition or condition is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_condition",
+            "message": condition_error or "Invalid temperature band payload"
+        }, status_code=400)
+    
+    action_raw = {"type": "set_state", "state": body.get("on_state", "on")}
     is_valid_action, action_error, action = validate_rule_action(action_raw)
     if not is_valid_action or action is None:
         return JSONResponse({
             "ok": False,
             "error": "invalid_action",
-            "message": action_error or "Invalid temperature band payload"
+            "message": action_error or "Invalid action payload"
         }, status_code=400)
     
     priority = int(body.get("priority", 100))
@@ -4000,7 +4323,64 @@ def api_relay_rule_create_temperature_band(
     if cooldown_seconds < 5:
         cooldown_seconds = 5
     
-    condition = {"type": "always"}
+    rule_id = db_create_relay_rule(relay_id, name, condition, action, priority, cooldown_seconds, is_enabled)
+    rule = db_get_relay_rule(rule_id)
+    
+    reconcile_relay(relay_id, force=True)
+    return JSONResponse({"ok": True, "rule": rule}, status_code=201)
+
+
+@app.post("/api/relays/{relay_id}/rules/humidity-band")
+def api_relay_rule_create_humidity_band(
+    relay_id: str,
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Create a humidity band rule (range-based)."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    relay = db_get_relay_device(relay_id)
+    if not relay:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    
+    name = body.get("name", "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name_required"}, status_code=400)
+    
+    condition_raw = {
+        "type": "humidity_between",
+        "sensor": body.get("sensor"),
+        "min": body.get("min"),
+        "max": body.get("max"),
+        "min_inclusive": body.get("min_inclusive", True),
+        "max_inclusive": body.get("max_inclusive", False),
+    }
+    is_valid_condition, condition_error, condition = validate_rule_condition(condition_raw)
+    if not is_valid_condition or condition is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_condition",
+            "message": condition_error or "Invalid humidity band payload"
+        }, status_code=400)
+    
+    action_raw = {"type": "set_state", "state": body.get("on_state", "on")}
+    is_valid_action, action_error, action = validate_rule_action(action_raw)
+    if not is_valid_action or action is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_action",
+            "message": action_error or "Invalid action payload"
+        }, status_code=400)
+    
+    priority = int(body.get("priority", 100))
+    cooldown_seconds = int(body.get("cooldown_seconds", 60))
+    is_enabled = body.get("is_enabled", True)
+    if cooldown_seconds < 5:
+        cooldown_seconds = 5
+    
     rule_id = db_create_relay_rule(relay_id, name, condition, action, priority, cooldown_seconds, is_enabled)
     rule = db_get_relay_rule(rule_id)
     

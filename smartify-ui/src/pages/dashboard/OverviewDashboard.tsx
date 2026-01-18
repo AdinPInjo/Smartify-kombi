@@ -598,13 +598,25 @@ function RelayRulesWidget() {
     }
     if (cond.type === "temperature") {
       const sensor = cond.sensor || "sensor";
-      if (cond.between) {
-        const minSym = cond.between.min_inclusive === false ? ">" : "≥";
-        const maxSym = cond.between.max_inclusive === true ? "≤" : "<";
-        return `${sensor} ${minSym} ${cond.between.min}°C AND ${sensor} ${maxSym} ${cond.between.max}°C`;
-      }
       const cmp = cond.cmp || cond.operator || "?";
       return `${sensor} ${cmp} ${cond.value}°C`;
+    }
+    if (cond.type === "temperature_between") {
+      const sensor = cond.sensor || "sensor";
+      const minSym = cond.min_inclusive === false ? ">" : "≥";
+      const maxSym = cond.max_inclusive === true ? "≤" : "<";
+      return `${sensor} ${minSym} ${cond.min}°C AND ${sensor} ${maxSym} ${cond.max}°C`;
+    }
+    if (cond.type === "humidity") {
+      const sensor = cond.sensor || "sensor";
+      const cmp = cond.cmp || cond.operator || "?";
+      return `${sensor} ${cmp} ${cond.value}%`;
+    }
+    if (cond.type === "humidity_between") {
+      const sensor = cond.sensor || "sensor";
+      const minSym = cond.min_inclusive === false ? ">" : "≥";
+      const maxSym = cond.max_inclusive === true ? "≤" : "<";
+      return `${sensor} ${minSym} ${cond.min}% AND ${sensor} ${maxSym} ${cond.max}%`;
     }
     return "condition";
   };
