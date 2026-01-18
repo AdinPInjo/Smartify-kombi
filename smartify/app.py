@@ -217,95 +217,6 @@ def _safe_dict_from_row(row: Any, context: str = "unknown") -> Optional[dict]:
         if isinstance(row, (list, tuple)) and row:
             print(f"[DB] CRITICAL:   first 5 items: {[repr(x)[:50] for x in row[:5]]}")
         return None
-    except Exception as e:
-        print(f"[DB] CRITICAL: Unexpected error converting row at {context}: {e}, type={type(row).__name__}")
-        return None
-
-
-# =========================
-# Config (no hardcoded IPs)
-# =========================
-
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = Path(os.environ.get("SMARTIFY_STATIC_DIR", str(BASE_DIR / "static")))
-# normalize & resolve path (works with absolute or relative)
-STATIC_DIR = STATIC_DIR.expanduser().resolve()
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_DIR / "smartify.db"
-
-SMARTIFY_REQUIRE_AUTH = os.environ.get("SMARTIFY_REQUIRE_AUTH", "1").lower() not in ("0", "false", "no")
-SMARTIFY_API_KEY = os.environ.get("SMARTIFY_API_KEY", "").strip()
-
-SMARTIFY_USERNAME = os.environ.get("SMARTIFY_USERNAME", "adinpinjo")
-SMARTIFY_PASSWORD = os.environ.get("SMARTIFY_PASSWORD", "changeme")
-
-SMARTIFY_SESSION_SECRET = os.environ.get("SMARTIFY_SESSION_SECRET", "").strip() or "change-me-in-env"
-
-GPS_DEVICE = os.environ.get("SMARTIFY_GPS_DEVICE", "/dev/ttyACM0").strip()
-GPS_BAUD = int(os.environ.get("SMARTIFY_GPS_BAUD", "9600"))
-
-DHT22_PINS_RAW = os.environ.get("SMARTIFY_DHT22_PINS", "4").strip()
-DHT22_PINS: List[int] = []
-for part in [p.strip() for p in DHT22_PINS_RAW.split(",") if p.strip()]:
-    try:
-        DHT22_PINS.append(int(part))
-    except ValueError:
-        pass
-if not DHT22_PINS:
-    DHT22_PINS = [4]
-
-SENSOR_LOG_INTERVAL = int(os.environ.get("SMARTIFY_SENSOR_LOG_INTERVAL", "30"))
-SMARTIFY_TRUST_LOCALHOST = os.environ.get("SMARTIFY_TRUST_LOCALHOST", "0").lower() in ("1", "true", "yes")
-
-
-# =========================
-# App + Middleware
-# =========================
-
-app = FastAPI(title="Smartify Dashboard API")
-
-# Initialize app state for water level module
-app.state.water_level = {}
-
-# CORS middleware - allow all origins for local network access
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for local network
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=SMARTIFY_SESSION_SECRET,
-    same_site="lax",
-    https_only=False,
-)
-
-if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-# Water level router will be initialized after require_auth is defined (see below)
-
-
-# =========================
-# DB helpers
-# =========================
-
-def _normalize_operator(operator: Any) -> Optional[str]:
-    """Normalize operator to canonical symbols. Returns None if invalid."""
-    if operator is None:
-        return None
-    operator_aliases = {
-        "below": "<",
-        "above": ">",
-        "<": "<",
-        ">": ">",
-        "<=": "<=",
-        ">=": ">=",
-    }
     return operator_aliases.get(str(operator).strip().lower())
 
 
@@ -2625,7 +2536,74 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         matched_rule = None  # No rule in manual mode
     else:
         # Auto mode: evaluate rules using snapshot (not raw temp_data)
+        # Auto mode: evaluate rules using snapshot (not raw temp_data)
         # Pass current_actual to evaluate_rules so cooldown only applies to state changes
+        desired_state_result, matched_rule, winner_info, sensor_ok, reason_str = evaluate_rules(relay_id, None, actual_state)
+        if winner_info and isinstance(winner_info, dict):
+            snapshot_meta = (winner_info.get("snapshot") or {}).get("snapshot_meta", {})
+            if isinstance(snapshot_meta, dict) and len(snapshot_meta) == 1:
+                meta = next(iter(snapshot_meta.values()))
+                if isinstance(meta, dict):
+                    sensor_age_seconds = meta.get("age_seconds")
+def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
+    """
+    Determine if relay is in a pending/transitional state (cooldown, reconciling, startup, sensor issues).
+    Returns dict with pending status, human-readable message, and detailed sensor/cooldown info.
+    NEVER throws - always returns safe defaults on error.
+    """
+    now = int(time.time())
+    pending = False
+    pending_reason: Optional[str] = None
+    pending_message: Optional[str] = None
+    cooldown_remaining: Optional[int] = None
+    sensor_age_seconds: Optional[int] = None
+    sensor_sample_count: Optional[int] = None
+    sensor_is_ready: Optional[bool] = None
+    sensor_is_stale: Optional[bool] = None
+    source: Optional[str] = None
+    mode: str = "auto"
+    try:
+        relay_state = db_get_relay_state_new(relay_id)
+        if not relay_state:
+            return {
+                "pending": True,
+                "pending_reason": "startup",
+                "pending_message": "System starting… initializing sensors",
+                "cooldown_remaining": None,
+                "sensor_age_seconds": None,
+                "sensor_sample_count": None,
+                "sensor_is_ready": None,
+                "sensor_is_stale": None,
+                "source": "startup"
+            }
+        actual_state = relay_state.get("actual_state")
+        desired_state = relay_state.get("desired_state")
+        last_applied_at = relay_state.get("last_applied_at", 0)
+        mode = relay_state.get("mode", "auto")
+        device = db_get_relay_device(relay_id)
+        if device and not bool(device.get("is_enabled", True)):
+            return {
+                "pending": False,
+                "pending_reason": None,
+                "pending_message": None,
+                "cooldown_remaining": None,
+                "sensor_age_seconds": None,
+                "sensor_sample_count": None,
+                "sensor_is_ready": None,
+                "sensor_is_stale": None,
+                "source": "disabled"
+            }
+        if actual_state is None or actual_state == "":
+            pending = True
+            pending_reason = "reconciling"
+            pending_message = "Applying relay state… please wait"
+            source = "startup" if last_applied_at == 0 else "rule"
+        elif desired_state and desired_state != actual_state:
+            pending = True
+            pending_reason = "reconciling"
+            pending_message = "Applying relay state… please wait"
+            source = mode
+        if mode == "auto" and not pending:
             desired_state_result, matched_rule, winner_info, sensor_ok, reason_str = evaluate_rules(relay_id, None, actual_state)
             if winner_info and isinstance(winner_info, dict):
                 snapshot_meta = (winner_info.get("snapshot") or {}).get("snapshot_meta", {})
@@ -2673,10 +2651,7 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
                     pending_reason = "reconciling"
                     pending_message = "Applying relay state… please wait"
                     source = "rule"
-
-        # Ensure source is always defined
         final_source = source if source is not None else mode
-        
         return {
             "pending": pending,
             "pending_reason": pending_reason,
@@ -2689,7 +2664,6 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
             "source": final_source
         }
     except Exception as e:
-        # NEVER throw - always return safe defaults
         print(f"[_get_relay_pending_state] Error for relay {relay_id}: {e}")
         import traceback
         traceback.print_exc()
@@ -2704,7 +2678,6 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
             "sensor_is_stale": None,
             "source": "unknown"
         }
-
 
 def _public_relay_mode(relay_state: Optional[Dict[str, Any]]) -> str:
     """Map internal mode/manual_state to public mode (off/on/auto)."""
@@ -3546,11 +3519,11 @@ def api_rule_update(
         if action is not None:
             is_valid_action, action_error, action = validate_rule_action(action)
             if not is_valid_action or action is None:
-            return JSONResponse({
-                "ok": False,
-                "error": "invalid_action",
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_action",
                     "message": action_error or "Invalid action payload"
-            }, status_code=400)
+                }, status_code=400)
         
         # Enforce minimum cooldown
         if cooldown_seconds is not None and cooldown_seconds < 5:
