@@ -2777,16 +2777,16 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
             # Sensor staleness is reported via sensor_is_stale/age_seconds for visibility.
             if not sensor_ok and desired_state and actual_state and desired_state != actual_state:
                 # Sensor unavailable AND relay needs state change -> pending
-                pending = True
+                                pending = True
                 pending_reason = "sensor_unavailable"
                 pending_message = f"Sensor unavailable: {reason_str} (holding last state)"
-                source = "sensor"
+                                source = "sensor"
             else:
                 if desired_state_result and actual_state and desired_state_result != actual_state:
                     min_on_seconds = int(device.get("min_on_seconds", 0) or 0) if device else 0
                     min_off_seconds = int(device.get("min_off_seconds", 0) or 0) if device else 0
                     if actual_state == "on" and desired_state_result == "off" and min_on_seconds > 0 and (now - last_applied_at) < min_on_seconds:
-                        pending = True
+                                pending = True
                         pending_reason = "min_on"
                         cooldown_remaining = min_on_seconds - (now - last_applied_at)
                         pending_message = f"Min ON time active: {cooldown_remaining}s remaining"
