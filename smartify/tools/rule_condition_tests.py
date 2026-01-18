@@ -178,6 +178,41 @@ def run_rule_condition_tests() -> None:
         assert relay_state.get("actual_state") == "on", "Expected relay to remain ON due to min_on_seconds"
         assert not apply_calls, "Expected no hardware apply due to relay cooldown"
 
+        # Sensor unavailable should HOLD desired_state (no forced OFF)
+        sensor_snapshots["kombi"]["is_ready"] = False
+        relay_state["desired_state"] = "on"
+        relay_state["actual_state"] = "on"
+        smartify_app.reconcile_relay(relay_id, force=True)
+        assert relay_state.get("desired_state") == "on", "Expected desired_state to remain ON when sensor unavailable"
+        assert relay_state.get("actual_state") == "on", "Expected actual_state to remain ON when sensor unavailable"
+
+        # temperature_band action should populate runtime_status sensor fields
+        band_rule = {
+            "id": "rule-band",
+            "relay_id": relay_id,
+            "name": "Band Rule",
+            "condition": {"type": "always"},
+            "action": {
+                "type": "temperature_band",
+                "sensor": "kombi",
+                "min": 5,
+                "max": 20,
+                "min_inclusive": True,
+                "max_inclusive": False,
+                "on_state": "on",
+                "else_state": "off",
+            },
+            "priority": 50,
+            "cooldown_seconds": 60,
+            "is_enabled": True,
+            "last_triggered_at": None,
+            "created_at": 3,
+        }
+        sensor_snapshots["kombi"]["is_ready"] = True
+        runtime_status = smartify_app.evaluate_single_rule(band_rule, relay_id)
+        assert runtime_status.get("sensor_name") == "kombi", "Expected runtime_status sensor_name for temperature_band"
+        assert runtime_status.get("snapshot_temp") is not None, "Expected snapshot_temp for temperature_band"
+
         # Multi-relay independence
         def fake_db_list_relay_rules_multi(target_relay_id: str):
             if target_relay_id == "relay-1":
