@@ -1649,6 +1649,12 @@ def _sensor_sampler_thread() -> None:
                         _sensor_samples[sensor_name] = deque(maxlen=15)
                     _sensor_samples[sensor_name].append((temp, humidity, now, ok))
                     
+                    # Persist sample to DB for audit trail and debugging
+                    try:
+                        db_insert_sensor_sample(sensor_name, temp, humidity, ok, now)
+                    except Exception as e:
+                        logger.error("[Sensor Sampler] Failed to persist sample for %s: %s", sensor_name, e)
+                    
                     # Update live status (every 5s)
                     with _sensor_live_status_lock:
                         # Update last_attempt_ts always
@@ -1685,6 +1691,16 @@ def _sensor_sampler_thread() -> None:
                     # Optionally store in DB for debugging (can be disabled for performance)
                     # db_insert_sensor_sample(sensor_name, temp, humidity, ok, now)
             
+            # Log sensor sample collection periodically (rate-limited: once per snapshot interval)
+            if now % SENSOR_SNAPSHOT_INTERVAL < SENSOR_SAMPLE_INTERVAL:
+                for result in results:
+                    sensor_idx = result.get("sensor_index", -1)
+                    sensor_name = sensor_name_map.get(sensor_idx, f"sensor_{sensor_idx}")
+                    temp = result.get("temperature_c")
+                    humidity = result.get("humidity")
+                    ok = result.get("ok", False)
+                    print(f"[Sensor Sample] sensor={sensor_name} temp={temp} hum={humidity} ok={ok}")
+            
             # Check if it's time to update snapshot (every 60 seconds, aligned to minute boundary)
             current_window = (now // SENSOR_SNAPSHOT_INTERVAL) * SENSOR_SNAPSHOT_INTERVAL
             if current_window > last_snapshot_time:
@@ -1719,7 +1735,7 @@ def _sensor_sampler_thread() -> None:
                                     last_good_at=last_good_at,
                                     updated_at=now,
                                 )
-                                print(f"[Sensor Snapshot] Updated {sensor_name}: {avg_temp:.1f}°C (from {sample_count} samples)")
+                                print(f"[Sensor Snapshot] Updated {sensor_name}: {avg_temp:.1f}°C, {avg_humidity:.1f}% (from {sample_count} samples)")
                             except Exception as e:
                                 logger.error("[Sensor Sampler] Snapshot update failed for %s: %s", sensor_name, e)
                                 import traceback
@@ -2750,7 +2766,11 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
                         sensor_sample_count = meta.get("sample_count")
                         sensor_is_ready = meta.get("is_ready")
                         sensor_is_stale = meta.get("is_stale")
-            if not sensor_ok:
+            # IMPORTANT: Only set pending=true for sensor issues if relay needs to change state.
+            # If actual_state == desired_state, relay is already in correct state (pending=false).
+            # Sensor staleness is reported via sensor_is_stale/age_seconds for visibility.
+            if not sensor_ok and desired_state and actual_state and desired_state != actual_state:
+                # Sensor unavailable AND relay needs state change -> pending
                 pending = True
                 pending_reason = "sensor_unavailable"
                 pending_message = f"Sensor unavailable: {reason_str} (holding last state)"
