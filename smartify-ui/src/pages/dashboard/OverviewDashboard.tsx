@@ -586,13 +586,47 @@ function RelayRulesWidget() {
     .filter((r: any) => r.last_triggered_at)
     .sort((a: any, b: any) => (b.last_triggered_at || 0) - (a.last_triggered_at || 0))[0];
 
+  const formatCondition = (cond: any): string => {
+    if (!cond) return "always";
+    if (cond.op === "and" || cond.op === "or") {
+      const joiner = cond.op.toUpperCase();
+      const parts = (cond.conditions || []).map((c: any) => formatCondition(c));
+      return parts.length ? `(${parts.join(` ${joiner} `)})` : "always";
+    }
+    if (cond.op === "not") {
+      return `NOT (${formatCondition(cond.condition)})`;
+    }
+    if (cond.type === "temperature") {
+      const sensor = cond.sensor || "sensor";
+      if (cond.between) {
+        const minSym = cond.between.min_inclusive === false ? ">" : "≥";
+        const maxSym = cond.between.max_inclusive === true ? "≤" : "<";
+        return `${sensor} ${minSym} ${cond.between.min}°C AND ${sensor} ${maxSym} ${cond.between.max}°C`;
+      }
+      const cmp = cond.cmp || cond.operator || "?";
+      return `${sensor} ${cmp} ${cond.value}°C`;
+    }
+    return "condition";
+  };
+
+  const formatAction = (action: any): string => {
+    if (!action) return "set";
+    if (typeof action === "string") {
+      return action === "turn_on" ? "Set ON" : action === "turn_off" ? "Set OFF" : action;
+    }
+    if (action.type === "set_state") {
+      return `Set ${action.state?.toUpperCase()}`;
+    }
+    if (action.type === "temperature_band") {
+      const minSym = action.min_inclusive === false ? ">" : "≥";
+      const maxSym = action.max_inclusive === true ? "≤" : "<";
+      return `${action.sensor || "sensor"} ${minSym} ${action.min}°C AND ${action.sensor || "sensor"} ${maxSym} ${action.max}°C → ${action.on_state?.toUpperCase() || "ON"}`;
+    }
+    return "action";
+  };
+
   const formatRuleDescription = (rule: any) => {
-    const cond = rule.condition || {};
-    const sensor = cond.sensor || "unknown";
-    const operator = cond.operator === "below" ? "<" : ">";
-    const value = cond.value;
-    const action = rule.action === "turn_on" ? "Turn ON" : "Turn OFF";
-    return `${sensor.charAt(0).toUpperCase() + sensor.slice(1)} temp ${operator} ${value}°C → ${action}`;
+    return `${formatCondition(rule.condition)} → ${formatAction(rule.action)}`;
   };
 
   const formatTimeAgo = (timestamp: number | null) => {

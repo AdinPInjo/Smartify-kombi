@@ -308,62 +308,144 @@ def _normalize_operator(operator: Any) -> Optional[str]:
     return operator_aliases.get(str(operator).strip().lower())
 
 
-def validate_rule_condition(condition: Any) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
-    """
-    Validate a rule condition payload.
-    
-    Returns:
-        (is_valid, error_message, normalized_condition)
-    
-    Rules:
-    - condition must be a dict (not string, list, etc.)
-    - condition must have "type" field
-    - For "temperature" type: must have "sensor", "operator", "value"
-    - operator must be one of: "<", ">", "<=", ">=" (also accepts aliases: "below", "above")
-    - value must be a number
-    """
-    # Must be a dict
+def _normalize_condition_schema(condition: Any) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """Normalize and validate composite/range condition schema."""
     if not isinstance(condition, dict):
         preview = repr(condition)[:120]
-        print(f"[validate_rule_condition] condition must be dict, got {type(condition).__name__}: {preview}")
-        return (False, f"condition must be a dict, got {type(condition).__name__}", None)
+        return (False, f"condition must be a dict, got {type(condition).__name__}: {preview}", None)
     
-    # Must have "type" field
+    if "op" in condition:
+        op = str(condition.get("op", "")).lower().strip()
+        if op in ("and", "or"):
+            conditions = condition.get("conditions", [])
+            if not isinstance(conditions, list):
+                return (False, f"{op} conditions must be a list", None)
+            normalized_list = []
+            for sub in conditions:
+                ok, err, normalized = _normalize_condition_schema(sub)
+                if not ok:
+                    return (False, err, None)
+                normalized_list.append(normalized)
+            return (True, None, {"op": op, "conditions": normalized_list})
+        if op == "not":
+            sub = condition.get("condition")
+            ok, err, normalized = _normalize_condition_schema(sub)
+            if not ok:
+                return (False, err, None)
+            return (True, None, {"op": "not", "condition": normalized})
+        return (False, f"unknown op '{op}'", None)
+    
     condition_type = condition.get("type")
     if not condition_type:
-        print(f"[validate_rule_condition] condition missing 'type' field: {condition}")
         return (False, "condition missing required field: type", None)
     
-    # Validate by type
+    if condition_type == "always":
+        return (True, None, {"type": "always"})
+    
     if condition_type == "temperature":
-        # Required fields for temperature condition
         sensor = condition.get("sensor")
-        operator = condition.get("operator")
-        value = condition.get("value")
-        
         if not sensor:
             return (False, "temperature condition missing required field: sensor", None)
         
-        normalized_operator = _normalize_operator(operator)
-        if not normalized_operator:
-            return (False, f"invalid operator '{operator}', must be one of: <, >, <=, >= (or aliases: below, above)", None)
+        if "between" in condition and isinstance(condition.get("between"), dict):
+            between = condition.get("between") or {}
+            min_val = between.get("min")
+            max_val = between.get("max")
+            if not isinstance(min_val, (int, float)) or not isinstance(max_val, (int, float)):
+                return (False, "between.min and between.max must be numbers", None)
+            min_inclusive = bool(between.get("min_inclusive", True))
+            max_inclusive = bool(between.get("max_inclusive", False))
+            normalized = {
+                "type": "temperature",
+                "sensor": str(sensor),
+                "between": {
+                    "min": float(min_val),
+                    "max": float(max_val),
+                    "min_inclusive": min_inclusive,
+                    "max_inclusive": max_inclusive,
+                },
+            }
+            return (True, None, normalized)
         
+        cmp_raw = condition.get("cmp", condition.get("operator"))
+        normalized_cmp = _normalize_operator(cmp_raw)
+        if not normalized_cmp:
+            return (False, f"invalid cmp/operator '{cmp_raw}', must be one of: <, >, <=, >= (or aliases: below, above)", None)
+        
+        value = condition.get("value")
         if not isinstance(value, (int, float)):
             return (False, f"value must be a number, got {type(value).__name__}", None)
         
-        # Normalize condition
         normalized = {
             "type": "temperature",
             "sensor": str(sensor),
-            "operator": normalized_operator,  # Store normalized operator
-            "value": float(value)
+            "cmp": normalized_cmp,
+            "value": float(value),
         }
         return (True, None, normalized)
     
-    else:
-        # Unknown condition type - allow for extensibility but warn
-        print(f"[validate_rule_condition] Unknown condition type: {condition_type}")
-        return (True, None, condition)
+    return (False, f"unknown condition type '{condition_type}'", None)
+
+
+def validate_rule_condition(condition: Any) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Validate a rule condition payload (composite + range aware).
+    Returns: (is_valid, error_message, normalized_condition)
+    """
+    ok, err, normalized = _normalize_condition_schema(condition)
+    if not ok:
+        preview = repr(condition)[:120]
+        print(f"[validate_rule_condition] invalid condition: {err} -> {preview}")
+    return (ok, err, normalized)
+
+
+def validate_rule_action(action: Any) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """Validate and normalize rule action schema (set_state / temperature_band)."""
+    if isinstance(action, str):
+        action = action.strip()
+        if action == "turn_on":
+            return (True, None, {"type": "set_state", "state": "on"})
+        if action == "turn_off":
+            return (True, None, {"type": "set_state", "state": "off"})
+        return (False, f"invalid action '{action}'", None)
+    
+    if not isinstance(action, dict):
+        return (False, f"action must be a dict, got {type(action).__name__}", None)
+    
+    action_type = action.get("type")
+    if action_type == "set_state":
+        state = action.get("state")
+        if state not in ("on", "off"):
+            return (False, "set_state action requires state 'on' or 'off'", None)
+        return (True, None, {"type": "set_state", "state": state})
+    
+    if action_type == "temperature_band":
+        sensor = action.get("sensor")
+        min_val = action.get("min", action.get("on_min"))
+        max_val = action.get("max", action.get("off_max"))
+        if not sensor:
+            return (False, "temperature_band action missing required field: sensor", None)
+        if not isinstance(min_val, (int, float)) or not isinstance(max_val, (int, float)):
+            return (False, "temperature_band requires numeric min/max", None)
+        min_inclusive = bool(action.get("min_inclusive", True))
+        max_inclusive = bool(action.get("max_inclusive", False))
+        on_state = action.get("on_state", "on")
+        else_state = action.get("else_state", "off")
+        if on_state not in ("on", "off") or else_state not in ("on", "off"):
+            return (False, "temperature_band states must be 'on' or 'off'", None)
+        normalized = {
+            "type": "temperature_band",
+            "sensor": str(sensor),
+            "min": float(min_val),
+            "max": float(max_val),
+            "min_inclusive": min_inclusive,
+            "max_inclusive": max_inclusive,
+            "on_state": on_state,
+            "else_state": else_state,
+        }
+        return (True, None, normalized)
+    
+    return (False, f"unknown action type '{action_type}'", None)
 
 
 def _debug_test_rule_operators() -> bool:
@@ -399,6 +481,20 @@ def _run_schema_migrations(conn: sqlite3.Connection, cur: sqlite3.Cursor) -> Non
     except Exception as e:
         print(f"[DB Migration] Unexpected error checking/adding active_low column: {e}")
         # Don't raise - allow startup to continue, migration will retry on next startup
+    
+    try:
+        cur.execute("PRAGMA table_info(relay_devices)")
+        columns = [row[1] for row in cur.fetchall()]
+        if "min_on_seconds" not in columns:
+            print("[DB] migrated: added min_on_seconds to relay_devices")
+            cur.execute("ALTER TABLE relay_devices ADD COLUMN min_on_seconds INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+        if "min_off_seconds" not in columns:
+            print("[DB] migrated: added min_off_seconds to relay_devices")
+            cur.execute("ALTER TABLE relay_devices ADD COLUMN min_off_seconds INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+    except Exception as e:
+        print(f"[DB Migration] Unexpected error adding min_on_seconds/min_off_seconds: {e}")
     
     # Future migrations can be added here:
     # try:
@@ -983,6 +1079,24 @@ def db_list_relay_rules(relay_id: str) -> List[Dict[str, Any]]:
                 r["condition"] = {}
         else:
             r["condition"] = {}
+        
+        # Parse action (JSON or legacy string)
+        action_raw = r.get("action", "")
+        parsed_action = None
+        if isinstance(action_raw, str):
+            action_str = action_raw.strip()
+            if action_str.startswith("{"):
+                try:
+                    parsed_action = json.loads(action_str)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    parsed_action = action_str
+            else:
+                parsed_action = action_str
+        else:
+            parsed_action = action_raw
+        
+        ok, _err, normalized_action = validate_rule_action(parsed_action)
+        r["action"] = normalized_action if ok else parsed_action
         # Convert SQLite integer boolean to Python boolean
         r["is_enabled"] = bool(r.get("is_enabled", 1))
         result.append(r)
@@ -1002,13 +1116,28 @@ def db_get_relay_rule(rule_id: str) -> Optional[Dict[str, Any]]:
         if not r:
             return None
         r["condition"] = json.loads(r["condition_json"])
+        action_raw = r.get("action", "")
+        parsed_action = None
+        if isinstance(action_raw, str):
+            action_str = action_raw.strip()
+            if action_str.startswith("{"):
+                try:
+                    parsed_action = json.loads(action_str)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    parsed_action = action_str
+            else:
+                parsed_action = action_str
+        else:
+            parsed_action = action_raw
+        ok, _err, normalized_action = validate_rule_action(parsed_action)
+        r["action"] = normalized_action if ok else parsed_action
         # Convert SQLite integer boolean to Python boolean
         r["is_enabled"] = bool(r.get("is_enabled", 1))
         return r
     return None
 
 
-def db_create_relay_rule(relay_id: str, name: str, condition: Dict[str, Any], action: str,
+def db_create_relay_rule(relay_id: str, name: str, condition: Dict[str, Any], action: Dict[str, Any],
                          priority: int = 100, cooldown_seconds: int = 60, is_enabled: bool = True) -> str:
     """Create a new rule. Returns rule ID."""
     conn = sqlite3.connect(DB_PATH)
@@ -1020,7 +1149,7 @@ def db_create_relay_rule(relay_id: str, name: str, condition: Dict[str, Any], ac
            cooldown_seconds, last_triggered_at, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (rule_id, relay_id, name, 1 if is_enabled else 0, priority, json.dumps(condition),
-         action, cooldown_seconds, None, now, now),
+         json.dumps(action), cooldown_seconds, None, now, now),
     )
     conn.commit()
     conn.close()
@@ -1028,7 +1157,7 @@ def db_create_relay_rule(relay_id: str, name: str, condition: Dict[str, Any], ac
 
 
 def db_update_relay_rule(rule_id: str, name: Optional[str] = None, condition: Optional[Dict[str, Any]] = None,
-                         action: Optional[str] = None, priority: Optional[int] = None,
+                         action: Optional[Dict[str, Any]] = None, priority: Optional[int] = None,
                          cooldown_seconds: Optional[int] = None, is_enabled: Optional[bool] = None) -> bool:
     """Update a rule. Returns True if updated."""
     conn = sqlite3.connect(DB_PATH)
@@ -1044,7 +1173,7 @@ def db_update_relay_rule(rule_id: str, name: Optional[str] = None, condition: Op
         params.append(json.dumps(condition))
     if action is not None:
         updates.append("action = ?")
-        params.append(action)
+        params.append(json.dumps(action))
     if priority is not None:
         updates.append("priority = ?")
         params.append(priority)
@@ -2240,6 +2369,129 @@ def _evaluate_temperature_condition(condition: Dict[str, Any]) -> Tuple[bool, Op
     return (result, None)
 
 
+def _evaluate_condition(condition: Dict[str, Any]) -> Tuple[bool, Optional[str], str, Dict[str, Any]]:
+    """
+    Evaluate composite/range condition schema.
+    Returns: (matched, reason_code, message, snapshot_info)
+    """
+    snapshot_info: Dict[str, Any] = {
+        "snapshot_values": {},
+        "snapshot_meta": {},
+    }
+    
+    if not isinstance(condition, dict):
+        return (False, "invalid_condition", "Condition must be a dict", snapshot_info)
+    
+    if "op" in condition:
+        op = str(condition.get("op", "")).lower().strip()
+        if op in ("and", "or"):
+            conditions = condition.get("conditions", [])
+            if not isinstance(conditions, list):
+                return (False, "invalid_condition", f"{op} conditions must be a list", snapshot_info)
+            
+            sub_results = []
+            sensor_issue = None
+            for sub in conditions:
+                matched, reason_code, message, sub_info = _evaluate_condition(sub)
+                sub_results.append(matched)
+                snapshot_info["snapshot_values"].update(sub_info.get("snapshot_values", {}))
+                snapshot_info["snapshot_meta"].update(sub_info.get("snapshot_meta", {}))
+                if reason_code in ("sensor_warming_up", "sensor_stale", "sensor_no_data") and sensor_issue is None:
+                    sensor_issue = (reason_code, message)
+            
+            if op == "and":
+                matched = all(sub_results) if sub_results else True
+            else:
+                matched = any(sub_results) if sub_results else False
+            
+            if not matched and sensor_issue:
+                return (False, sensor_issue[0], sensor_issue[1], snapshot_info)
+            return (matched, "ok", "Composite condition evaluated", snapshot_info)
+        
+        if op == "not":
+            sub = condition.get("condition")
+            matched, reason_code, message, sub_info = _evaluate_condition(sub)
+            snapshot_info["snapshot_values"].update(sub_info.get("snapshot_values", {}))
+            snapshot_info["snapshot_meta"].update(sub_info.get("snapshot_meta", {}))
+            if reason_code in ("sensor_warming_up", "sensor_stale", "sensor_no_data"):
+                return (False, reason_code, message, snapshot_info)
+            return (not matched, "ok", "Negated condition evaluated", snapshot_info)
+        
+        return (False, "invalid_condition", f"Unknown op '{op}'", snapshot_info)
+    
+    condition_type = condition.get("type")
+    if condition_type == "always":
+        return (True, "ok", "Always true", snapshot_info)
+    
+    if condition_type != "temperature":
+        return (False, "invalid_condition", f"Unknown condition type '{condition_type}'", snapshot_info)
+    
+    sensor_name = condition.get("sensor", "")
+    if not sensor_name:
+        return (False, "invalid_condition", "Temperature condition missing sensor", snapshot_info)
+    
+    snapshot = get_sensor_snapshot(sensor_name)
+    if not snapshot:
+        return (False, "sensor_no_data", "Rule error: no sensor data", snapshot_info)
+    
+    sample_count = int(snapshot.get("sample_count", 0) or 0)
+    is_ready = snapshot.get("is_ready", False)
+    is_stale = snapshot.get("is_stale", False)
+    snapshot_temp = snapshot.get("avg_temp")
+    age_seconds = int(snapshot.get("age_seconds", 0) or 0)
+    
+    snapshot_info["snapshot_values"][sensor_name] = snapshot_temp
+    snapshot_info["snapshot_meta"][sensor_name] = {
+        "age_seconds": age_seconds,
+        "sample_count": sample_count,
+        "is_ready": is_ready,
+        "is_stale": is_stale,
+    }
+    
+    if not is_ready:
+        return (False, "sensor_warming_up", f"Waiting for temperature snapshot… {sample_count}/6", snapshot_info)
+    
+    if is_stale:
+        age_min = age_seconds // 60
+        return (False, "sensor_stale", f"Sensor stale ({age_min} min). Forced OFF.", snapshot_info)
+    
+    if snapshot_temp is None:
+        return (False, "sensor_no_data", "Rule error: no temperature value", snapshot_info)
+    
+    if "between" in condition:
+        between = condition.get("between") or {}
+        min_val = float(between.get("min"))
+        max_val = float(between.get("max"))
+        min_inclusive = bool(between.get("min_inclusive", True))
+        max_inclusive = bool(between.get("max_inclusive", False))
+        lower_ok = snapshot_temp >= min_val if min_inclusive else snapshot_temp > min_val
+        upper_ok = snapshot_temp <= max_val if max_inclusive else snapshot_temp < max_val
+        matched = lower_ok and upper_ok
+        return (matched, "ok", "Temperature range evaluated", snapshot_info)
+    
+    cmp_op = condition.get("cmp", condition.get("operator"))
+    normalized_cmp = _normalize_operator(cmp_op)
+    if not normalized_cmp:
+        return (False, "invalid_condition", f"Invalid cmp/operator '{cmp_op}'", snapshot_info)
+    
+    value = condition.get("value")
+    if not isinstance(value, (int, float)):
+        return (False, "invalid_condition", "Condition value is not numeric", snapshot_info)
+    
+    if normalized_cmp == "<":
+        matched = snapshot_temp < value
+    elif normalized_cmp == ">":
+        matched = snapshot_temp > value
+    elif normalized_cmp == "<=":
+        matched = snapshot_temp <= value
+    elif normalized_cmp == ">=":
+        matched = snapshot_temp >= value
+    else:
+        return (False, "invalid_condition", f"Invalid cmp/operator '{cmp_op}'", snapshot_info)
+    
+    return (matched, "ok", "Temperature comparison evaluated", snapshot_info)
+
+
 def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
     """
     Evaluate a single rule and return its runtime status without applying hardware.
@@ -2376,26 +2628,26 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             "cooldown_remaining": 0
         }
     
-    # Prepare basic fields for runtime_status (used even during cooldown)
-    condition_type = condition.get("type", "")
-    sensor_name = condition.get("sensor", "") if condition_type == "temperature" else None
-    operator_raw = condition.get("operator", "") if condition_type == "temperature" else None
-    normalized_operator = _normalize_operator(operator_raw) if condition_type == "temperature" else None
-    threshold = condition.get("value") if condition_type == "temperature" else None
-    snapshot_temp = None
-    age_seconds = 0
-    sample_count = 0
-    if sensor_name:
-        try:
-            snapshot = get_sensor_snapshot(sensor_name)
-            if snapshot:
-                snapshot_temp = snapshot.get("avg_temp")
-                age_seconds = int(snapshot.get("age_seconds", 0) or 0)
-                sample_count = int(snapshot.get("sample_count", 0) or 0)
-        except Exception:
-            # Best-effort only; cooldown status should still render
-            pass
-
+    ok, err, normalized_condition = validate_rule_condition(condition)
+    if not ok or normalized_condition is None:
+            return {
+                "can_evaluate": False,
+                "matched": False,
+            "condition_matched": False,
+            "can_trigger": False,
+            "reason_code": "invalid_condition",
+            "message": err or "Invalid condition schema",
+                "sensor_name": None,
+                "snapshot_temp": None,
+                "threshold": None,
+                "operator": None,
+                "age_seconds": 0,
+                "sample_count": 0,
+            "cooldown_remaining": 0,
+            "snapshot_values": {},
+            "snapshot_meta": {},
+        }
+    
     # Compute cooldown but do not block condition matching
     last_triggered = rule.get("last_triggered_at")
     cooldown_seconds = rule.get("cooldown_seconds", 60)
@@ -2405,206 +2657,54 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
         if age < cooldown_seconds:
             cooldown_remaining = cooldown_seconds - age
     
-    # Evaluate condition
-    if condition_type == "temperature":
-        sensor_name = condition.get("sensor", "")
-        if not sensor_name:
-            return {
-                "can_evaluate": False,
-                "matched": False,
-                "condition_matched": False,
-                "can_trigger": False,
-                "reason_code": "error",
-                "message": "Rule error: sensor missing",
-                "sensor_name": None,
-                "snapshot_temp": None,
-                "threshold": None,
-                "operator": None,
-                "age_seconds": 0,
-                "sample_count": 0,
-                "cooldown_remaining": 0
-            }
-        
-        # Get snapshot for this specific sensor
-        snapshot = get_sensor_snapshot(sensor_name)
-        if not snapshot:
-            return {
-                "can_evaluate": False,
-                "matched": False,
-                "condition_matched": False,
-                "can_trigger": False,
-                "reason_code": "error",
-                "message": "Rule error: no sensor data",
-                "sensor_name": sensor_name,
-                "snapshot_temp": None,
-                "threshold": None,
-                "operator": None,
-                "age_seconds": 0,
-                "sample_count": 0,
-                "cooldown_remaining": 0
-            }
-        
-        # Extract sensor status - ensure all numeric fields are integers, never None
-        sample_count = int(snapshot.get("sample_count", 0) or 0)
-        is_ready = snapshot.get("is_ready", False)
-        is_stale = snapshot.get("is_stale", False)
-        snapshot_temp = snapshot.get("avg_temp")  # Can be None
-        age_seconds = int(snapshot.get("age_seconds", 0) or 0)  # Always int, never None
-        operator = condition.get("operator", "")
-        threshold = condition.get("value")  # Can be None
-        
-        # Check warmup (not ready)
-        if not is_ready:
-            return {
-                "can_evaluate": True,
-                "matched": False,
-                "condition_matched": False,
-                "can_trigger": False,
-                "reason_code": "sensor_warming_up",
-                "message": f"Waiting for temperature snapshot… {sample_count}/6",
-                "sensor_name": sensor_name,
-                "snapshot_temp": snapshot_temp,
-                "threshold": threshold,
-                "operator": operator,
-                "age_seconds": age_seconds,
-                "sample_count": sample_count,
-                "cooldown_remaining": 0
-            }
-        
-        # Check stale
-        if is_stale:
-            age_min = age_seconds // 60  # age_seconds is already int
-            return {
-                "can_evaluate": True,
-                "matched": False,
-                "condition_matched": False,
-                "can_trigger": False,
-                "reason_code": "sensor_stale",
-                "message": f"Sensor stale ({age_min} min). Forced OFF.",
-                "sensor_name": sensor_name,
-                "snapshot_temp": snapshot_temp,
-                "threshold": threshold,
-                "operator": operator,
-                "age_seconds": age_seconds,
-                "sample_count": sample_count,
-                "cooldown_remaining": 0
-            }
-        
-        # Sensor is ready - evaluate condition
-        if snapshot_temp is None:
-            return {
-                "can_evaluate": False,
-                "matched": False,
-                "condition_matched": False,
-                "can_trigger": False,
-                "reason_code": "error",
-                "message": "Rule error: no temperature value",
-                "sensor_name": sensor_name,
-                "snapshot_temp": None,
-                "threshold": threshold,
-                "operator": operator,
-                "age_seconds": age_seconds,
-                "sample_count": sample_count,
-                "cooldown_remaining": 0
-            }
-        
-        normalized_operator = _normalize_operator(operator)
-        if normalized_operator == "<":
-            condition_met = snapshot_temp < threshold
-        elif normalized_operator == ">":
-            condition_met = snapshot_temp > threshold
-        elif normalized_operator == "<=":
-            condition_met = snapshot_temp <= threshold
-        elif normalized_operator == ">=":
-            condition_met = snapshot_temp >= threshold
-        else:
-            return {
-                "can_evaluate": False,
-                "matched": False,
-                "condition_matched": False,
-                "can_trigger": False,
-                "reason_code": "error",
-                "message": "Rule error: invalid operator",
-                "sensor_name": sensor_name,
-                "snapshot_temp": snapshot_temp,
-                "threshold": threshold,
-                "operator": operator,
-                "age_seconds": age_seconds,
-                "sample_count": sample_count,
-                "cooldown_remaining": 0
-            }
-        
-        if condition_met:
-            if cooldown_remaining > 0:
-                return {
-                    "can_evaluate": True,
-                    "matched": True,
-                    "condition_matched": True,
-                    "can_trigger": False,
-                    "reason_code": "cooldown",
-                    "message": f"Cooldown… {cooldown_remaining}s",
-                    "sensor_name": sensor_name,
-                    "snapshot_temp": snapshot_temp,
-                    "threshold": threshold,
-                    "operator": operator,
-                    "age_seconds": age_seconds,
-                    "sample_count": sample_count,
-                    "cooldown_remaining": cooldown_remaining
-                }
-            return {
-                "can_evaluate": True,
-                "matched": True,
-                "condition_matched": True,
-                "can_trigger": True,
-                "reason_code": "ok",
-                "message": "Temperature acquired — condition met",
-                "sensor_name": sensor_name,
-                "snapshot_temp": snapshot_temp,
-                "threshold": threshold,
-                "operator": operator,
-                "age_seconds": age_seconds,
-                "sample_count": sample_count,
-                "cooldown_remaining": 0
-            }
-        else:
-            return {
-                "can_evaluate": True,
-                "matched": False,
-                "condition_matched": False,
-                "can_trigger": False,
-                "reason_code": "ok",
-                "message": "Temperature acquired — condition not met",
-                "sensor_name": sensor_name,
-                "snapshot_temp": snapshot_temp,
-                "threshold": threshold,
-                "operator": operator,
-                "age_seconds": age_seconds,
-                "sample_count": sample_count,
-                "cooldown_remaining": 0
-            }
-    else:
-        # Non-temperature rule (e.g., manual timer) - not waiting for sensor
-        return {
-            "can_evaluate": True,
-            "matched": False,
-            "condition_matched": False,
-            "can_trigger": False,
-            "reason_code": "ok",
-            "message": "Rule active",
-            "sensor_name": None,
-            "snapshot_temp": None,
-            "threshold": None,
-            "operator": None,
-            "age_seconds": 0,
-            "sample_count": 0,
-            "cooldown_remaining": 0
-        }
+    matched, reason_code, message, snapshot_info = _evaluate_condition(normalized_condition)
+    snapshot_values = snapshot_info.get("snapshot_values", {})
+    snapshot_meta = snapshot_info.get("snapshot_meta", {})
+    
+    sensor_name = None
+    snapshot_temp = None
+    age_seconds = 0
+    sample_count = 0
+    if len(snapshot_values) == 1:
+        sensor_name = next(iter(snapshot_values.keys()))
+        snapshot_temp = snapshot_values.get(sensor_name)
+        meta = snapshot_meta.get(sensor_name, {})
+        age_seconds = int(meta.get("age_seconds", 0) or 0)
+        sample_count = int(meta.get("sample_count", 0) or 0)
+    
+    condition_matched = matched
+    can_trigger = condition_matched and reason_code == "ok" and cooldown_remaining == 0
+    if condition_matched and cooldown_remaining > 0:
+        reason_code = "cooldown"
+        message = f"Cooldown… {cooldown_remaining}s"
+    
+    return {
+        "can_evaluate": True,
+        "matched": condition_matched,
+        "condition_matched": condition_matched,
+        "can_trigger": can_trigger,
+        "reason_code": reason_code,
+        "message": message,
+        "sensor_name": sensor_name,
+        "snapshot_temp": snapshot_temp,
+        "threshold": None,
+        "operator": None,
+        "age_seconds": age_seconds,
+        "sample_count": sample_count,
+        "cooldown_remaining": cooldown_remaining,
+        "snapshot_values": snapshot_values,
+        "snapshot_meta": snapshot_meta,
+    }
 
 
-def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, current_state: Optional[str] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool, Optional[str]]:
+def evaluate_rules(
+    relay_id: str,
+    temp_data: Optional[Dict[str, Any]] = None,
+    current_state: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]], Optional[Dict[str, Any]], bool, Optional[str]]:
     """
     Deterministically evaluate enabled rules for a relay using snapshot data.
-    Returns (desired_state, matched_rule, sensor_data_available, reason) tuple.
+    Returns (desired_state, matched_rule, winner_info, sensor_data_available, reason) tuple.
     desired_state is "on" or "off" based on winner selection, or None if sensor data unavailable.
     matched_rule is the winner rule dict, or None if no rule matched.
     sensor_data_available is False if sensor data is unavailable (should preserve current state).
@@ -2617,72 +2717,70 @@ def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, cu
         return ("off", None, True, "no_rules")  # No enabled rules -> default to off
     
     candidates = []
-    blocked_by_cooldown = False
     for rule in enabled_rules:
-        # Safety: Ensure rule is a dict
         if not isinstance(rule, dict):
             rule = coerce_to_dict(rule, context="evaluate_rules.rule")
             if not rule:
-                continue  # Skip invalid rules
+                continue
         
-        try:
-            runtime_status = evaluate_single_rule(rule, relay_id)
-        except Exception:
+        condition = rule.get("condition", {})
+        ok, err, normalized_condition = validate_rule_condition(condition)
+        if not ok or normalized_condition is None:
             continue
         
-        reason_code = runtime_status.get("reason_code")
-        message = runtime_status.get("message", "") or ""
-        
-        # If condition evaluation failed due to sensor issues (stale/warming/no data), force OFF
-        if reason_code in ("sensor_warming_up", "sensor_stale"):
+        matched, reason_code, message, snapshot_info = _evaluate_condition(normalized_condition)
+        if reason_code in ("sensor_warming_up", "sensor_stale", "sensor_no_data"):
             print(f"[Rule Engine] Sensor issue for rule '{rule.get('name')}': {message}")
-            return ("off", None, False, reason_code)
-        if "no sensor data" in message or "no temperature value" in message:
-            print(f"[Rule Engine] Sensor issue for rule '{rule.get('name')}': {message}")
-            return ("off", None, False, "sensor_no_data")
+            return ("off", None, None, False, reason_code)
         
-        condition_matched = runtime_status.get("condition_matched")
-        if condition_matched is None:
-            condition_matched = bool(runtime_status.get("matched", False))
-        can_trigger = runtime_status.get("can_trigger")
-        if can_trigger is None:
-            cooldown_remaining = int(runtime_status.get("cooldown_remaining", 0) or 0)
-            can_trigger = condition_matched and cooldown_remaining == 0
-        
-        if not condition_matched:
+        if not matched:
             continue
         
-        if not can_trigger:
-            if reason_code == "cooldown":
-                blocked_by_cooldown = True
+        ok_action, _err, normalized_action = validate_rule_action(rule.get("action"))
+        if not ok_action or normalized_action is None:
             continue
         
-        action = rule.get("action", "")
-        if action not in ("turn_on", "turn_off"):
-            continue
-        
-        candidates.append((rule, runtime_status))
+        candidates.append((rule, normalized_action, snapshot_info))
     
     if not candidates:
-        if blocked_by_cooldown:
-            hold_state = current_state if current_state in ("on", "off") else "off"
-            return (hold_state, None, True, "hold_due_to_cooldown")
-        return ("off", None, True, "no_match")
+        return ("off", None, None, True, "no_match")
     
-    def _candidate_sort_key(candidate: Tuple[Dict[str, Any], Dict[str, Any]]) -> Tuple[int, int, int, str]:
-        rule, _runtime = candidate
+    def _candidate_sort_key(candidate: Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]) -> Tuple[int, int, int, str]:
+        rule, _action, _snapshot = candidate
         priority = int(rule.get("priority", 100) or 100)
-        action = rule.get("action", "")
-        action_rank = 0 if action == "turn_off" else 1
         created_at = int(rule.get("created_at", 0) or 0)
         rule_id = str(rule.get("id", ""))
-        return (-priority, action_rank, created_at, rule_id)
+        return (-priority, created_at, 0, rule_id)
     
     candidates.sort(key=_candidate_sort_key)
-    winner_rule, _winner_status = candidates[0]
+    winner_rule, winner_action, winner_snapshot = candidates[0]
     
-    desired_state = "off" if winner_rule.get("action") == "turn_off" else "on"
-    return (desired_state, winner_rule, True, None)
+    desired_state = None
+    if winner_action.get("type") == "set_state":
+        desired_state = winner_action.get("state")
+    elif winner_action.get("type") == "temperature_band":
+        sensor = winner_action.get("sensor", "")
+        snapshot = get_sensor_snapshot(sensor) if sensor else None
+        if not snapshot or not isinstance(snapshot, dict):
+            return ("off", None, None, False, "sensor_no_data")
+        if not snapshot.get("is_ready", False):
+            return ("off", None, None, False, "sensor_warming_up")
+        if snapshot.get("is_stale", False):
+            return ("off", None, None, False, "sensor_stale")
+        temp = snapshot.get("avg_temp")
+        if temp is None:
+            return ("off", None, None, False, "sensor_no_data")
+        min_val = float(winner_action.get("min"))
+        max_val = float(winner_action.get("max"))
+        min_inclusive = bool(winner_action.get("min_inclusive", True))
+        max_inclusive = bool(winner_action.get("max_inclusive", False))
+        lower_ok = temp >= min_val if min_inclusive else temp > min_val
+        upper_ok = temp <= max_val if max_inclusive else temp < max_val
+        desired_state = winner_action.get("on_state") if (lower_ok and upper_ok) else winner_action.get("else_state")
+    else:
+        desired_state = "off"
+    
+    return (desired_state, winner_rule, {"action": winner_action, "snapshot": winner_snapshot}, True, None)
 
 
 def reconcile_relay(relay_id: str, force: bool = False) -> bool:
@@ -2746,7 +2844,7 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
     else:
         # Auto mode: evaluate rules using snapshot (not raw temp_data)
         # Pass current_actual to evaluate_rules so cooldown only applies to state changes
-        desired_state_result, matched_rule, sensor_data_available, reason_str = evaluate_rules(relay_id, None, current_actual)
+        desired_state_result, matched_rule, winner_info, sensor_data_available, reason_str = evaluate_rules(relay_id, None, current_actual)
         
         if not sensor_data_available:
             # Sensor data unavailable (stale/warming) - force OFF
@@ -2768,25 +2866,11 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
                     matched_rule = coerce_to_dict(matched_rule, context="reconcile_relay.matched_rule")
                 
                 if matched_rule:  # Only proceed if coercion succeeded
-                    # Build reason string using snapshot data
-                    condition = matched_rule.get("condition", {})
-                    # Safety: Ensure condition is a dict
-                    if not isinstance(condition, dict):
-                        condition = coerce_to_dict(condition, context="reconcile_relay.matched_rule.condition")
-                    
-                    sensor_name = condition.get("sensor", "")
-                    operator = condition.get("operator", "")
-                    value = condition.get("value")
-                    
-                    # Safety: get_sensor_snapshot might return None
-                    snapshot = get_sensor_snapshot(sensor_name)
-                    if snapshot and isinstance(snapshot, dict):
-                        temp = snapshot.get("avg_temp")
-                        if temp is not None:
-                            reason = f"Rule '{matched_rule.get('name', 'Unknown')}': {sensor_name.capitalize()} temp {operator} {value}°C (snapshot: {temp:.1f}°C)"
-                        else:
-                            reason = f"Rule '{matched_rule.get('name', 'Unknown')}' matched"
-                    else:
+                    try:
+                        runtime_status = evaluate_single_rule(matched_rule, relay_id)
+                        message = runtime_status.get("message") or "Rule matched"
+                        reason = f"Rule '{matched_rule.get('name', 'Unknown')}': {message}"
+                    except Exception:
                         reason = f"Rule '{matched_rule.get('name', 'Unknown')}' matched"
                 else:
                     reason = "Rule matched but data invalid"
@@ -2796,20 +2880,30 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
             if matched_rule is not None and isinstance(matched_rule, dict):
                 winner_name = matched_rule.get("name", "Unknown")
                 winner_priority = matched_rule.get("priority", "unknown")
-                winner_action = matched_rule.get("action", "unknown")
+                winner_action = None
+                if winner_info and isinstance(winner_info, dict):
+                    winner_action = winner_info.get("action")
+                if not winner_action:
+                    winner_action = matched_rule.get("action", {})
                 winner_condition = matched_rule.get("condition", {}) if matched_rule else {}
                 if not isinstance(winner_condition, dict):
                     winner_condition = coerce_to_dict(winner_condition, context="reconcile_relay.winner_condition")
-                winner_sensor = winner_condition.get("sensor", "")
+                winner_sensor = ""
+                if "type" in winner_condition and winner_condition.get("type") == "temperature":
+                    winner_sensor = winner_condition.get("sensor", "")
+                elif winner_info and isinstance(winner_info, dict):
+                    snapshot_values = (winner_info.get("snapshot") or {}).get("snapshot_values", {})
+                    if isinstance(snapshot_values, dict) and len(snapshot_values) == 1:
+                        winner_sensor = next(iter(snapshot_values.keys()))
                 winner_temp = None
                 if winner_sensor:
                     snapshot = get_sensor_snapshot(winner_sensor)
                     if snapshot and isinstance(snapshot, dict):
                         winner_temp = snapshot.get("avg_temp")
                 if winner_temp is not None:
-                    print(f"[Reconcile] Winner rule '{winner_name}' (priority {winner_priority}, action {winner_action}) using {winner_sensor} snapshot {winner_temp:.1f}°C")
+                    print(f"[Reconcile] Winner rule '{winner_name}' (priority {winner_priority}, action {winner_action}) using {winner_sensor} snapshot {winner_temp:.1f}°C -> desired_state={desired_state}")
                 else:
-                    print(f"[Reconcile] Winner rule '{winner_name}' (priority {winner_priority}, action {winner_action}) using {winner_sensor or 'unknown sensor'}")
+                    print(f"[Reconcile] Winner rule '{winner_name}' (priority {winner_priority}, action {winner_action}) using {winner_sensor or 'unknown sensor'} -> desired_state={desired_state}")
     
     # Step 3: Update desired_state in database (only if it changed)
     if desired_state is not None and desired_state != current_desired:
@@ -2831,12 +2925,34 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
             return False
         return False
     
-    # Step 5: Rate limiting - avoid flapping
+    # Step 5: Rule cooldown (blocks applying hardware but doesn't change winner)
+    if matched_rule is not None and isinstance(matched_rule, dict):
+        last_triggered = matched_rule.get("last_triggered_at")
+        cooldown_seconds = int(matched_rule.get("cooldown_seconds", 60) or 0)
+        if last_triggered and cooldown_seconds > 0:
+            age = now - last_triggered
+            if age < cooldown_seconds:
+                print(f"[Reconcile] Rule cooldown active for relay {relay_id}, holding desired_state={desired_state}")
+                return False
+    
+    # Step 6: Relay-level cooldown (anti-flap)
+    min_on_seconds = int(device.get("min_on_seconds", 0) or 0)
+    min_off_seconds = int(device.get("min_off_seconds", 0) or 0)
+    if current_actual == "on" and desired_state == "off" and min_on_seconds > 0:
+        if now - last_applied < min_on_seconds:
+            print(f"[Reconcile] Relay min_on_seconds active ({min_on_seconds}s), holding desired_state={desired_state}")
+            return False
+    if current_actual == "off" and desired_state == "on" and min_off_seconds > 0:
+        if now - last_applied < min_off_seconds:
+            print(f"[Reconcile] Relay min_off_seconds active ({min_off_seconds}s), holding desired_state={desired_state}")
+            return False
+    
+    # Step 7: Rate limiting - avoid flapping
     if not force and (now - last_applied) < 2:
         print(f"[Reconcile] Rate limit: last_applied {now - last_applied}s ago, skipping hardware update")
         return False
     
-    # Step 6: Apply hardware command using pinctrl
+    # Step 8: Apply hardware command using pinctrl
     relay_name = device.get("name", "unknown")
     pin = device.get("pin")
     print(f"[Reconcile] Applying hardware: relay {relay_name} (id={relay_id}, pin={pin}) {current_actual} -> {desired_state} (source: {source}, reason: {reason})")
@@ -3359,7 +3475,7 @@ def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = He
         relay = db_get_relay_device(relay_id)
         if not relay:
             # Return safe fallback instead of 404
-            return JSONResponse({
+                return JSONResponse({
                 "ok": True,
                 "relay": {
                     "id": relay_id,
@@ -3668,6 +3784,13 @@ def api_relay_rules_list(
     
     try:
         rules = db_list_relay_rules(relay_id)
+        relay_state = db_get_relay_state_new(relay_id)
+        current_actual = relay_state.get("actual_state") if relay_state else None
+        try:
+            _, winner_rule, _winner_info, _sensor_ok, _reason = evaluate_rules(relay_id, None, current_actual)
+            winner_id = winner_rule.get("id") if isinstance(winner_rule, dict) else None
+        except Exception:
+            winner_id = None
         
         # Add runtime status for each rule
         rules_with_status = []
@@ -3687,7 +3810,7 @@ def api_relay_rules_list(
                     "relay_id": rule.get("relay_id", relay_id),
                     "name": rule.get("name", "Unnamed Rule"),
                     "condition": rule.get("condition", {}),
-                    "action": rule.get("action", "turn_off"),
+                    "action": rule.get("action", {"type": "set_state", "state": "off"}),
                     "priority": rule.get("priority", 100),
                     "cooldown_seconds": rule.get("cooldown_seconds", 60),
                     "is_enabled": rule.get("is_enabled", False),
@@ -3695,6 +3818,9 @@ def api_relay_rules_list(
                     "created_at": rule.get("created_at"),
                     "updated_at": rule.get("updated_at")
                 }
+                ok_condition, _err, normalized_condition = validate_rule_condition(rule_dict["condition"])
+                if ok_condition and normalized_condition is not None:
+                    rule_dict["condition"] = normalized_condition
                 
                 # Safely evaluate runtime status (wrapped in try/except)
                 try:
@@ -3719,6 +3845,7 @@ def api_relay_rules_list(
                     }
                 
                 # Attach runtime status to rule
+                runtime_status["is_winner"] = bool(winner_id and rule_dict["id"] == winner_id)
                 rule_dict["runtime_status"] = runtime_status
                 rules_with_status.append(rule_dict)
                 
@@ -3736,7 +3863,7 @@ def api_relay_rules_list(
                     "relay_id": relay_id,
                     "name": rule_name,
                     "condition": {},
-                    "action": "turn_off",
+                    "action": {"type": "set_state", "state": "off"},
                     "priority": 100,
                     "cooldown_seconds": 60,
                     "is_enabled": False,
@@ -3793,10 +3920,10 @@ def api_relay_rule_create(
     if not name:
         return JSONResponse({"ok": False, "error": "name_required"}, status_code=400)
     
-    # Validate condition (must be a dict with proper structure)
+    # Validate condition (composite/range schema)
     condition_raw = body.get("condition", {})
     is_valid, error_msg, condition = validate_rule_condition(condition_raw)
-    if not is_valid:
+    if not is_valid or condition is None:
         return JSONResponse({
             "ok": False,
             "error": "invalid_condition",
@@ -3804,9 +3931,14 @@ def api_relay_rule_create(
             "received_type": type(condition_raw).__name__
         }, status_code=400)
     
-    action = body.get("action", "")
-    if action not in ("turn_on", "turn_off"):
-        return JSONResponse({"ok": False, "error": "invalid_action"}, status_code=400)
+    action_raw = body.get("action")
+    is_valid_action, action_error, action = validate_rule_action(action_raw)
+    if not is_valid_action or action is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_action",
+            "message": action_error or "Invalid action payload"
+        }, status_code=400)
     
     priority = int(body.get("priority", 100))
     cooldown_seconds = int(body.get("cooldown_seconds", 60))
@@ -3821,6 +3953,58 @@ def api_relay_rule_create(
     # Reconcile relay to apply new rule immediately
     reconcile_relay(relay_id, force=True)
     
+    return JSONResponse({"ok": True, "rule": rule}, status_code=201)
+
+
+@app.post("/api/relays/{relay_id}/rules/temperature-band")
+def api_relay_rule_create_temperature_band(
+    relay_id: str,
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Create a temperature band rule (range-based thermostat)."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    relay = db_get_relay_device(relay_id)
+    if not relay:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    
+    name = body.get("name", "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name_required"}, status_code=400)
+    
+    action_raw = {
+        "type": "temperature_band",
+        "sensor": body.get("sensor"),
+        "min": body.get("min"),
+        "max": body.get("max"),
+        "min_inclusive": body.get("min_inclusive", True),
+        "max_inclusive": body.get("max_inclusive", False),
+        "on_state": body.get("on_state", "on"),
+        "else_state": body.get("else_state", "off"),
+    }
+    is_valid_action, action_error, action = validate_rule_action(action_raw)
+    if not is_valid_action or action is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_action",
+            "message": action_error or "Invalid temperature band payload"
+        }, status_code=400)
+    
+    priority = int(body.get("priority", 100))
+    cooldown_seconds = int(body.get("cooldown_seconds", 60))
+    is_enabled = body.get("is_enabled", True)
+    if cooldown_seconds < 5:
+        cooldown_seconds = 5
+    
+    condition = {"type": "always"}
+    rule_id = db_create_relay_rule(relay_id, name, condition, action, priority, cooldown_seconds, is_enabled)
+    rule = db_get_relay_rule(rule_id)
+    
+    reconcile_relay(relay_id, force=True)
     return JSONResponse({"ok": True, "rule": rule}, status_code=201)
 
 
@@ -3855,11 +4039,11 @@ def api_rule_update(
         if is_enabled is None:
             is_enabled = body.get("enabled")  # UI might send "enabled" instead
         
-        # Validate condition if provided (must be a dict with proper structure)
+        # Validate condition if provided (composite/range schema)
         condition = None
         if condition_raw is not None:
             is_valid, error_msg, condition = validate_rule_condition(condition_raw)
-            if not is_valid:
+            if not is_valid or condition is None:
                 return JSONResponse({
                     "ok": False,
                     "error": "invalid_condition",
@@ -3868,12 +4052,14 @@ def api_rule_update(
                 }, status_code=400)
         
         # Validate action if provided
-        if action and action not in ("turn_on", "turn_off"):
-            return JSONResponse({
-                "ok": False,
-                "error": "invalid_action",
-                "message": f"action must be 'turn_on' or 'turn_off', got '{action}'"
-            }, status_code=400)
+        if action is not None:
+            is_valid_action, action_error, action = validate_rule_action(action)
+            if not is_valid_action or action is None:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_action",
+                    "message": action_error or "Invalid action payload"
+                }, status_code=400)
         
         # Enforce minimum cooldown
         if cooldown_seconds is not None and cooldown_seconds < 5:
