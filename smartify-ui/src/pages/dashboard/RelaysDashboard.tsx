@@ -51,13 +51,8 @@ type Rule = {
   name: string;
   is_enabled: boolean;
   priority: number;
-  condition: {
-    type: string;
-    sensor: string;
-    operator: string;
-    value: number;
-  };
-  action: "turn_on" | "turn_off";
+  condition: Record<string, any>;
+  action: Record<string, any> | string;
   cooldown_seconds: number;
   last_triggered_at: number | null;
   created_at: number;
@@ -66,6 +61,9 @@ type Rule = {
   runtime_status?: {
     can_evaluate?: boolean;
     matched?: boolean;
+    condition_matched?: boolean;
+    can_trigger?: boolean;
+    is_winner?: boolean;
     reason_code?: "ok" | "sensor_warming_up" | "sensor_stale" | "cooldown" | "disabled" | "parse_error" | "error";
     message?: string;
     sensor_name?: string | null;
@@ -75,6 +73,7 @@ type Rule = {
     age_seconds?: number | null;
     sample_count?: number;
     cooldown_remaining?: number | null;
+    snapshot_values?: Record<string, number | null>;
   };
 };
 
@@ -263,13 +262,54 @@ function RelaysDashboard() {
     },
   });
 
+  const formatCondition = (cond: Record<string, any>): string => {
+    if (!cond) return "always";
+    if (cond.op === "and" || cond.op === "or") {
+      const joiner = cond.op.toUpperCase();
+      const parts = (cond.conditions || []).map((c: any) => formatCondition(c));
+      return parts.length ? `(${parts.join(` ${joiner} `)})` : "always";
+    }
+    if (cond.op === "not") {
+      return `NOT (${formatCondition(cond.condition)})`;
+    }
+    if (cond.type === "temperature") {
+      const sensor = cond.sensor || "sensor";
+      if (cond.between) {
+        const min = cond.between.min;
+        const max = cond.between.max;
+        const minSym = cond.between.min_inclusive === false ? ">" : "≥";
+        const maxSym = cond.between.max_inclusive === true ? "≤" : "<";
+        return `${sensor} ${minSym} ${min}°C AND ${sensor} ${maxSym} ${max}°C`;
+      }
+      const cmp = cond.cmp || cond.operator || "?";
+      return `${sensor} ${cmp} ${cond.value}°C`;
+    }
+    if (cond.type === "always") {
+      return "always";
+    }
+    return "condition";
+  };
+
+  const formatAction = (action: Record<string, any> | string): string => {
+    if (!action) return "set";
+    if (typeof action === "string") {
+      return action === "turn_on" ? "Set ON" : action === "turn_off" ? "Set OFF" : action;
+    }
+    if (action.type === "set_state") {
+      return `Set ${action.state?.toUpperCase()}`;
+    }
+    if (action.type === "temperature_band") {
+      const sensor = action.sensor || "sensor";
+      const minSym = action.min_inclusive === false ? ">" : "≥";
+      const maxSym = action.max_inclusive === true ? "≤" : "<";
+      return `${sensor} ${minSym} ${action.min}°C AND ${sensor} ${maxSym} ${action.max}°C → ${action.on_state?.toUpperCase() || "ON"}`;
+    }
+    return "action";
+  };
+
   const formatRuleDescription = (rule: Rule) => {
     const cond = rule.condition || {};
-    const sensor = cond.sensor || "unknown";
-    const operator = cond.operator === "below" ? "<" : ">";
-    const value = cond.value;
-    const action = rule.action === "turn_on" ? "Turn ON" : "Turn OFF";
-    return `${sensor.charAt(0).toUpperCase() + sensor.slice(1)} temp ${operator} ${value}°C → ${action}`;
+    return `${formatCondition(cond)} → ${formatAction(rule.action)}`;
   };
 
   const formatTimeAgo = (timestamp: number | null) => {
@@ -673,10 +713,37 @@ function RuleDialog({
   const [name, setName] = useState(rule?.name || "");
   const [sensor, setSensor] = useState(rule?.condition?.sensor || "kombi");
   const [operator, setOperator] = useState<"below" | "above">(
-    (rule?.condition?.operator as "below" | "above") || "below"
+    ((rule?.condition?.cmp === ">" || rule?.condition?.operator === "above") ? "above" : "below")
   );
   const [value, setValue] = useState(rule?.condition?.value?.toString() || "5");
-  const [action, setAction] = useState<"turn_on" | "turn_off">(rule?.action || "turn_on");
+  const [actionState, setActionState] = useState<"on" | "off">(
+    typeof rule?.action === "object" && rule?.action?.type === "set_state"
+      ? (rule.action.state as "on" | "off")
+      : "on"
+  );
+  const [ruleType, setRuleType] = useState<"threshold" | "range">(
+    typeof rule?.action === "object" && rule?.action?.type === "temperature_band" ? "range" : "threshold"
+  );
+  const [minValue, setMinValue] = useState(
+    typeof rule?.action === "object" && rule?.action?.type === "temperature_band"
+      ? rule.action.min?.toString() || "5"
+      : "5"
+  );
+  const [maxValue, setMaxValue] = useState(
+    typeof rule?.action === "object" && rule?.action?.type === "temperature_band"
+      ? rule.action.max?.toString() || "20"
+      : "20"
+  );
+  const [minInclusive, setMinInclusive] = useState(
+    typeof rule?.action === "object" && rule?.action?.type === "temperature_band"
+      ? rule.action.min_inclusive !== false
+      : true
+  );
+  const [maxInclusive, setMaxInclusive] = useState(
+    typeof rule?.action === "object" && rule?.action?.type === "temperature_band"
+      ? rule.action.max_inclusive === true
+      : false
+  );
   const [priority, setPriority] = useState(rule?.priority?.toString() || "100");
   const [cooldown, setCooldown] = useState(rule?.cooldown_seconds?.toString() || "60");
   const [isEnabled, setIsEnabled] = useState(rule?.is_enabled ?? true);
@@ -686,9 +753,24 @@ function RuleDialog({
     if (rule) {
       setName(rule.name || "");
       setSensor(rule.condition?.sensor || "kombi");
-      setOperator((rule.condition?.operator as "below" | "above") || "below");
+      setOperator((rule.condition?.cmp === ">" || rule.condition?.operator === "above") ? "above" : "below");
       setValue(rule.condition?.value?.toString() || "5");
-      setAction(rule.action || "turn_on");
+      if (typeof rule.action === "object" && rule.action?.type === "temperature_band") {
+        setRuleType("range");
+        setMinValue(rule.action.min?.toString() || "5");
+        setMaxValue(rule.action.max?.toString() || "20");
+        setMinInclusive(rule.action.min_inclusive !== false);
+        setMaxInclusive(rule.action.max_inclusive === true);
+      } else {
+        setRuleType("threshold");
+      }
+      if (typeof rule.action === "object" && rule.action?.type === "set_state") {
+        setActionState(rule.action.state === "off" ? "off" : "on");
+      } else if (rule.action === "turn_off") {
+        setActionState("off");
+      } else {
+        setActionState("on");
+      }
       setPriority(rule.priority?.toString() || "100");
       setCooldown(rule.cooldown_seconds?.toString() || "60");
       setIsEnabled(rule.is_enabled ?? true);
@@ -698,7 +780,12 @@ function RuleDialog({
       setSensor("kombi");
       setOperator("below");
       setValue("5");
-      setAction("turn_on");
+      setActionState("on");
+      setRuleType("threshold");
+      setMinValue("5");
+      setMaxValue("20");
+      setMinInclusive(true);
+      setMaxInclusive(false);
       setPriority("100");
       setCooldown("60");
       setIsEnabled(true);
@@ -707,22 +794,43 @@ function RuleDialog({
 
   const createRuleMutation = useMutation({
     mutationFn: async () => {
-      const r = await apiFetch(`/api/relays/${relayId}/rules`, {
+      const endpoint =
+        ruleType === "range"
+          ? `/api/relays/${relayId}/rules/temperature-band`
+          : `/api/relays/${relayId}/rules`;
+      const payload =
+        ruleType === "range"
+          ? {
+              name,
+              sensor,
+              min: parseFloat(minValue),
+              max: parseFloat(maxValue),
+              min_inclusive: minInclusive,
+              max_inclusive: maxInclusive,
+              priority: parseInt(priority),
+              cooldown_seconds: parseInt(cooldown),
+              is_enabled: isEnabled,
+            }
+          : {
+              name,
+              condition: {
+                type: "temperature",
+                sensor,
+                cmp: operator === "below" ? "<" : ">",
+                value: parseFloat(value),
+              },
+              action: {
+                type: "set_state",
+                state: actionState,
+              },
+              priority: parseInt(priority),
+              cooldown_seconds: parseInt(cooldown),
+              is_enabled: isEnabled,
+            };
+      const r = await apiFetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          condition: {
-            type: "temperature",
-            sensor,
-            operator,
-            value: parseFloat(value),
-          },
-          action,
-          priority: parseInt(priority),
-          cooldown_seconds: parseInt(cooldown),
-          is_enabled: isEnabled,
-        }),
+        body: JSON.stringify(payload),
         cache: "no-store",
       });
       if (!r.ok) {
@@ -751,13 +859,31 @@ function RuleDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
-          condition: {
-            type: "temperature",
-            sensor,
-            operator,
-            value: parseFloat(value),
-          },
-          action,
+          condition:
+            ruleType === "range"
+              ? { type: "always" }
+              : {
+                  type: "temperature",
+                  sensor,
+                  cmp: operator === "below" ? "<" : ">",
+                  value: parseFloat(value),
+                },
+          action:
+            ruleType === "range"
+              ? {
+                  type: "temperature_band",
+                  sensor,
+                  min: parseFloat(minValue),
+                  max: parseFloat(maxValue),
+                  min_inclusive: minInclusive,
+                  max_inclusive: maxInclusive,
+                  on_state: "on",
+                  else_state: "off",
+                }
+              : {
+                  type: "set_state",
+                  state: actionState,
+                },
           priority: parseInt(priority),
           cooldown_seconds: parseInt(cooldown),
           is_enabled: isEnabled,
@@ -787,10 +913,19 @@ function RuleDialog({
       toast.error("Rule name is required");
       return;
     }
-    const val = parseFloat(value);
-    if (isNaN(val) || val < -30 || val > 60) {
-      toast.error("Temperature value must be between -30 and 60");
-      return;
+    if (ruleType === "threshold") {
+      const val = parseFloat(value);
+      if (isNaN(val) || val < -30 || val > 60) {
+        toast.error("Temperature value must be between -30 and 60");
+        return;
+      }
+    } else {
+      const minVal = parseFloat(minValue);
+      const maxVal = parseFloat(maxValue);
+      if (isNaN(minVal) || isNaN(maxVal) || minVal < -30 || maxVal > 60 || minVal >= maxVal) {
+        toast.error("Range must be between -30 and 60 and min < max");
+        return;
+      }
     }
     const cd = parseInt(cooldown);
     if (isNaN(cd) || cd < 5) {
@@ -819,6 +954,19 @@ function RuleDialog({
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g., Low Temperature Alert" />
           </div>
 
+          <div className="space-y-2">
+            <Label>Rule Type</Label>
+            <Select value={ruleType} onValueChange={(v) => setRuleType(v as "threshold" | "range")}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="threshold">Single threshold</SelectItem>
+                <SelectItem value="range">Temperature range</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Sensor</Label>
@@ -833,44 +981,105 @@ function RuleDialog({
               </Select>
             </div>
 
+            {ruleType === "threshold" ? (
+              <>
+                <div className="space-y-2">
+                  <Label>Operator</Label>
+                  <Select value={operator} onValueChange={(v) => setOperator(v as "below" | "above")}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="below">Below</SelectItem>
+                      <SelectItem value="above">Above</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Temperature (°C)</Label>
+                  <Input
+                    type="number"
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    min="-30"
+                    max="60"
+                    step="0.1"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label>Min Temp (°C)</Label>
+                  <Input
+                    type="number"
+                    value={minValue}
+                    onChange={(e) => setMinValue(e.target.value)}
+                    min="-30"
+                    max="60"
+                    step="0.1"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Max Temp (°C)</Label>
+                  <Input
+                    type="number"
+                    value={maxValue}
+                    onChange={(e) => setMaxValue(e.target.value)}
+                    min="-30"
+                    max="60"
+                    step="0.1"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+
+          {ruleType === "range" && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Min Inclusive</Label>
+                <Select value={minInclusive ? "true" : "false"} onValueChange={(v) => setMinInclusive(v === "true")}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="true">Inclusive</SelectItem>
+                    <SelectItem value="false">Exclusive</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Max Inclusive</Label>
+                <Select value={maxInclusive ? "true" : "false"} onValueChange={(v) => setMaxInclusive(v === "true")}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="false">Exclusive</SelectItem>
+                    <SelectItem value="true">Inclusive</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
+          {ruleType === "threshold" && (
             <div className="space-y-2">
-              <Label>Operator</Label>
-              <Select value={operator} onValueChange={(v) => setOperator(v as "below" | "above")}>
+              <Label>Action</Label>
+              <Select value={actionState} onValueChange={(v) => setActionState(v as "on" | "off")}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="below">Below</SelectItem>
-                  <SelectItem value="above">Above</SelectItem>
+                  <SelectItem value="on">Turn Heater ON</SelectItem>
+                  <SelectItem value="off">Turn Heater OFF</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-
-            <div className="space-y-2">
-              <Label>Temperature (°C)</Label>
-              <Input
-                type="number"
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                min="-30"
-                max="60"
-                step="0.1"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label>Action</Label>
-            <Select value={action} onValueChange={(v) => setAction(v as "turn_on" | "turn_off")}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="turn_on">Turn Heater ON</SelectItem>
-                <SelectItem value="turn_off">Turn Heater OFF</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
