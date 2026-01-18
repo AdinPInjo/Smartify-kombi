@@ -10,10 +10,57 @@ from collections import deque
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
-# Database path (must be defined before any router init)
+# =========================
+# Configuration / Settings
+# =========================
+# All module-level constants defined here to prevent NameError on import.
+# Override via environment variables as needed.
+
+# Paths
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "smartify" / "data" / "smartify.db"
 DB_PATH = os.getenv("SMARTIFY_DB_PATH", str(DEFAULT_DB_PATH))
+DATA_DIR = REPO_ROOT / "smartify" / "data"
+STATIC_DIR = REPO_ROOT / "smartify-ui" / "dist"
+
+# Authentication & Security
+SMARTIFY_USERNAME = os.getenv("SMARTIFY_USERNAME", "admin")
+SMARTIFY_PASSWORD = os.getenv("SMARTIFY_PASSWORD", "changeme")
+SMARTIFY_API_KEY = os.getenv("SMARTIFY_API_KEY", "")
+SMARTIFY_REQUIRE_AUTH = os.getenv("SMARTIFY_REQUIRE_AUTH", "1") in ("1", "true", "yes", "on")
+SMARTIFY_TRUST_LOCALHOST = os.getenv("SMARTIFY_TRUST_LOCALHOST", "1") in ("1", "true", "yes", "on")
+SMARTIFY_SECRET = os.getenv("SMARTIFY_SECRET", "change-this-secret-in-production")
+
+# GPS configuration
+GPS_ENABLED = os.getenv("GPS_ENABLED", "0") in ("1", "true", "yes", "on")
+GPS_DEVICE = os.getenv("GPS_DEVICE", "/dev/serial0")
+GPS_BAUD = int(os.getenv("GPS_BAUD", "9600"))
+
+# DHT22 temperature/humidity sensor pins
+DHT22_PINS_STR = os.getenv("DHT22_PINS", "")
+if DHT22_PINS_STR.strip():
+    DHT22_PINS = [int(p.strip()) for p in DHT22_PINS_STR.split(",") if p.strip().isdigit()]
+else:
+    DHT22_PINS = []  # No DHT22 sensors configured
+
+# Sensor polling interval
+SENSOR_LOG_INTERVAL = int(os.getenv("SENSOR_LOG_INTERVAL", "30"))
+
+# Legacy header relay (single relay control)
+HEADER_RELAY_NAME = os.getenv("HEADER_RELAY_NAME", "header")
+HEADER_RELAY_PIN = int(os.getenv("HEADER_RELAY_PIN", "0"))
+
+# Thread-safety lock for relay operations
+_relay_lock = threading.Lock()
+
+# Rule evaluator thread handle (set during startup)
+_rule_evaluator_thread: Optional[threading.Thread] = None
+
+# Startup log
+print(f"[Config] DB_PATH={DB_PATH}")
+print(f"[Config] GPS_ENABLED={GPS_ENABLED}, GPS_DEVICE={GPS_DEVICE if GPS_ENABLED else 'N/A'}")
+print(f"[Config] DHT22_PINS={DHT22_PINS}")
+print(f"[Config] SMARTIFY_REQUIRE_AUTH={SMARTIFY_REQUIRE_AUTH}")
 
 from fastapi import FastAPI, Request, Form, Header, Body
 from fastapi.responses import JSONResponse, FileResponse
@@ -23,6 +70,14 @@ from starlette.middleware.sessions import SessionMiddleware
 
 # FastAPI app must exist before any router init calls.
 app = FastAPI()
+app.add_middleware(SessionMiddleware, secret_key=SMARTIFY_SECRET)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Water level module
 from smartify.water_level import api as water_level_api, service as water_level_service
@@ -225,7 +280,80 @@ def _safe_dict_from_row(row: Any, context: str = "unknown") -> Optional[dict]:
         if isinstance(row, (list, tuple)) and row:
             print(f"[DB] CRITICAL:   first 5 items: {[repr(x)[:50] for x in row[:5]]}")
         return None
-    return operator_aliases.get(str(operator).strip().lower())
+
+
+def _normalize_operator(operator: str) -> str:
+    """Normalize comparison operator aliases to standard form."""
+    operator_aliases = {
+        "above": ">",
+        "below": "<",
+        "greater": ">",
+        "less": "<",
+        "eq": "==",
+        "equals": "==",
+        "gte": ">=",
+        "lte": "<=",
+        "gt": ">",
+        "lt": "<",
+    }
+    return operator_aliases.get(str(operator).strip().lower(), str(operator).strip())
+
+
+def apply_relay_hardware(relay_id: str, state: str) -> Dict[str, Any]:
+    """
+    Apply relay hardware command using pinctrl.
+    Returns: {"ok": bool, "message": str}
+    """
+    try:
+        # Get relay device info
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM relay_devices WHERE id = ?", (relay_id,))
+        row = cur.fetchone()
+        conn.close()
+        
+        if not row:
+            return {"ok": False, "message": f"Relay {relay_id} not found"}
+        
+        device = dict(row)
+        pin = device.get("pin")
+        active_low = bool(device.get("active_low", False))
+        
+        if pin is None:
+            return {"ok": False, "message": "Pin not configured"}
+        
+        return apply_relay_hardware_direct(pin, state, active_low)
+    except Exception as e:
+        return {"ok": False, "message": f"Hardware error: {e}"}
+
+
+def apply_relay_hardware_direct(pin: int, state: str, active_low: bool = False) -> Dict[str, Any]:
+    """
+    Apply relay command directly to GPIO pin using pinctrl.
+    Returns: {"ok": bool, "message": str}
+    """
+    try:
+        # Determine physical pin state based on active_low
+        if active_low:
+            physical_state = "dl" if state == "on" else "dh"
+        else:
+            physical_state = "dh" if state == "on" else "dl"
+        
+        # Execute pinctrl command
+        cmd = ["pinctrl", "set", str(pin), physical_state]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        
+        if result.returncode == 0:
+            return {"ok": True, "message": f"Pin {pin} set to {physical_state}"}
+        else:
+            return {"ok": False, "message": f"pinctrl failed: {result.stderr}"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "message": "pinctrl timeout"}
+    except FileNotFoundError:
+        return {"ok": False, "message": "pinctrl command not found"}
+    except Exception as e:
+        return {"ok": False, "message": f"Hardware error: {e}"}
 
 
 def _normalize_condition_schema(condition: Any) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
@@ -3809,6 +3937,10 @@ def api_relay_header_post(
 # =========================
 # Frontend routes
 # =========================
+
+# Mount static assets if they exist
+if (STATIC_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 
 def frontend_ready() -> bool:
     return (STATIC_DIR / "index.html").exists()
