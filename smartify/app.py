@@ -2269,6 +2269,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             return {
                 "can_evaluate": False,
                 "matched": False,
+                "condition_matched": False,
+                "can_trigger": False,
                 "reason_code": "error",
                 "message": "Rule error: invalid rule format (not a dict)",
                 "sensor_name": None,
@@ -2285,6 +2287,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
         return {
             "can_evaluate": False,
             "matched": False,
+            "condition_matched": False,
+            "can_trigger": False,
             "reason_code": "disabled",
             "message": "Rule disabled",
             "sensor_name": None,
@@ -2310,6 +2314,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
                 return {
                     "can_evaluate": False,
                     "matched": False,
+                    "condition_matched": False,
+                    "can_trigger": False,
                     "reason_code": "parse_error",
                     "message": "Rule error: condition missing",
                     "sensor_name": None,
@@ -2324,6 +2330,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             return {
                 "can_evaluate": False,
                 "matched": False,
+                "condition_matched": False,
+                "can_trigger": False,
                 "reason_code": "parse_error",
                 "message": "Rule error: condition missing",
                 "sensor_name": None,
@@ -2338,6 +2346,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
         return {
             "can_evaluate": False,
             "matched": False,
+            "condition_matched": False,
+            "can_trigger": False,
             "reason_code": "parse_error",
             "message": f"Rule error: invalid condition JSON ({str(e)})",
             "sensor_name": None,
@@ -2353,6 +2363,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
         return {
             "can_evaluate": False,
             "matched": False,
+            "condition_matched": False,
+            "can_trigger": False,
             "reason_code": "parse_error",
             "message": "Rule error: invalid condition format",
             "sensor_name": None,
@@ -2384,7 +2396,7 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             # Best-effort only; cooldown status should still render
             pass
 
-    # Check cooldown first (even if condition is met, cooldown blocks execution)
+    # Compute cooldown but do not block condition matching
     last_triggered = rule.get("last_triggered_at")
     cooldown_seconds = rule.get("cooldown_seconds", 60)
     cooldown_remaining = 0
@@ -2392,19 +2404,6 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
         age = now - last_triggered
         if age < cooldown_seconds:
             cooldown_remaining = cooldown_seconds - age
-            return {
-                "can_evaluate": True,
-                "matched": False,
-                "reason_code": "cooldown",
-                "message": f"Cooldown… {cooldown_remaining}s",
-                "sensor_name": sensor_name,
-                "snapshot_temp": snapshot_temp,
-                "threshold": threshold,
-                "operator": normalized_operator or operator_raw,
-                "age_seconds": age_seconds,
-                "sample_count": sample_count,
-                "cooldown_remaining": cooldown_remaining
-            }
     
     # Evaluate condition
     if condition_type == "temperature":
@@ -2413,6 +2412,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             return {
                 "can_evaluate": False,
                 "matched": False,
+                "condition_matched": False,
+                "can_trigger": False,
                 "reason_code": "error",
                 "message": "Rule error: sensor missing",
                 "sensor_name": None,
@@ -2430,6 +2431,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             return {
                 "can_evaluate": False,
                 "matched": False,
+                "condition_matched": False,
+                "can_trigger": False,
                 "reason_code": "error",
                 "message": "Rule error: no sensor data",
                 "sensor_name": sensor_name,
@@ -2455,6 +2458,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             return {
                 "can_evaluate": True,
                 "matched": False,
+                "condition_matched": False,
+                "can_trigger": False,
                 "reason_code": "sensor_warming_up",
                 "message": f"Waiting for temperature snapshot… {sample_count}/6",
                 "sensor_name": sensor_name,
@@ -2472,6 +2477,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             return {
                 "can_evaluate": True,
                 "matched": False,
+                "condition_matched": False,
+                "can_trigger": False,
                 "reason_code": "sensor_stale",
                 "message": f"Sensor stale ({age_min} min). Forced OFF.",
                 "sensor_name": sensor_name,
@@ -2488,6 +2495,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             return {
                 "can_evaluate": False,
                 "matched": False,
+                "condition_matched": False,
+                "can_trigger": False,
                 "reason_code": "error",
                 "message": "Rule error: no temperature value",
                 "sensor_name": sensor_name,
@@ -2512,6 +2521,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             return {
                 "can_evaluate": False,
                 "matched": False,
+                "condition_matched": False,
+                "can_trigger": False,
                 "reason_code": "error",
                 "message": "Rule error: invalid operator",
                 "sensor_name": sensor_name,
@@ -2524,9 +2535,27 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             }
         
         if condition_met:
+            if cooldown_remaining > 0:
+                return {
+                    "can_evaluate": True,
+                    "matched": True,
+                    "condition_matched": True,
+                    "can_trigger": False,
+                    "reason_code": "cooldown",
+                    "message": f"Cooldown… {cooldown_remaining}s",
+                    "sensor_name": sensor_name,
+                    "snapshot_temp": snapshot_temp,
+                    "threshold": threshold,
+                    "operator": operator,
+                    "age_seconds": age_seconds,
+                    "sample_count": sample_count,
+                    "cooldown_remaining": cooldown_remaining
+                }
             return {
                 "can_evaluate": True,
                 "matched": True,
+                "condition_matched": True,
+                "can_trigger": True,
                 "reason_code": "ok",
                 "message": "Temperature acquired — condition met",
                 "sensor_name": sensor_name,
@@ -2541,6 +2570,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
             return {
                 "can_evaluate": True,
                 "matched": False,
+                "condition_matched": False,
+                "can_trigger": False,
                 "reason_code": "ok",
                 "message": "Temperature acquired — condition not met",
                 "sensor_name": sensor_name,
@@ -2556,6 +2587,8 @@ def evaluate_single_rule(rule: Dict[str, Any], relay_id: str) -> Dict[str, Any]:
         return {
             "can_evaluate": True,
             "matched": False,
+            "condition_matched": False,
+            "can_trigger": False,
             "reason_code": "ok",
             "message": "Rule active",
             "sensor_name": None,
@@ -2584,6 +2617,7 @@ def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, cu
         return ("off", None, True, "no_rules")  # No enabled rules -> default to off
     
     candidates = []
+    blocked_by_cooldown = False
     for rule in enabled_rules:
         # Safety: Ensure rule is a dict
         if not isinstance(rule, dict):
@@ -2607,11 +2641,20 @@ def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, cu
             print(f"[Rule Engine] Sensor issue for rule '{rule.get('name')}': {message}")
             return ("off", None, False, "sensor_no_data")
         
-        if not runtime_status.get("matched"):
+        condition_matched = runtime_status.get("condition_matched")
+        if condition_matched is None:
+            condition_matched = bool(runtime_status.get("matched", False))
+        can_trigger = runtime_status.get("can_trigger")
+        if can_trigger is None:
+            cooldown_remaining = int(runtime_status.get("cooldown_remaining", 0) or 0)
+            can_trigger = condition_matched and cooldown_remaining == 0
+        
+        if not condition_matched:
             continue
         
-        cooldown_remaining = int(runtime_status.get("cooldown_remaining", 0) or 0)
-        if cooldown_remaining > 0:
+        if not can_trigger:
+            if reason_code == "cooldown":
+                blocked_by_cooldown = True
             continue
         
         action = rule.get("action", "")
@@ -2621,6 +2664,9 @@ def evaluate_rules(relay_id: str, temp_data: Optional[Dict[str, Any]] = None, cu
         candidates.append((rule, runtime_status))
     
     if not candidates:
+        if blocked_by_cooldown:
+            hold_state = current_state if current_state in ("on", "off") else "off"
+            return (hold_state, None, True, "hold_due_to_cooldown")
         return ("off", None, True, "no_match")
     
     def _candidate_sort_key(candidate: Tuple[Dict[str, Any], Dict[str, Any]]) -> Tuple[int, int, int, str]:
