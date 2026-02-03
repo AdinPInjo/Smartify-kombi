@@ -353,8 +353,8 @@ def apply_relay_hardware_direct(pin: int, state: str, active_low: bool = False) 
         else:
             physical_state = "dh" if state == "on" else "dl"
         
-        # Execute pinctrl command
-        cmd = ["pinctrl", "set", str(pin), physical_state]
+        # Execute pinctrl command (ensure pin is configured as output)
+        cmd = ["pinctrl", "set", str(pin), "op", physical_state]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
         
         if result.returncode == 0:
@@ -2504,6 +2504,18 @@ def api_relay_get(relay_id: str, request: Request, x_api_key: Optional[str] = He
         
         # Get pending state info
         pending_info = _get_relay_pending_state(relay_id)
+        if not bool(relay.get("is_enabled", True)):
+            pending_info = {
+                "pending": False,
+                "pending_reason": "not_connected",
+                "pending_message": "Not connected yet",
+                "cooldown_remaining": None,
+                "sensor_age_seconds": None,
+                "sensor_sample_count": None,
+                "sensor_is_ready": None,
+                "sensor_is_stale": None,
+                "source": "system",
+            }
         
         # Determine hardware state with fallback chain
         if state:

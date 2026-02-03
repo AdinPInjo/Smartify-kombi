@@ -46,6 +46,18 @@ def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=
             
             # Get pending state info for each relay
             pending_info = _get_relay_pending_state(relay_id)
+            if not bool(relay.get("is_enabled", True)):
+                pending_info = {
+                    "pending": False,
+                    "pending_reason": "not_connected",
+                    "pending_message": "Not connected yet",
+                    "cooldown_remaining": None,
+                    "sensor_age_seconds": None,
+                    "sensor_sample_count": None,
+                    "sensor_is_ready": None,
+                    "sensor_is_stale": None,
+                    "source": "system",
+                }
             
             result.append({
                 "id": relay_id,
