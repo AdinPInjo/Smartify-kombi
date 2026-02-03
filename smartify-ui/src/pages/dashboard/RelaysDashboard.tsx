@@ -30,10 +30,13 @@ type Relay = {
   name: string;
   pin: number;
   state: "on" | "off";
-  mode: "auto" | "manual";
+  mode: "auto" | "on" | "off";
+  desired_state?: "on" | "off" | null;
   manual_until: number | null;
   updated_at: number | null;
   is_enabled: boolean;
+  min_on_seconds?: number;
+  min_off_seconds?: number;
   pending?: boolean;
   pending_reason?: string;
   pending_message?: string;
@@ -64,12 +67,17 @@ type Rule = {
     condition_matched?: boolean;
     can_trigger?: boolean;
     is_winner?: boolean;
-    reason_code?: "ok" | "sensor_warming_up" | "sensor_stale" | "cooldown" | "disabled" | "parse_error" | "error";
+    reason_code?: "ok" | "sensor_warming_up" | "sensor_stale" | "cooldown" | "disabled" | "parse_error" | "error" | "sensor_no_temp" | "sensor_no_humidity";
     message?: string;
     sensor_name?: string | null;
     snapshot_temp?: number | null;
+    snapshot_humidity?: number | null;
     threshold?: number | null;
     operator?: string | null;
+    min?: number | null;
+    max?: number | null;
+    min_inclusive?: boolean | null;
+    max_inclusive?: boolean | null;
     age_seconds?: number | null;
     sample_count?: number;
     cooldown_remaining?: number | null;
@@ -82,6 +90,8 @@ function RelaysDashboard() {
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
   const [isRuleDialogOpen, setIsRuleDialogOpen] = useState(false);
   const [selectedRelayId, setSelectedRelayId] = useState<string | null>(null);
+  const [editingRelayId, setEditingRelayId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   // Fetch all relays
   const { data: relaysResponse, isLoading: isLoadingRelays, error: relaysError } = useQuery({
@@ -159,60 +169,54 @@ function RelaysDashboard() {
 
   const rules = rulesResponse?.rules || [];
 
-  // Mutation to toggle relay state
-  // NEVER optimistically update - always wait for backend confirmation
-  const toggleRelayMutation = useMutation({
-    mutationFn: async ({ relayId, state }: { relayId: string; state: "on" | "off" }) => {
-      // Send logical state (user intent) - backend will handle hardware inversion
-      const r = await apiFetch(`/api/relays/${relayId}/state`, {
+  const setModeMutation = useMutation({
+    mutationFn: async ({ relayId, mode }: { relayId: string; mode: "off" | "on" | "auto" }) => {
+      const r = await apiFetch(`/api/relays/${relayId}/mode`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state: state, mode: "manual" }),
+        body: JSON.stringify({ mode }),
         cache: "no-store",
       });
-      
-      // Backend always returns 200, but may have ok: false for pending state
       const result = await r.json();
       if (!result.ok) {
-        throw new Error(result.message || "Failed to set relay state");
+        throw new Error(result.message || "Failed to set relay mode");
       }
-      
-      // Refetch to get updated state (never update UI optimistically)
       await queryClient.invalidateQueries({ queryKey: ["relays"] });
       return result;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["relays"] });
-      toast.success("Relay state updated");
     },
     onError: (error) => {
-      toast.error("Failed to update relay", {
+      toast.error("Failed to update relay mode", {
         description: error instanceof Error ? error.message : "Unknown error",
       });
-      // Refetch to get current state from backend
       queryClient.invalidateQueries({ queryKey: ["relays"] });
     },
   });
 
-  // Mutation to set auto mode
-  const setAutoMutation = useMutation({
-    mutationFn: async (relayId: string) => {
-      const r = await apiFetch(`/api/relays/${relayId}/auto`, {
-        method: "POST",
+  const renameRelayMutation = useMutation({
+    mutationFn: async ({ relayId, name }: { relayId: string; name: string }) => {
+      const r = await apiFetch(`/api/relays/${relayId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
         cache: "no-store",
       });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ error: "unknown" }));
-        throw new Error(err.message || `Failed to set auto: ${r.status}`);
+      const result = await r.json();
+      if (!result.ok) {
+        throw new Error(result.message || "Failed to rename relay");
       }
-      return await r.json();
+      await queryClient.invalidateQueries({ queryKey: ["relays"] });
+      return result;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["relays"] });
-      toast.success("Returned to auto mode");
+      toast.success("Relay renamed");
+      setEditingRelayId(null);
     },
     onError: (error) => {
-      toast.error("Failed to set auto mode", {
+      toast.error("Failed to rename relay", {
         description: error instanceof Error ? error.message : "Unknown error",
       });
     },
@@ -274,15 +278,25 @@ function RelaysDashboard() {
     }
     if (cond.type === "temperature") {
       const sensor = cond.sensor || "sensor";
-      if (cond.between) {
-        const min = cond.between.min;
-        const max = cond.between.max;
-        const minSym = cond.between.min_inclusive === false ? ">" : "≥";
-        const maxSym = cond.between.max_inclusive === true ? "≤" : "<";
-        return `${sensor} ${minSym} ${min}°C AND ${sensor} ${maxSym} ${max}°C`;
-      }
       const cmp = cond.cmp || cond.operator || "?";
       return `${sensor} ${cmp} ${cond.value}°C`;
+    }
+    if (cond.type === "temperature_between") {
+      const sensor = cond.sensor || "sensor";
+      const minSym = cond.min_inclusive === false ? ">" : "≥";
+      const maxSym = cond.max_inclusive === true ? "≤" : "<";
+      return `${sensor} ${minSym} ${cond.min}°C AND ${sensor} ${maxSym} ${cond.max}°C`;
+    }
+    if (cond.type === "humidity") {
+      const sensor = cond.sensor || "sensor";
+      const cmp = cond.cmp || cond.operator || "?";
+      return `${sensor} ${cmp} ${cond.value}%`;
+    }
+    if (cond.type === "humidity_between") {
+      const sensor = cond.sensor || "sensor";
+      const minSym = cond.min_inclusive === false ? ">" : "≥";
+      const maxSym = cond.max_inclusive === true ? "≤" : "<";
+      return `${sensor} ${minSym} ${cond.min}% AND ${sensor} ${maxSym} ${cond.max}%`;
     }
     if (cond.type === "always") {
       return "always";
@@ -321,7 +335,7 @@ function RelaysDashboard() {
     return `${Math.floor(seconds / 86400)}d ago`;
   };
 
-  const handleRelayToggle = (relay: Relay, checked: boolean) => {
+  const handleRelayMode = (relay: Relay, mode: "off" | "on" | "auto") => {
     // Guard: prevent undefined relay_id calls
     if (!relay?.id || relay.id === "undefined" || relay.id === "null") {
       toast.error("Relay ID missing", {
@@ -329,8 +343,7 @@ function RelaysDashboard() {
       });
       return;
     }
-    const newState: "on" | "off" = checked ? "on" : "off";
-    toggleRelayMutation.mutate({ relayId: relay.id, state: newState });
+    setModeMutation.mutate({ relayId: relay.id, mode });
   };
 
   const handleAddRule = (relayId: string) => {
@@ -431,8 +444,8 @@ function RelaysDashboard() {
 
       {/* Relays */}
         {relays.map((relay) => {
-        const isOn = relay.state === "on"; // Logical state: "on" means relay should be ON
-        const isManual = relay.mode === "manual";
+        const isOn = relay.state === "on";
+        const isAuto = relay.mode === "auto";
         const relayRules = rules.filter((r) => r.relay_id === relay.id);
         
         // Use pending state from API response (backend calculates cooldown/reconciling/startup)
@@ -450,7 +463,43 @@ function RelaysDashboard() {
                 <div className="flex items-center justify-between mb-3">
                   <CardTitle className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
                     <Power className="h-5 w-5 text-orange-400" />
-                    {relay.name.charAt(0).toUpperCase() + relay.name.slice(1)}
+                    {editingRelayId === relay.id ? (
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          className="h-8"
+                        />
+                        <Button
+                          size="sm"
+                          onClick={() => renameRelayMutation.mutate({ relayId: relay.id, name: renameValue.trim() })}
+                          disabled={renameRelayMutation.isPending || !renameValue.trim()}
+                        >
+                          Save
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setEditingRelayId(null)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        {relay.name.charAt(0).toUpperCase() + relay.name.slice(1)}
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => {
+                            setEditingRelayId(relay.id);
+                            setRenameValue(relay.name);
+                          }}
+                        >
+                          <Edit2 className="h-4 w-4" />
+                        </Button>
+                      </>
+                    )}
                   </CardTitle>
                   {/* Status badge (top-right) - simplified, no cooldown/warming (shown per-rule) */}
                   <div className="flex items-center gap-2 text-xs max-w-[60%] text-right flex-shrink-0">
@@ -461,10 +510,10 @@ function RelaysDashboard() {
                       </div>
                     ) : (
                       <span className="text-zinc-500">
-                        {isManual ? (
-                          <>MANUAL: {isOn ? "ON" : "OFF"}</>
-                        ) : (
+                        {isAuto ? (
                           <>AUTO: monitoring {relayRules.length > 0 ? `${relayRules.length} rule${relayRules.length !== 1 ? "s" : ""}` : "no rules"}</>
+                        ) : (
+                          <>MANUAL: {relay.mode.toUpperCase()}</>
                         )}
                       </span>
                     )}
@@ -473,84 +522,66 @@ function RelaysDashboard() {
                 {/* Controls row: Mode badge + State + Toggle */}
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                    {isManual ? (
-                      <span className="text-xs px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">
-                        Manual
-                      </span>
-                    ) : (
-                      <span className="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                        Auto
-                      </span>
-                    )}
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded border ${
+                        isAuto
+                          ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                          : "bg-orange-500/10 text-orange-400 border-orange-500/20"
+                      }`}
+                    >
+                      {relay.mode.toUpperCase()}
+                    </span>
                     <span className={`text-xs ${isOn ? "text-emerald-400" : "text-zinc-400"}`}>
                       {isOn ? "ON" : "OFF"}
                     </span>
                   </div>
-                  <div className="flex items-center gap-3">
-                  <Button
-                    size="sm"
-                    variant={isManual ? "default" : "outline"}
-                    className={
-                      isManual
-                        ? "bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/50 text-orange-300"
-                        : "bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-300"
-                    }
-                    onClick={() => {
-                      // Guard: prevent undefined relay_id calls
-                      if (!relay?.id || relay.id === "undefined" || relay.id === "null") {
-                        toast.error("Relay ID missing", {
-                          description: "Relay data not loaded yet. Please wait and try again.",
-                        });
-                        return;
-                      }
-                      // Never allow mode change when pending
-                      if (isPending) return;
-                      if (isManual) {
-                        // Return to auto mode
-                        setAutoMutation.mutate(relay.id);
-                      } else {
-                        // Switch to manual mode - toggle current state to force manual mode
-                        const newState = isOn ? "off" : "on";
-                        toggleRelayMutation.mutate({ relayId: relay.id, state: newState });
-                      }
-                    }}
-                    disabled={setAutoMutation.isPending || toggleRelayMutation.isPending || isPending}
-                    title={isManual ? "Click to return to Auto mode" : "Click to switch to Manual mode"}
-                  >
-                    {isManual ? "Manual" : "Auto"}
-                  </Button>
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="flex items-center gap-2">
-                          {isPending && !toggleRelayMutation.isPending && (
-                            <div className="h-3 w-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin opacity-50" />
-                          )}
-                          <Switch
-                            checked={isOn}
-                            onCheckedChange={(checked) => {
-                              // Never allow toggle when pending - backend will reject anyway
-                              if (isPending) return;
-                              handleRelayToggle(relay, checked);
-                            }}
-                            disabled={toggleRelayMutation.isPending || isPending}
-                            className="data-[state=checked]:bg-orange-500 data-[state=unchecked]:bg-zinc-700"
-                          />
-                        </div>
-                      </TooltipTrigger>
-                      {isPending && (
-                        <TooltipContent>
-                          <p className="text-sm font-medium">
-                            {relay.pending_message || "Relay is reconciling state"}
-                          </p>
-                          <p className="text-xs text-zinc-400 mt-1">
-                            Manual control is disabled during this period.
-                          </p>
-                        </TooltipContent>
-                      )}
-                    </Tooltip>
-                  </TooltipProvider>
-                </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant={relay.mode === "off" ? "default" : "outline"}
+                      onClick={() => !isPending && handleRelayMode(relay, "off")}
+                      disabled={setModeMutation.isPending || isPending}
+                    >
+                      OFF
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={relay.mode === "auto" ? "default" : "outline"}
+                      onClick={() => !isPending && handleRelayMode(relay, "auto")}
+                      disabled={setModeMutation.isPending || isPending}
+                    >
+                      AUTO
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={relay.mode === "on" ? "default" : "outline"}
+                      onClick={() => !isPending && handleRelayMode(relay, "on")}
+                      disabled={setModeMutation.isPending || isPending}
+                    >
+                      ON
+                    </Button>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex items-center gap-2">
+                            {isPending && (
+                              <div className="h-3 w-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin opacity-50" />
+                            )}
+                          </div>
+                        </TooltipTrigger>
+                        {isPending && (
+                          <TooltipContent>
+                            <p className="text-sm font-medium">
+                              {relay.pending_message || "Relay is reconciling state"}
+                            </p>
+                            <p className="text-xs text-zinc-400 mt-1">
+                              Controls are disabled during this period.
+                            </p>
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                     </div>
             </CardHeader>
             <CardContent className="space-y-4 relative z-10">
@@ -592,6 +623,11 @@ function RelaysDashboard() {
                               ) : (
                                 <span className="text-xs px-2 py-0.5 rounded bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
                                   Disabled
+                                </span>
+                              )}
+                              {rule.runtime_status?.is_winner && (
+                                <span className="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                  Winner
                                 </span>
                               )}
                               <span className="text-xs text-zinc-500">Priority: {rule.priority}</span>
@@ -721,27 +757,33 @@ function RuleDialog({
       ? (rule.action.state as "on" | "off")
       : "on"
   );
-  const [ruleType, setRuleType] = useState<"threshold" | "range">(
-    typeof rule?.action === "object" && rule?.action?.type === "temperature_band" ? "range" : "threshold"
+  const [ruleType, setRuleType] = useState<"temp_threshold" | "temp_range" | "humidity_threshold" | "humidity_range">(
+    typeof rule?.condition === "object" && rule?.condition?.type === "humidity_between"
+      ? "humidity_range"
+      : typeof rule?.condition === "object" && rule?.condition?.type === "humidity"
+      ? "humidity_threshold"
+      : typeof rule?.condition === "object" && rule?.condition?.type === "temperature_between"
+      ? "temp_range"
+      : "temp_threshold"
   );
   const [minValue, setMinValue] = useState(
-    typeof rule?.action === "object" && rule?.action?.type === "temperature_band"
-      ? rule.action.min?.toString() || "5"
+    typeof rule?.condition === "object" && (rule?.condition?.type === "temperature_between" || rule?.condition?.type === "humidity_between")
+      ? rule.condition.min?.toString() || "5"
       : "5"
   );
   const [maxValue, setMaxValue] = useState(
-    typeof rule?.action === "object" && rule?.action?.type === "temperature_band"
-      ? rule.action.max?.toString() || "20"
+    typeof rule?.condition === "object" && (rule?.condition?.type === "temperature_between" || rule?.condition?.type === "humidity_between")
+      ? rule.condition.max?.toString() || "20"
       : "20"
   );
   const [minInclusive, setMinInclusive] = useState(
-    typeof rule?.action === "object" && rule?.action?.type === "temperature_band"
-      ? rule.action.min_inclusive !== false
+    typeof rule?.condition === "object" && (rule?.condition?.type === "temperature_between" || rule?.condition?.type === "humidity_between")
+      ? rule.condition.min_inclusive !== false
       : true
   );
   const [maxInclusive, setMaxInclusive] = useState(
-    typeof rule?.action === "object" && rule?.action?.type === "temperature_band"
-      ? rule.action.max_inclusive === true
+    typeof rule?.condition === "object" && (rule?.condition?.type === "temperature_between" || rule?.condition?.type === "humidity_between")
+      ? rule.condition.max_inclusive === true
       : false
   );
   const [priority, setPriority] = useState(rule?.priority?.toString() || "100");
@@ -755,14 +797,20 @@ function RuleDialog({
       setSensor(rule.condition?.sensor || "kombi");
       setOperator((rule.condition?.cmp === ">" || rule.condition?.operator === "above") ? "above" : "below");
       setValue(rule.condition?.value?.toString() || "5");
-      if (typeof rule.action === "object" && rule.action?.type === "temperature_band") {
-        setRuleType("range");
-        setMinValue(rule.action.min?.toString() || "5");
-        setMaxValue(rule.action.max?.toString() || "20");
-        setMinInclusive(rule.action.min_inclusive !== false);
-        setMaxInclusive(rule.action.max_inclusive === true);
+      if (rule.condition?.type === "humidity_between") {
+        setRuleType("humidity_range");
+      } else if (rule.condition?.type === "humidity") {
+        setRuleType("humidity_threshold");
+      } else if (rule.condition?.type === "temperature_between") {
+        setRuleType("temp_range");
       } else {
-        setRuleType("threshold");
+        setRuleType("temp_threshold");
+      }
+      if (rule.condition?.type === "temperature_between" || rule.condition?.type === "humidity_between") {
+        setMinValue(rule.condition.min?.toString() || "5");
+        setMaxValue(rule.condition.max?.toString() || "20");
+        setMinInclusive(rule.condition.min_inclusive !== false);
+        setMaxInclusive(rule.condition.max_inclusive === true);
       }
       if (typeof rule.action === "object" && rule.action?.type === "set_state") {
         setActionState(rule.action.state === "off" ? "off" : "on");
@@ -781,7 +829,7 @@ function RuleDialog({
       setOperator("below");
       setValue("5");
       setActionState("on");
-      setRuleType("threshold");
+      setRuleType("temp_threshold");
       setMinValue("5");
       setMaxValue("20");
       setMinInclusive(true);
@@ -794,39 +842,40 @@ function RuleDialog({
 
   const createRuleMutation = useMutation({
     mutationFn: async () => {
-      const endpoint =
-        ruleType === "range"
-          ? `/api/relays/${relayId}/rules/temperature-band`
-          : `/api/relays/${relayId}/rules`;
-      const payload =
-        ruleType === "range"
-          ? {
-              name,
+      const isRange = ruleType === "temp_range" || ruleType === "humidity_range";
+      const isHumidity = ruleType === "humidity_range" || ruleType === "humidity_threshold";
+      const endpoint = isRange
+        ? `/api/relays/${relayId}/rules/${isHumidity ? "humidity-band" : "temperature-band"}`
+        : `/api/relays/${relayId}/rules`;
+      const payload = isRange
+        ? {
+            name,
+            sensor,
+            min: parseFloat(minValue),
+            max: parseFloat(maxValue),
+            min_inclusive: minInclusive,
+            max_inclusive: maxInclusive,
+            on_state: actionState,
+            priority: parseInt(priority),
+            cooldown_seconds: parseInt(cooldown),
+            is_enabled: isEnabled,
+          }
+        : {
+            name,
+            condition: {
+              type: isHumidity ? "humidity" : "temperature",
               sensor,
-              min: parseFloat(minValue),
-              max: parseFloat(maxValue),
-              min_inclusive: minInclusive,
-              max_inclusive: maxInclusive,
-              priority: parseInt(priority),
-              cooldown_seconds: parseInt(cooldown),
-              is_enabled: isEnabled,
-            }
-          : {
-              name,
-              condition: {
-                type: "temperature",
-                sensor,
-                cmp: operator === "below" ? "<" : ">",
-                value: parseFloat(value),
-              },
-              action: {
-                type: "set_state",
-                state: actionState,
-              },
-              priority: parseInt(priority),
-              cooldown_seconds: parseInt(cooldown),
-              is_enabled: isEnabled,
-            };
+              cmp: operator === "below" ? "<" : ">",
+              value: parseFloat(value),
+            },
+            action: {
+              type: "set_state",
+              state: actionState,
+            },
+            priority: parseInt(priority),
+            cooldown_seconds: parseInt(cooldown),
+            is_enabled: isEnabled,
+          };
       const r = await apiFetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -860,30 +909,34 @@ function RuleDialog({
         body: JSON.stringify({
           name,
           condition:
-            ruleType === "range"
-              ? { type: "always" }
-              : {
-                  type: "temperature",
-                  sensor,
-                  cmp: operator === "below" ? "<" : ">",
-                  value: parseFloat(value),
-                },
-          action:
-            ruleType === "range"
+            ruleType === "temp_range"
               ? {
-                  type: "temperature_band",
+                  type: "temperature_between",
                   sensor,
                   min: parseFloat(minValue),
                   max: parseFloat(maxValue),
                   min_inclusive: minInclusive,
                   max_inclusive: maxInclusive,
-                  on_state: "on",
-                  else_state: "off",
+                }
+              : ruleType === "humidity_range"
+              ? {
+                  type: "humidity_between",
+                  sensor,
+                  min: parseFloat(minValue),
+                  max: parseFloat(maxValue),
+                  min_inclusive: minInclusive,
+                  max_inclusive: maxInclusive,
                 }
               : {
-                  type: "set_state",
-                  state: actionState,
+                  type: ruleType === "humidity_threshold" ? "humidity" : "temperature",
+                  sensor,
+                  cmp: operator === "below" ? "<" : ">",
+                  value: parseFloat(value),
                 },
+          action: {
+            type: "set_state",
+            state: actionState,
+          },
           priority: parseInt(priority),
           cooldown_seconds: parseInt(cooldown),
           is_enabled: isEnabled,
@@ -913,17 +966,33 @@ function RuleDialog({
       toast.error("Rule name is required");
       return;
     }
-    if (ruleType === "threshold") {
+    if (ruleType === "temp_threshold" || ruleType === "humidity_threshold") {
       const val = parseFloat(value);
-      if (isNaN(val) || val < -30 || val > 60) {
+      if (isNaN(val)) {
+        toast.error("Value must be a number");
+        return;
+      }
+      if (ruleType === "temp_threshold" && (val < -30 || val > 60)) {
         toast.error("Temperature value must be between -30 and 60");
+        return;
+      }
+      if (ruleType === "humidity_threshold" && (val < 0 || val > 100)) {
+        toast.error("Humidity value must be between 0 and 100");
         return;
       }
     } else {
       const minVal = parseFloat(minValue);
       const maxVal = parseFloat(maxValue);
-      if (isNaN(minVal) || isNaN(maxVal) || minVal < -30 || maxVal > 60 || minVal >= maxVal) {
-        toast.error("Range must be between -30 and 60 and min < max");
+      if (isNaN(minVal) || isNaN(maxVal) || minVal >= maxVal) {
+        toast.error("Range must have min < max");
+        return;
+      }
+      if (ruleType === "temp_range" && (minVal < -30 || maxVal > 60)) {
+        toast.error("Temperature range must be between -30 and 60");
+        return;
+      }
+      if (ruleType === "humidity_range" && (minVal < 0 || maxVal > 100)) {
+        toast.error("Humidity range must be between 0 and 100");
         return;
       }
     }
@@ -945,7 +1014,7 @@ function RuleDialog({
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle>{rule ? "Edit Rule" : "Create Rule"}</DialogTitle>
-          <DialogDescription>Configure an automation rule for temperature-based relay control</DialogDescription>
+        <DialogDescription>Configure an automation rule for sensor-based relay control</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
@@ -956,13 +1025,20 @@ function RuleDialog({
 
           <div className="space-y-2">
             <Label>Rule Type</Label>
-            <Select value={ruleType} onValueChange={(v) => setRuleType(v as "threshold" | "range")}>
+            <Select
+              value={ruleType}
+              onValueChange={(v) =>
+                setRuleType(v as "temp_threshold" | "temp_range" | "humidity_threshold" | "humidity_range")
+              }
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="threshold">Single threshold</SelectItem>
-                <SelectItem value="range">Temperature range</SelectItem>
+                <SelectItem value="temp_threshold">Temperature compare</SelectItem>
+                <SelectItem value="temp_range">Temperature range</SelectItem>
+                <SelectItem value="humidity_threshold">Humidity compare</SelectItem>
+                <SelectItem value="humidity_range">Humidity range</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -981,7 +1057,7 @@ function RuleDialog({
               </Select>
             </div>
 
-            {ruleType === "threshold" ? (
+            {ruleType === "temp_threshold" || ruleType === "humidity_threshold" ? (
               <>
                 <div className="space-y-2">
                   <Label>Operator</Label>
@@ -997,13 +1073,13 @@ function RuleDialog({
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Temperature (°C)</Label>
+                  <Label>{ruleType === "humidity_threshold" ? "Humidity (%)" : "Temperature (°C)"}</Label>
                   <Input
                     type="number"
                     value={value}
                     onChange={(e) => setValue(e.target.value)}
-                    min="-30"
-                    max="60"
+                    min={ruleType === "humidity_threshold" ? "0" : "-30"}
+                    max={ruleType === "humidity_threshold" ? "100" : "60"}
                     step="0.1"
                   />
                 </div>
@@ -1011,25 +1087,25 @@ function RuleDialog({
             ) : (
               <>
                 <div className="space-y-2">
-                  <Label>Min Temp (°C)</Label>
+                  <Label>{ruleType === "humidity_range" ? "Min Humidity (%)" : "Min Temp (°C)"}</Label>
                   <Input
                     type="number"
                     value={minValue}
                     onChange={(e) => setMinValue(e.target.value)}
-                    min="-30"
-                    max="60"
+                    min={ruleType === "humidity_range" ? "0" : "-30"}
+                    max={ruleType === "humidity_range" ? "100" : "60"}
                     step="0.1"
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Max Temp (°C)</Label>
+                  <Label>{ruleType === "humidity_range" ? "Max Humidity (%)" : "Max Temp (°C)"}</Label>
                   <Input
                     type="number"
                     value={maxValue}
                     onChange={(e) => setMaxValue(e.target.value)}
-                    min="-30"
-                    max="60"
+                    min={ruleType === "humidity_range" ? "0" : "-30"}
+                    max={ruleType === "humidity_range" ? "100" : "60"}
                     step="0.1"
                   />
                 </div>
@@ -1037,7 +1113,7 @@ function RuleDialog({
             )}
           </div>
 
-          {ruleType === "range" && (
+          {(ruleType === "temp_range" || ruleType === "humidity_range") && (
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Min Inclusive</Label>
@@ -1066,7 +1142,7 @@ function RuleDialog({
             </div>
           )}
 
-          {ruleType === "threshold" && (
+          {ruleType === "temp_threshold" || ruleType === "humidity_threshold" ? (
             <div className="space-y-2">
               <Label>Action</Label>
               <Select value={actionState} onValueChange={(v) => setActionState(v as "on" | "off")}>
@@ -1074,8 +1150,21 @@ function RuleDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="on">Turn Heater ON</SelectItem>
-                  <SelectItem value="off">Turn Heater OFF</SelectItem>
+                  <SelectItem value="on">Turn Relay ON</SelectItem>
+                  <SelectItem value="off">Turn Relay OFF</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label>Action</Label>
+              <Select value={actionState} onValueChange={(v) => setActionState(v as "on" | "off")}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="on">Turn Relay ON</SelectItem>
+                  <SelectItem value="off">Turn Relay OFF</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1083,7 +1172,7 @@ function RuleDialog({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Priority (lower = higher priority)</Label>
+              <Label>Priority (higher = stronger)</Label>
               <Input
                 type="number"
                 value={priority}

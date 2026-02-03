@@ -1,4 +1,2 @@
-"""
-API routers package for Smartify.
-"""
+# API routers package
 
