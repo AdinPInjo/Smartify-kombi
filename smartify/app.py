@@ -108,6 +108,7 @@ from smartify.db import (
     db_get_sensor_snapshot as _db_get_sensor_snapshot,
     db_query_temp_since as _db_query_temp_since,
     db_query_gps_since as _db_query_gps_since,
+    _safe_dict_from_row as _db_safe_dict_from_row,
     DB_PATH as _DB_PATH_FROM_DB_MODULE
 )
 from smartify.utils import coerce_to_dict as _coerce_to_dict
@@ -132,6 +133,8 @@ except Exception as e:
 # =========================
 # Helper Functions
 # =========================
+
+_safe_dict_from_row = _db_safe_dict_from_row
 
 def coerce_to_dict(value: Any, *, context: str = "") -> dict:
     """
