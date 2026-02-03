@@ -5,6 +5,16 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 import smartify.config as config
 
+# Re-export config constants for backward compatibility
+from smartify.config import (
+    SMARTIFY_REQUIRE_AUTH,
+    SMARTIFY_API_KEY,
+    SMARTIFY_TRUST_LOCALHOST,
+    SMARTIFY_USERNAME,
+    SMARTIFY_PASSWORD,
+    SMARTIFY_SESSION_SECRET,
+)
+
 
 def is_localhost(request: Request) -> bool:
     """Check if request is coming from localhost."""
@@ -34,4 +44,3 @@ def require_auth(request: Request, x_api_key: Optional[str]) -> Optional[JSONRes
     if is_authenticated(request, x_api_key):
         return None
     return JSONResponse({"error": "unauthorized"}, status_code=401)
-
