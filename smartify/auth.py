@@ -6,13 +6,17 @@ from fastapi.responses import JSONResponse
 import smartify.config as config
 
 # Re-export config constants for backward compatibility
-from smartify.config import (
-    SMARTIFY_REQUIRE_AUTH,
-    SMARTIFY_API_KEY,
-    SMARTIFY_TRUST_LOCALHOST,
-    SMARTIFY_USERNAME,
-    SMARTIFY_PASSWORD,
-    SMARTIFY_SESSION_SECRET,
+SMARTIFY_REQUIRE_AUTH = config.SMARTIFY_REQUIRE_AUTH
+SMARTIFY_API_KEY = config.SMARTIFY_API_KEY
+SMARTIFY_TRUST_LOCALHOST = config.SMARTIFY_TRUST_LOCALHOST
+SMARTIFY_USERNAME = config.SMARTIFY_USERNAME
+SMARTIFY_PASSWORD = config.SMARTIFY_PASSWORD
+
+# Some deployments expose SMARTIFY_SECRET instead of SMARTIFY_SESSION_SECRET
+SMARTIFY_SESSION_SECRET = getattr(
+    config,
+    "SMARTIFY_SESSION_SECRET",
+    getattr(config, "SMARTIFY_SECRET", ""),
 )
 
 
