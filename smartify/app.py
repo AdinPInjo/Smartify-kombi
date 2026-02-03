@@ -2206,10 +2206,41 @@ def reconcile_relay(relay_id: str, force: bool = False) -> bool:
         desired_state = desired_state_result
         source = "auto"
         reason = reason_str or "Rule evaluation"
-    
-    # TODO: Complete reconcile_relay implementation (rest of function body was lost)
-    # This stub makes the file compilable. The full implementation needs to be restored.
-    return False
+
+    # Normalize desired_state
+    if desired_state not in ("on", "off"):
+        desired_state = current_actual
+
+    # Persist desired_state and mode (keeps API in sync)
+    db_update_relay_state_new(relay_id, desired_state=desired_state, mode=mode)
+
+    # No change needed
+    if desired_state == current_actual:
+        return False
+
+    # Enforce min_on/min_off cooldowns unless forced
+    min_on_seconds = int(device.get("min_on_seconds", 0) or 0)
+    min_off_seconds = int(device.get("min_off_seconds", 0) or 0)
+    if not force:
+        if current_actual == "on" and desired_state == "off" and min_on_seconds > 0 and (now - last_applied) < min_on_seconds:
+            return False
+        if current_actual == "off" and desired_state == "on" and min_off_seconds > 0 and (now - last_applied) < min_off_seconds:
+            return False
+
+    # Apply hardware
+    hw = apply_relay_hardware(relay_id, desired_state)
+    if not hw.get("ok"):
+        print(f"[Reconcile] Hardware apply failed for relay {relay_id}: {hw.get('message')}")
+        return False
+
+    # Update actual state and log event
+    db_update_relay_state_new(relay_id, actual_state=desired_state, last_applied_at=now)
+    rule_id = matched_rule.get("id") if isinstance(matched_rule, dict) else None
+    db_log_relay_event(relay_id, source, current_actual, desired_state, reason, rule_id)
+    if rule_id:
+        db_update_rule_last_triggered(rule_id)
+
+    return True
 
 def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
     """
