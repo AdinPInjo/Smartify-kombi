@@ -3219,18 +3219,13 @@ def api_relay_header_post(
                 "message": str(e),
             }, status_code=500)
     
-# No fallback - use new system only
-# If we get here, the relay device wasn't found, which shouldn't happen after db_init()
-return JSONResponse({
-    "ok": False,
-    "error": "relay_not_found",
-    "message": "Relay device not found in database",
-}, status_code=404)
-
-
-# Initialize and include frontend router (must be last to avoid catch-all shadowing API routes)
-from smartify.api import frontend as frontend_api
-app.include_router(frontend_api.router)
+    # No fallback - use new system only
+    # If we get here, the relay device wasn't found, which shouldn't happen after db_init()
+    return JSONResponse({
+        "ok": False,
+        "error": "relay_not_found",
+        "message": "Relay device not found in database",
+    }, status_code=404)
 
 
 # =========================
@@ -3242,3 +3237,7 @@ if (STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 
 # Frontend endpoints moved to smartify/api/frontend.py
+
+# Initialize and include frontend router (must be last to avoid catch-all shadowing API routes)
+from smartify.api import frontend as frontend_api
+app.include_router(frontend_api.router)
