@@ -64,6 +64,42 @@ def api_temperature_snapshot_latest(request: Request, x_api_key: Optional[str] =
     })
 
 
+@router.get("/api/sensors/latest")
+def api_sensors_latest(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    """Return latest snapshot for all sensors (temp + humidity)."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    from smartify.db import db_get_sensor_snapshot
+    
+    kombi_snapshot = get_sensor_snapshot("kombi", db_get_sensor_snapshot)
+    garaza_snapshot = get_sensor_snapshot("garaza", db_get_sensor_snapshot)
+    return JSONResponse({
+        "ts": int(time.time()),
+        "kombi": {
+            "temp_c": kombi_snapshot.get("avg_temp"),
+            "humidity_percent": kombi_snapshot.get("avg_humidity"),
+            "sample_count": kombi_snapshot.get("sample_count"),
+            "updated_at": kombi_snapshot.get("updated_at"),
+            "last_good_at": kombi_snapshot.get("last_good_at"),
+            "age_seconds": kombi_snapshot.get("age_seconds"),
+            "is_stale": kombi_snapshot.get("is_stale"),
+            "is_ready": kombi_snapshot.get("is_ready"),
+        },
+        "garaza": {
+            "temp_c": garaza_snapshot.get("avg_temp"),
+            "humidity_percent": garaza_snapshot.get("avg_humidity"),
+            "sample_count": garaza_snapshot.get("sample_count"),
+            "updated_at": garaza_snapshot.get("updated_at"),
+            "last_good_at": garaza_snapshot.get("last_good_at"),
+            "age_seconds": garaza_snapshot.get("age_seconds"),
+            "is_stale": garaza_snapshot.get("is_stale"),
+            "is_ready": garaza_snapshot.get("is_ready"),
+        },
+    })
+
+
 @router.get("/api/temperature/history")
 def api_temperature_history(
     request: Request,

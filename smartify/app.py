@@ -1414,6 +1414,18 @@ app.include_router(network_api.router)
 # Initialize and include ADS1115 router
 from smartify.api import ads1115 as ads1115_api
 app.include_router(ads1115_api.router)
+
+# Initialize and include rules router
+from smartify.api import rules as rules_api
+app.include_router(rules_api.router)
+
+# Initialize and include frontend router
+from smartify.api import frontend as frontend_api
+app.include_router(frontend_api.router)
+
+# Initialize and include auth router
+from smartify.api import auth as auth_api
+app.include_router(auth_api.router)
 # =========================
 # Sensor: DHT22
 # =========================
@@ -2000,25 +2012,6 @@ def on_startup() -> None:
     water_level_service.start_water_level_thread(DB_PATH, app.state)
 
 
-# =========================
-# Auth routes
-# =========================
-
-@app.post("/login")
-def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    if username == SMARTIFY_USERNAME and password == SMARTIFY_PASSWORD:
-        request.session["logged_in"] = True
-        request.session["user"] = username
-        return JSONResponse({"ok": True})
-    return JSONResponse({"ok": False, "error": "invalid_credentials"}, status_code=401)
-
-
-@app.post("/logout")
-def logout(request: Request):
-    request.session.clear()
-    return JSONResponse({"ok": True})
-
-
 # Application state for sharing between modules
 app_state: Dict[str, Any] = {}
 
@@ -2033,162 +2026,7 @@ app_state: Dict[str, Any] = {}
 # API: Temperature
 # =========================
 
-@app.get("/api/temperature/latest")
-def api_temperature_latest(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
-    """Return RAW latest sensor readings (for UI/graphs). Old behavior preserved."""
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-    # Return cached raw values immediately (no blocking sensor reads)
-    return JSONResponse(_temp_latest)
-
-
-@app.get("/api/temperature/snapshot/latest")
-def api_temperature_snapshot_latest(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
-    """Return snapshot data (1-minute averages) for relay/rule engine use."""
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-    
-    # Return snapshot data for each sensor
-    kombi_snapshot = get_sensor_snapshot("kombi")
-    garaza_snapshot = get_sensor_snapshot("garaza")
-    
-    # Build response with snapshot data
-    sensors = []
-    for idx, sensor_name in enumerate(["kombi", "garaza"]):
-        snapshot = kombi_snapshot if sensor_name == "kombi" else garaza_snapshot
-        sensors.append({
-            "sensor_index": idx,
-            "sensor_name": sensor_name,
-            "avg_temp": snapshot.get("avg_temp"),
-            "avg_humidity": snapshot.get("avg_humidity"),
-            "sample_count": snapshot.get("sample_count"),
-            "updated_at": snapshot.get("updated_at"),
-            "last_good_at": snapshot.get("last_good_at"),
-            "age_seconds": snapshot.get("age_seconds"),
-            "is_stale": snapshot.get("is_stale"),
-            "is_ready": snapshot.get("is_ready"),
-        })
-    
-    return JSONResponse({
-        "ts": int(time.time()),
-        "sensors": sensors,
-    })
-
-
-@app.get("/api/sensors/latest")
-def api_sensors_latest(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
-    """Return latest snapshot for all sensors (temp + humidity)."""
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-    
-    kombi_snapshot = get_sensor_snapshot("kombi")
-    garaza_snapshot = get_sensor_snapshot("garaza")
-    return JSONResponse({
-        "ts": int(time.time()),
-        "kombi": {
-            "temp_c": kombi_snapshot.get("avg_temp"),
-            "humidity_percent": kombi_snapshot.get("avg_humidity"),
-            "sample_count": kombi_snapshot.get("sample_count"),
-            "updated_at": kombi_snapshot.get("updated_at"),
-            "last_good_at": kombi_snapshot.get("last_good_at"),
-            "age_seconds": kombi_snapshot.get("age_seconds"),
-            "is_stale": kombi_snapshot.get("is_stale"),
-            "is_ready": kombi_snapshot.get("is_ready"),
-        },
-        "garaza": {
-            "temp_c": garaza_snapshot.get("avg_temp"),
-            "humidity_percent": garaza_snapshot.get("avg_humidity"),
-            "sample_count": garaza_snapshot.get("sample_count"),
-            "updated_at": garaza_snapshot.get("updated_at"),
-            "last_good_at": garaza_snapshot.get("last_good_at"),
-            "age_seconds": garaza_snapshot.get("age_seconds"),
-            "is_stale": garaza_snapshot.get("is_stale"),
-            "is_ready": garaza_snapshot.get("is_ready"),
-        },
-    })
-
-
-@app.get("/api/temperature/history")
-def api_temperature_history(
-    request: Request,
-    range: str = "day",
-    sensor: Optional[int] = None,
-    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
-):
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-
-    now = int(time.time())
-    # Determine time window
-    if range == "hour":
-        since = now - 3600
-        bucket_seconds = 300  # 5 minutes
-    elif range == "day":
-        since = now - 86400
-        bucket_seconds = 300  # 5 minutes
-    elif range == "week":
-        since = now - 7 * 86400
-        bucket_seconds = 1800  # 30 minutes
-    elif range == "month":
-        since = now - 30 * 86400
-        bucket_seconds = 7200  # 2 hours
-    elif range == "year":
-        since = now - 365 * 86400
-        bucket_seconds = 86400  # 1 day
-    else:
-        return JSONResponse({"error": "invalid_range", "allowed": ["hour", "day", "week", "month", "year"]}, status_code=400)
-
-    # Get all raw rows
-    raw_rows = db_query_temp_since(since, sensor_index=sensor)
-    
-    # Bucket/aggregate data by time window
-    buckets: Dict[int, Dict[int, List[float]]] = {}  # bucket_ts -> sensor_index -> [temps]
-    
-    for row in raw_rows:
-        ts = row["ts"]
-        sensor_idx = row["sensor_index"]
-        temp = row["temperature_c"]
-        
-        if temp is None:
-            continue
-        
-        # Calculate bucket timestamp (round down to bucket boundary)
-        bucket_ts = (ts // bucket_seconds) * bucket_seconds
-        
-        if bucket_ts not in buckets:
-            buckets[bucket_ts] = {}
-        if sensor_idx not in buckets[bucket_ts]:
-            buckets[bucket_ts][sensor_idx] = []
-        
-        buckets[bucket_ts][sensor_idx].append(temp)
-    
-    # Convert buckets to rows (average temperatures per bucket)
-    # Group by bucket_ts and include both sensors
-    aggregated_rows = []
-    for bucket_ts in sorted(buckets.keys()):
-        sensor_data = buckets[bucket_ts]
-        # Ensure we have entries for both sensors (0 and 1) if they exist
-        for sensor_idx in [0, 1]:
-            if sensor_idx in sensor_data:
-                temps = sensor_data[sensor_idx]
-                avg_temp = sum(temps) / len(temps) if temps else None
-                aggregated_rows.append({
-                    "ts": bucket_ts,
-                    "sensor_index": sensor_idx,
-                    "temperature_c": avg_temp,
-                    "humidity": None,  # We're only aggregating temperature for now
-                })
-    
-    return JSONResponse({
-        "since": since,
-        "now": now,
-        "rows": aggregated_rows,
-        "bucket_seconds": bucket_seconds,
-    })
+# Temperature endpoints moved to smartify/api/sensors.py
 
 
 # =========================
@@ -2447,17 +2285,17 @@ def _get_relay_pending_state(relay_id: str) -> Dict[str, Any]:
             # If actual_state == desired_state, relay is already in correct state (pending=false).
             # Sensor staleness is reported via sensor_is_stale/age_seconds for visibility.
             if not sensor_ok and desired_state_result and actual_state and desired_state_result != actual_state:
-                                pending = True
+                pending = True
                 pending_reason = "sensor_unavailable"
                 pending_message = f"Sensor unavailable: {reason_str} (holding last state)"
-                                source = "sensor"
+                source = "sensor"
             else:
                 if desired_state_result and actual_state and desired_state_result != actual_state:
                     min_on_seconds = int(device.get("min_on_seconds", 0) or 0) if device else 0
                     min_off_seconds = int(device.get("min_off_seconds", 0) or 0) if device else 0
                             
                     if actual_state == "on" and desired_state_result == "off" and min_on_seconds > 0 and (now - last_applied_at) < min_on_seconds:
-                                pending = True
+                        pending = True
                         pending_reason = "min_on"
                         pending_message = f"Cooldown: min_on ({min_on_seconds}s)"
                         cooldown_remaining = max(0, min_on_seconds - int(now - last_applied_at))
@@ -2519,63 +2357,6 @@ def _public_relay_mode(relay_state: Optional[Dict[str, Any]]) -> str:
         return "auto"
     manual_state = relay_state.get("manual_state") or relay_state.get("desired_state") or relay_state.get("state")
     return manual_state if manual_state in ("on", "off") else "off"
-
-
-@app.get("/api/relays")
-def api_relays_list(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
-    """List all relays with their current state and mode."""
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-    
-    try:
-        relays = db_list_relay_devices()
-        result = []
-        for relay in relays:
-            relay_id = relay["id"]
-            state = db_get_relay_state_new(relay_id)
-            # During startup race conditions, if hardware state is unknown, return desired_state
-            # This prevents 500 errors when API is called before hardware is fully initialized
-            if state:
-                # Prefer actual_state, fallback to desired_state, then state field, then "off"
-                hardware_state = state.get("actual_state") or state.get("desired_state") or state.get("state", "off")
-            else:
-                hardware_state = "off"  # Safe default if state not found
-            
-            # Get pending state info for each relay
-            pending_info = _get_relay_pending_state(relay_id)
-            
-            result.append({
-                "id": relay_id,
-                "name": relay["name"],
-                "pin": relay["pin"],
-                "active_low": bool(relay.get("active_low", 0)),
-                "state": hardware_state,
-                "mode": _public_relay_mode(state),
-                "desired_state": state.get("desired_state") if state else None,
-                "manual_until": state.get("manual_until") if state else None,
-                "updated_at": state.get("updated_at") if state else None,
-                "is_enabled": bool(relay.get("is_enabled", True)),
-                "min_on_seconds": relay.get("min_on_seconds", 0),
-                "min_off_seconds": relay.get("min_off_seconds", 0),
-                "pending": pending_info["pending"],
-                "pending_reason": pending_info["pending_reason"],
-                "pending_message": pending_info["pending_message"],
-                "cooldown_remaining": pending_info["cooldown_remaining"],
-                "sensor_age_seconds": pending_info["sensor_age_seconds"],
-                "sensor_sample_count": pending_info["sensor_sample_count"],
-                "sensor_is_ready": pending_info["sensor_is_ready"],
-                "sensor_is_stale": pending_info["sensor_is_stale"],
-                "source": pending_info["source"]
-            })
-        
-        return JSONResponse({"ok": True, "relays": result})
-    except Exception as e:
-        # NEVER return 500 - always return valid JSON with safe fallback
-        print(f"[API] Error listing relays: {e}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse({"ok": True, "relays": [], "error": "Failed to list relays"})
 
 
 @app.post("/api/relays")
@@ -2998,139 +2779,6 @@ def api_relay_set_auto(
     return JSONResponse({"ok": True, "mode": "auto"})
 
 
-@app.get("/api/relays/{relay_id}/rules")
-def api_relay_rules_list(
-    relay_id: str,
-    request: Request,
-    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
-):
-    """
-    List rules for a relay with runtime status.
-    ALWAYS returns 200 OK with JSON, never 500.
-    Each rule is wrapped in try/except so one bad rule doesn't break the list.
-    """
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-    
-    try:
-        rules = db_list_relay_rules(relay_id)
-        relay_state = db_get_relay_state_new(relay_id)
-        current_actual = relay_state.get("actual_state") if relay_state else None
-        try:
-            _, winner_rule, _winner_info, _sensor_ok, _reason = evaluate_rules(relay_id, None, current_actual)
-            winner_id = winner_rule.get("id") if isinstance(winner_rule, dict) else None
-        except Exception:
-            winner_id = None
-        
-        # Add runtime status for each rule
-        rules_with_status = []
-        for rule in rules:
-            try:
-                # Safely coerce rule to dict (in case it's a string or invalid type)
-                if not isinstance(rule, dict):
-                    rule = coerce_to_dict(rule, context="api_relay_rules_list.rule")
-                    if not rule:
-                        # Skip invalid rules
-                        print(f"[API] Skipping invalid rule (not a dict): {type(rule).__name__}")
-                        continue
-                
-                # Ensure rule has required fields with defaults
-                rule_dict = {
-                    "id": rule.get("id", "unknown"),
-                    "relay_id": rule.get("relay_id", relay_id),
-                    "name": rule.get("name", "Unnamed Rule"),
-                    "condition": rule.get("condition", {}),
-                    "action": rule.get("action", {"type": "set_state", "state": "off"}),
-                    "priority": rule.get("priority", 100),
-                    "cooldown_seconds": rule.get("cooldown_seconds", 60),
-                    "is_enabled": rule.get("is_enabled", False),
-                    "last_triggered_at": rule.get("last_triggered_at"),
-                    "created_at": rule.get("created_at"),
-                    "updated_at": rule.get("updated_at")
-                }
-                ok_condition, _err, normalized_condition = validate_rule_condition(rule_dict["condition"])
-                if ok_condition and normalized_condition is not None:
-                    rule_dict["condition"] = normalized_condition
-                
-                # Safely evaluate runtime status (wrapped in try/except)
-                try:
-                    runtime_status = evaluate_single_rule(rule_dict, relay_id)
-                except Exception as eval_error:
-                    # If evaluate_single_rule itself crashes, return safe error status
-                    print(f"[API] evaluate_single_rule crashed for rule {rule_dict.get('id')}: {eval_error}")
-                    import traceback
-                    traceback.print_exc()
-                    runtime_status = {
-                        "can_evaluate": False,
-                        "matched": False,
-                        "reason_code": "error",
-                        "message": f"Evaluation error: {str(eval_error)[:200]}",
-                        "sensor_name": None,
-                        "snapshot_temp": None,
-                        "threshold": None,
-                        "operator": None,
-                        "age_seconds": 0,
-                        "sample_count": 0,
-                        "cooldown_remaining": 0
-                    }
-                
-                # Attach runtime status to rule
-                runtime_status["is_winner"] = bool(winner_id and rule_dict["id"] == winner_id)
-                rule_dict["runtime_status"] = runtime_status
-                rules_with_status.append(rule_dict)
-                
-            except Exception as e:
-                # If processing one rule fails completely, include it with error status
-                rule_id = rule.get('id', 'unknown') if isinstance(rule, dict) else 'unknown'
-                rule_name = rule.get('name', 'Unknown') if isinstance(rule, dict) else 'Unknown'
-                print(f"[API] Error processing rule {rule_id}: {e}")
-                import traceback
-                traceback.print_exc()
-                
-                # Create minimal safe rule representation
-                rule_dict = {
-                    "id": rule_id,
-                    "relay_id": relay_id,
-                    "name": rule_name,
-                    "condition": {},
-                    "action": {"type": "set_state", "state": "off"},
-                    "priority": 100,
-                    "cooldown_seconds": 60,
-                    "is_enabled": False,
-                    "runtime_status": {
-                        "can_evaluate": False,
-                        "matched": False,
-                        "reason_code": "error",
-                        "message": f"Processing error: {str(e)[:200]}",
-                        "sensor_name": None,
-                        "snapshot_temp": None,
-                        "threshold": None,
-                        "operator": None,
-                        "age_seconds": 0,
-                        "sample_count": 0,
-                        "cooldown_remaining": 0
-                    }
-                }
-                rules_with_status.append(rule_dict)
-        
-        # ALWAYS return 200 OK with rules list (even if all failed)
-        return JSONResponse({"ok": True, "rules": rules_with_status}, status_code=200)
-        
-    except Exception as e:
-        # Outer exception handler - if db_list_relay_rules itself fails
-        print(f"[API] Fatal error in /api/relays/{relay_id}/rules: {e}")
-        import traceback
-        traceback.print_exc()
-        # Still return 200 OK (dashboard expects ok:true/false, not HTTP 500)
-        return JSONResponse({
-            "ok": False,
-            "error": "internal_error",
-            "message": f"Failed to load rules: {str(e)[:200]}",
-            "rules": []
-        }, status_code=200)
-
-
 @app.post("/api/relays/{relay_id}/rules")
 def api_relay_rule_create(
     relay_id: str,
@@ -3350,11 +2998,11 @@ def api_rule_update(
         if action is not None:
             is_valid_action, action_error, action = validate_rule_action(action)
             if not is_valid_action or action is None:
-            return JSONResponse({
-                "ok": False,
-                "error": "invalid_action",
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_action",
                     "message": action_error or "Invalid action payload"
-            }, status_code=400)
+                }, status_code=400)
         
         # Enforce minimum cooldown
         if cooldown_seconds is not None and cooldown_seconds < 5:
@@ -3503,57 +3151,9 @@ def api_rule_toggle(
         }, status_code=400)
 
 
-@app.get("/api/relays/{relay_id}/events")
-def api_relay_events(
-    relay_id: str,
-    request: Request,
-    limit: int = 50,
-    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
-):
-    """Get relay events."""
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-    
-    events = db_get_relay_events(relay_id, limit)
-    return JSONResponse({"ok": True, "events": events})
-
-
 # =========================
 # API: Relay Control (Legacy/Header)
 # =========================
-
-@app.get("/api/relay/header")
-def api_relay_header_get(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
-    """Legacy endpoint for header relay. Uses new system but returns old format."""
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-    
-    relay = db_get_relay_device_by_name("heater")
-    if relay:
-        relay_id = relay["id"]
-        state_data = db_get_relay_state_new(relay_id)
-        if state_data:
-            # Return state in inverted format for legacy compatibility
-            # Backend stores actual hardware state, but UI expects inverted
-            actual_state = state_data.get("actual_state") or state_data.get("state", "off")
-            return JSONResponse({
-                "ok": True,
-                "name": HEADER_RELAY_NAME,
-                "pin": HEADER_RELAY_PIN,
-                "state": "off" if actual_state == "on" else "on",  # Inverted for legacy compatibility
-            })
-    
-    # No fallback - relay_state_new is the single source of truth
-    # If relay not found, return default
-    return JSONResponse({
-        "ok": True,
-        "name": HEADER_RELAY_NAME,
-        "pin": HEADER_RELAY_PIN,
-        "state": "off",  # Default to off if relay not found
-    })
-
 
 @app.post("/api/relay/header")
 def api_relay_header_post(
@@ -3637,29 +3237,4 @@ def api_relay_header_post(
 if (STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 
-def frontend_ready() -> bool:
-    return (STATIC_DIR / "index.html").exists()
-
-
-@app.get("/")
-def root():
-    if not frontend_ready():
-        return JSONResponse({"error": "frontend_not_built"}, status_code=500)
-    return FileResponse(STATIC_DIR / "index.html")
-
-
-@app.get("/dashboard")
-def dashboard():
-    if not frontend_ready():
-        return JSONResponse({"error": "frontend_not_built"}, status_code=500)
-    return FileResponse(STATIC_DIR / "index.html")
-
-
-@app.get("/{full_path:path}")
-def spa_fallback(full_path: str):
-    if not frontend_ready():
-        return JSONResponse({"error": "frontend_not_built"}, status_code=500)
-    target = STATIC_DIR / full_path
-    if target.exists() and target.is_file():
-        return FileResponse(target)
-    return FileResponse(STATIC_DIR / "index.html")
+# Frontend endpoints moved to smartify/api/frontend.py
