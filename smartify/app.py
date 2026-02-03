@@ -91,6 +91,33 @@ from smartify.db import (
 from smartify.water_level import api as water_level_api, service as water_level_service
 from smartify import rule_engine
 
+# Import core functions from extracted modules
+# These are re-exported from app.py for backward compatibility
+from smartify.auth import (
+    is_localhost as _auth_is_localhost,
+    is_authenticated as _auth_is_authenticated, 
+    require_auth as _auth_require_auth,
+    SMARTIFY_REQUIRE_AUTH as _SMARTIFY_REQUIRE_AUTH,
+    SMARTIFY_API_KEY as _SMARTIFY_API_KEY,
+    SMARTIFY_TRUST_LOCALHOST as _SMARTIFY_TRUST_LOCALHOST
+)
+from smartify.db import (
+    db_list_relay_devices as _db_list_relay_devices,
+    db_get_relay_state_new as _db_get_relay_state_new,
+    db_list_relay_rules as _db_list_relay_rules,
+    db_get_sensor_snapshot as _db_get_sensor_snapshot,
+    db_query_temp_since as _db_query_temp_since,
+    db_query_gps_since as _db_query_gps_since,
+    DB_PATH as _DB_PATH_FROM_DB_MODULE
+)
+from smartify.utils import coerce_to_dict as _coerce_to_dict
+from smartify.config import (
+    SENSOR_WARMUP_SAMPLES as _SENSOR_WARMUP_SAMPLES,
+    SENSOR_STALE_THRESHOLD as _SENSOR_STALE_THRESHOLD,
+    DB_PATH as _DB_PATH_FROM_CONFIG,
+    DATA_DIR as _DATA_DIR_FROM_CONFIG
+)
+
 # Startup sanity check: log ADS1115 module location
 # This runs immediately on import, so it appears in service logs on startup
 try:
@@ -937,17 +964,9 @@ def db_query_temp_since(since_ts: int, sensor_index: Optional[int] = None) -> Li
 
 
 def db_query_gps_since(since_ts: int, limit: int = 1000) -> List[Dict[str, Any]]:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT ts, lat, lon, speed_kmh, course, altitude_m FROM gps_fixes WHERE ts >= ? ORDER BY ts ASC LIMIT ?",
-        (since_ts, limit),
-    )
-    rows = [_safe_dict_from_row(r, context="db_query_gps_since") for r in cur.fetchall()]
-    rows = [r for r in rows if r is not None]  # Filter out None values
-    conn.close()
-    return rows
+    """Query GPS fixes since a timestamp."""
+    # Re-export from smartify.db module
+    return _db_query_gps_since(since_ts, limit)
 
 
 def db_get_relay_state(name: str) -> Optional[Dict[str, Any]]:
@@ -1004,13 +1023,8 @@ def db_get_relay_device(relay_id: str) -> Optional[Dict[str, Any]]:
 
 def db_list_relay_devices() -> List[Dict[str, Any]]:
     """List all relay devices."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM relay_devices ORDER BY name")
-    rows = cur.fetchall()
-    conn.close()
-    return [_safe_dict_from_row(row, context="db_list_relay_devices") for row in rows if _safe_dict_from_row(row, context="db_list_relay_devices") is not None]
+    # Re-export from smartify.db module
+    return _db_list_relay_devices()
 
 
 def db_create_relay_device(
@@ -1082,23 +1096,20 @@ def db_update_relay_device(
 
 def db_get_relay_state_new(relay_id: str) -> Optional[Dict[str, Any]]:
     """Get relay state (new table)."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # CRITICAL: Set IMMEDIATELY after connect
-    conn.execute("PRAGMA busy_timeout=5000")
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM relay_state_new WHERE relay_id = ?", (relay_id,))
-    row = cur.fetchone()
-    conn.close()
-    if row:
-        state_dict = dict(row)  # Now safe - row is sqlite3.Row
-        
-        # Ensure backward compatibility: if new columns are NULL, use old 'state' field
-        if state_dict.get("actual_state") is None:
-            state_dict["actual_state"] = state_dict.get("state", "off")
-        if state_dict.get("desired_state") is None:
-            state_dict["desired_state"] = state_dict.get("state", "off")
-        return state_dict
-    return None
+    # Re-export from smartify.db module
+    return _db_get_relay_state_new(relay_id)
+
+
+def db_get_sensor_snapshot(sensor_name: str) -> Optional[Dict[str, Any]]:
+    """Get sensor snapshot."""
+    # Re-export from smartify.db module
+    return _db_get_sensor_snapshot(sensor_name)
+
+
+def db_query_temp_since(since_ts: int, sensor_index: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Query temperature readings since a timestamp."""
+    # Re-export from smartify.db module
+    return _db_query_temp_since(since_ts, sensor_index)
 
 
 def db_create_relay_state_new(
@@ -1197,52 +1208,20 @@ def db_update_relay_state_new(
 
 
 def db_list_relay_rules(relay_id: str) -> List[Dict[str, Any]]:
-    """List rules for a relay. Handles JSON parsing errors gracefully."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM relay_rules WHERE relay_id = ? ORDER BY priority ASC, created_at ASC", (relay_id,))
-    rows = cur.fetchall()
-    conn.close()
-    result = []
-    for row in rows:
-        r = _safe_dict_from_row(row, context="db_list_relay_rules")
-        if not r:
-            continue  # Skip if conversion failed
-        
-        # Parse condition_json - handle errors gracefully
-        condition_json_str = r.get("condition_json", "")
-        if condition_json_str:
-            try:
-                r["condition"] = json.loads(condition_json_str)
-            except (json.JSONDecodeError, TypeError, ValueError) as e:
-                # If JSON parsing fails, set condition to empty dict (will be caught by evaluate_single_rule)
-                print(f"[DB] Error parsing condition_json for rule {r.get('id', 'unknown')}: {e}")
-                r["condition"] = {}
-        else:
-            r["condition"] = {}
-        
-        # Parse action (JSON or legacy string)
+    """
+    List rules for a relay. Handles JSON parsing errors gracefully.
+    Re-exports from smartify.db but adds validation.
+    """
+    # Get basic rules from db module
+    rules = _db_list_relay_rules(relay_id)
+    
+    # Add validation to actions (this depends on validate_rule_action which is still in app.py)
+    for r in rules:
         action_raw = r.get("action", "")
-        parsed_action = None
-        if isinstance(action_raw, str):
-            action_str = action_raw.strip()
-            if action_str.startswith("{"):
-                try:
-                    parsed_action = json.loads(action_str)
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    parsed_action = action_str
-            else:
-                parsed_action = action_str
-        else:
-            parsed_action = action_raw
-        
-        ok, _err, normalized_action = validate_rule_action(parsed_action)
-        r["action"] = normalized_action if ok else parsed_action
-        # Convert SQLite integer boolean to Python boolean
-        r["is_enabled"] = bool(r.get("is_enabled", 1))
-        result.append(r)
-    return result
+        ok, _err, normalized_action = validate_rule_action(action_raw)
+        r["action"] = normalized_action if ok else action_raw
+    
+    return rules
 
 
 def db_get_relay_rule(rule_id: str) -> Optional[Dict[str, Any]]:
@@ -1396,59 +1375,66 @@ def db_update_rule_last_triggered(rule_id: str) -> None:
 # Auth helpers
 # =========================
 
-def is_localhost(request: Request) -> bool:
-    host = request.client.host if request.client else ""
-    return host in ("127.0.0.1", "::1", "localhost")
-
-
-def is_authenticated(request: Request, x_api_key: Optional[str]) -> bool:
-    if not SMARTIFY_REQUIRE_AUTH:
-        return True
-
-    if SMARTIFY_TRUST_LOCALHOST and is_localhost(request):
-        return True
-
-    if request.session.get("logged_in") is True:
-        return True
-
-    if SMARTIFY_API_KEY and x_api_key and x_api_key.strip() == SMARTIFY_API_KEY:
-        return True
-
-    return False
-
-
-def require_auth(request: Request, x_api_key: Optional[str]) -> Optional[JSONResponse]:
-    if is_authenticated(request, x_api_key):
-        return None
-    return JSONResponse({"error": "unauthorized"}, status_code=401)
+# Re-export auth functions from smartify.auth module
+is_localhost = _auth_is_localhost
+is_authenticated = _auth_is_authenticated
+require_auth = _auth_require_auth
 
 
 # Initialize and include water level router (must be after require_auth is defined)
 water_level_api.init_router(DB_PATH, require_auth, app.state)
 app.include_router(water_level_api.router)
 
+# Initialize and include health router
+from smartify.api import health as health_api
+health_router = health_api.create_health_router(
+    is_authenticated_func=is_authenticated,
+    require_auth_enabled=SMARTIFY_REQUIRE_AUTH,
+    api_key_enabled=bool(SMARTIFY_API_KEY),
+    trust_localhost_enabled=SMARTIFY_TRUST_LOCALHOST
+)
+app.include_router(health_router)
 
+# Initialize and include relays router
+from smartify.api import relays as relays_api
+app.include_router(relays_api.router)
+
+# Initialize and include sensors router
+from smartify.api import sensors as sensors_api
+app.include_router(sensors_api.router)
+
+# Initialize and include gps router
+from smartify.api import gps as gps_api
+app.include_router(gps_api.router)
+
+# Initialize and include network router
+from smartify.api import network as network_api
+app.include_router(network_api.router)
+
+# Initialize and include ADS1115 router
+from smartify.api import ads1115 as ads1115_api
+app.include_router(ads1115_api.router)
 # =========================
 # Sensor: DHT22
 # =========================
 
+from smartify import state
+
 _dht_lock = threading.Lock()
-_temp_latest: Dict[str, Any] = {
-    "ts": None,
-    "sensors": [],
-}
 
 # Temperature snapshot system for stable readings
 _sensor_samples: Dict[str, deque] = {}  # sensor_name -> deque of (temp, humidity, timestamp, ok)
 _sensor_samples_lock = threading.Lock()
 SENSOR_SAMPLE_INTERVAL = 5  # Sample every 5 seconds
 SENSOR_SNAPSHOT_INTERVAL = 60  # Update snapshot every 60 seconds
-SENSOR_STALE_THRESHOLD = 600  # 10 minutes without valid samples = stale
-SENSOR_WARMUP_SAMPLES = 6  # Need at least 6 samples (30s) before snapshot is "ready"
+
+# Re-export sensor constants from smartify.config
+SENSOR_STALE_THRESHOLD = _SENSOR_STALE_THRESHOLD
+SENSOR_WARMUP_SAMPLES = _SENSOR_WARMUP_SAMPLES
 
 # Live sensor status (updated every 5s, used for warmup progress)
-SENSOR_LIVE_STATUS: Dict[str, Dict[str, Any]] = {}  # sensor_name -> {valid_count_30s, last_valid_ts, last_attempt_ts, last_error, is_ready}
-_sensor_live_status_lock = threading.Lock()
+# Import from services.sensors module to share state
+from smartify.services.sensors import SENSOR_LIVE_STATUS, _sensor_live_status_lock
 SENSOR_LIVE_STATUS_WINDOW = 30  # Count valid samples within last 30 seconds
 
 def read_dht22_all() -> List[Dict[str, Any]]:
@@ -1515,20 +1501,19 @@ def read_dht22_all() -> List[Dict[str, Any]]:
 
 def _dht22_poller_thread() -> None:
     """Background thread that polls DHT22 sensors at fixed intervals."""
-    global _temp_latest
-    
     while True:
         try:
             results = read_dht22_all()
-            _temp_latest.update({
+            state._temp_latest.clear()
+            state._temp_latest.update({
                 "ts": int(time.time()),
                 "sensors": results,
             })
         except Exception as e:
-            _temp_latest.update({
+            state._temp_latest.clear()
+            state._temp_latest.update({
                 "ts": int(time.time()),
                 "sensors": [],
-                "error": str(e),
             })
         
         # Poll every SENSOR_LOG_INTERVAL seconds (default 30s)
@@ -1722,19 +1707,7 @@ def _sensor_sampler_thread() -> None:
 # Sensor: GPS (USB NMEA)
 # =========================
 
-_gps_latest: Dict[str, Any] = {
-    "ts": None,
-    "lat": None,
-    "lon": None,
-    "speed_kmh": None,
-    "course": None,
-    "altitude_m": None,
-    "satellites": None,
-    "source": "nmea",
-    "device": GPS_DEVICE,
-    "ok": False,
-    "error": None,
-}
+state._gps_latest["device"] = GPS_DEVICE
 
 
 def _nmea_to_decimal(coord: str, hemi: str) -> Optional[float]:
@@ -1774,25 +1747,24 @@ def _nmea_to_decimal(coord: str, hemi: str) -> Optional[float]:
 
 
 def _gps_reader_thread() -> None:
-    global _gps_latest
     try:
         import serial
     except Exception as e:
-        _gps_latest["ok"] = False
-        _gps_latest["error"] = f"pyserial not available: {e}"
+        state._gps_latest["ok"] = False
+        state._gps_latest["error"] = f"pyserial not available: {e}"
         return
 
     while True:
         try:
             if not Path(GPS_DEVICE).exists():
-                _gps_latest["ok"] = False
-                _gps_latest["error"] = f"GPS device not found: {GPS_DEVICE}"
+                state._gps_latest["ok"] = False
+                state._gps_latest["error"] = f"GPS device not found: {GPS_DEVICE}"
                 time.sleep(2)
                 continue
 
             # Use timeout for serial reads to prevent blocking
             with serial.Serial(GPS_DEVICE, GPS_BAUD, timeout=2) as ser:
-                _gps_latest["error"] = None
+                state._gps_latest["error"] = None
                 while True:
                     try:
                         # readline with timeout will return empty string if timeout
@@ -1827,7 +1799,7 @@ def _gps_reader_thread() -> None:
 
                             speed_kmh = speed_kn * 1.852 if speed_kn is not None else None
 
-                            _gps_latest.update({
+                            state._gps_latest.update({
                                 "ts": now,
                                 "lat": lat,
                                 "lon": lon,
@@ -1836,7 +1808,7 @@ def _gps_reader_thread() -> None:
                                 "ok": True,
                                 "error": None,
                             })
-                            db_insert_gps(now, lat, lon, speed_kmh, course, _gps_latest.get("altitude_m"))
+                            db_insert_gps(now, lat, lon, speed_kmh, course, state._gps_latest.get("altitude_m"))
 
                         if sentence.endswith("GGA") and len(parts) >= 10:
                             fix = parts[6] if len(parts) > 6 else "0"
@@ -1860,30 +1832,30 @@ def _gps_reader_thread() -> None:
                             except Exception:
                                 satellites = None
 
-                            _gps_latest.update({
+                            state._gps_latest.update({
                                 "ts": now,
-                                "lat": lat if lat is not None else _gps_latest.get("lat"),
-                                "lon": lon if lon is not None else _gps_latest.get("lon"),
+                                "lat": lat if lat is not None else state._gps_latest.get("lat"),
+                                "lon": lon if lon is not None else state._gps_latest.get("lon"),
                                 "altitude_m": alt,
                                 "satellites": satellites,
                                 "ok": True,
                                 "error": None,
                             })
-                            db_insert_gps(now, _gps_latest.get("lat"), _gps_latest.get("lon"),
-                                          _gps_latest.get("speed_kmh"), _gps_latest.get("course"), alt)
+                            db_insert_gps(now, state._gps_latest.get("lat"), state._gps_latest.get("lon"),
+                                          state._gps_latest.get("speed_kmh"), state._gps_latest.get("course"), alt)
                     
                     except serial.SerialTimeoutException:
                         # Timeout is normal, continue polling
                         continue
                     except Exception as e:
-                        _gps_latest["ok"] = False
-                        _gps_latest["error"] = f"Serial read error: {e}"
+                        state._gps_latest["ok"] = False
+                        state._gps_latest["error"] = f"Serial read error: {e}"
                         time.sleep(1)
                         continue
 
         except Exception as e:
-            _gps_latest["ok"] = False
-            _gps_latest["error"] = f"GPS read error: {e}"
+            state._gps_latest["ok"] = False
+            state._gps_latest["error"] = f"GPS read error: {e}"
             time.sleep(2)
 
 
@@ -2047,18 +2019,6 @@ def logout(request: Request):
     return JSONResponse({"ok": True})
 
 
-@app.get("/api/me")
-def api_me(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
-    authed = is_authenticated(request, x_api_key)
-    return JSONResponse({
-        "authenticated": authed,
-        "user": request.session.get("user") if authed else None,
-        "require_auth": SMARTIFY_REQUIRE_AUTH,
-        "api_key_enabled": bool(SMARTIFY_API_KEY),
-        "trusted_localhost": SMARTIFY_TRUST_LOCALHOST,
-    })
-
-
 # Application state for sharing between modules
 app_state: Dict[str, Any] = {}
 
@@ -2066,158 +2026,7 @@ app_state: Dict[str, Any] = {}
 # =========================
 # API: ADS1115 ADC
 # =========================
-
-@app.get("/api/ads1115/read")
-def api_ads1115_read(
-    request: Request,
-    channel: int = 0,
-    bus: int = 1,
-    addr: int = 0x48,
-    pga: float = 4.096,
-    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
-):
-    """
-    Read voltage from ADS1115 ADC channel.
-    
-    Args:
-        channel: Channel number (0-3)
-        bus: I2C bus number (default 1)
-        addr: I2C address (default 0x48)
-        pga: PGA voltage range (default 4.096V)
-    
-    Returns:
-        JSON with ok, voltage, raw_value, channel, or error/reason
-    """
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-    
-    # Validate channel
-    if channel not in (0, 1, 2, 3):
-        return JSONResponse({
-            "ok": False,
-            "error": "invalid_channel",
-            "reason": "Channel must be 0-3",
-            "channel": channel
-        }, status_code=400)
-    
-    try:
-        # Import ads1115 module (same directory)
-        import ads1115
-        ads_detect = ads1115.ads_detect
-        ads_read_voltage = ads1115.ads_read_voltage
-        ads_read_raw_single_ended = ads1115.ads_read_raw_single_ended
-    except ImportError as e:
-        import traceback
-        error_detail = traceback.format_exc()
-        print(f"[API] Error importing ads1115: {e}\n{error_detail}")
-        return JSONResponse({
-            "ok": False,
-            "error": "module_error",
-            "reason": f"Failed to import ads1115 module: {e}",
-            "channel": channel
-        })
-    except AttributeError as e:
-        import traceback
-        error_detail = traceback.format_exc()
-        print(f"[API] Error: ads1115 module missing required functions: {e}\n{error_detail}")
-        return JSONResponse({
-            "ok": False,
-            "error": "module_error",
-            "reason": f"ads1115 module missing required functions: {e}",
-            "channel": channel
-        })
-    
-    # Detect ADS1115
-    if not ads_detect(bus=bus, addr=addr):
-        return JSONResponse({
-            "ok": False,
-            "error": "ads_not_found",
-            "reason": f"ADS1115 not found at address 0x{addr:02X} on bus {bus}",
-            "channel": channel,
-            "bus": bus,
-            "addr": f"0x{addr:02X}"
-        })
-    
-    # Read voltage
-    voltage = ads_read_voltage(channel, bus=bus, addr=addr, pga=pga, sps=128, retries=3)
-    raw_value = ads_read_raw_single_ended(channel, bus=bus, addr=addr, pga=pga, sps=128, retries=3)
-    
-    if voltage is None or raw_value is None:
-        return JSONResponse({
-            "ok": False,
-            "error": "read_failed",
-            "reason": "Failed to read from ADS1115 channel (I/O error or timeout)",
-            "channel": channel,
-            "bus": bus,
-            "addr": f"0x{addr:02X}"
-        })
-    
-    return JSONResponse({
-        "ok": True,
-        "channel": channel,
-        "voltage": voltage,
-        "raw_value": raw_value,
-        "pga": pga,
-        "bus": bus,
-        "addr": f"0x{addr:02X}"
-    })
-
-
-@app.get("/api/ads1115/detect")
-def api_ads1115_detect(
-    request: Request,
-    bus: int = 1,
-    addr: int = 0x48,
-    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
-):
-    """
-    Detect if ADS1115 is present on I2C bus.
-    
-    Returns:
-        JSON with ok, detected, bus, addr
-    """
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-    
-    try:
-        # Import ads1115 module (same directory)
-        import ads1115
-        ads_detect = ads1115.ads_detect
-    except ImportError as e:
-        import traceback
-        error_detail = traceback.format_exc()
-        print(f"[API] Error importing ads1115: {e}\n{error_detail}")
-        return JSONResponse({
-            "ok": False,
-            "error": "module_error",
-            "reason": f"Failed to import ads1115 module: {e}",
-            "detected": False,
-            "bus": bus,
-            "addr": f"0x{addr:02X}"
-        })
-    except AttributeError as e:
-        import traceback
-        error_detail = traceback.format_exc()
-        print(f"[API] Error: ads1115 module missing required functions: {e}\n{error_detail}")
-        return JSONResponse({
-            "ok": False,
-            "error": "module_error",
-            "reason": f"ads1115 module missing required functions: {e}",
-            "detected": False,
-            "bus": bus,
-            "addr": f"0x{addr:02X}"
-        })
-    
-    detected = ads_detect(bus=bus, addr=addr)
-    
-    return JSONResponse({
-        "ok": True,
-        "detected": detected,
-        "bus": bus,
-        "addr": f"0x{addr:02X}"
-    })
+# Endpoints moved to smartify/api/ads1115.py
 
 
 # =========================
@@ -2385,38 +2194,7 @@ def api_temperature_history(
 # =========================
 # API: GPS
 # =========================
-
-@app.get("/api/gps/current")
-def api_gps_current(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-    return JSONResponse(_gps_latest)
-
-
-@app.get("/api/gps/track")
-def api_gps_track(
-    request: Request,
-    hours: Optional[int] = None,
-    minutes: Optional[int] = None,
-    limit: int = 2000,
-    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
-):
-    err = require_auth(request, x_api_key)
-    if err:
-        return err
-
-    now = int(time.time())
-    if minutes is not None:
-        since = now - int(minutes) * 60
-    elif hours is not None:
-        since = now - int(hours) * 3600
-    else:
-        since = now - 24 * 3600
-
-    limit = max(1, min(int(limit), 50000))
-    rows = db_query_gps_since(since, limit=limit)
-    return JSONResponse({"since": since, "now": now, "rows": rows})
+# Endpoints moved to smartify/api/gps.py
 
 
 # =========================
@@ -2429,74 +2207,10 @@ RULE_EVAL_INTERVAL = 5  # Evaluate rules every 5 seconds
 def get_sensor_snapshot(sensor_name: str) -> Dict[str, Any]:
     """
     Get sensor snapshot with stale detection.
-    Uses live status for warmup progress (updates every 5s).
-    Returns: value, updated_at, last_good_at, is_stale, age_seconds, is_ready
-    ALWAYS returns age_seconds as int (never None) for safe integer operations.
+    Re-exports from smartify.services.sensors module.
     """
-    now = int(time.time())
-    snapshot = db_get_sensor_snapshot(sensor_name)
-    
-    # Get live status (updated every 5s)
-    with _sensor_live_status_lock:
-        live_status = SENSOR_LIVE_STATUS.get(sensor_name, {})
-        live_valid_count = live_status.get("valid_count_30s", 0)
-        live_is_ready = live_status.get("is_ready", False)
-        live_last_valid_ts = live_status.get("last_valid_ts")
-        live_last_attempt_ts = live_status.get("last_attempt_ts", 0)
-    
-    if not snapshot:
-        # No snapshot yet - use live status for warmup progress
-        # Age is time since last attempt (or 0 if never attempted)
-        age_seconds = max(0, now - live_last_attempt_ts) if live_last_attempt_ts > 0 else 0
-        is_stale = age_seconds > SENSOR_STALE_THRESHOLD
-        
-        return {
-            "sensor_name": sensor_name,
-            "avg_temp": None,
-            "avg_humidity": None,
-            "sample_count": live_valid_count,  # Use live count for warmup progress
-            "updated_at": None,
-            "last_good_at": live_last_valid_ts,
-            "is_stale": is_stale,
-            "age_seconds": age_seconds,  # Always int, never None
-            "is_ready": live_is_ready,  # Use live is_ready
-        }
-    
-    # Snapshot exists - use it for temperature values, but use live status for warmup if not ready
-    last_good_at = snapshot.get("last_good_at") or 0
-    updated_at = snapshot.get("updated_at") or 0
-    snapshot_sample_count = snapshot.get("sample_count") or 0
-    
-    # Always compute age_seconds as int (never None)
-    # Use last_good_at if available, otherwise updated_at, otherwise 0
-    reference_time = last_good_at if last_good_at else (updated_at if updated_at else 0)
-    age_seconds = max(0, now - reference_time) if reference_time > 0 else 0
-    
-    # Stale if no valid samples for 10 minutes
-    is_stale = age_seconds > SENSOR_STALE_THRESHOLD
-    
-    # If snapshot is not ready yet, use live status for warmup progress
-    # Otherwise use snapshot sample_count
-    if snapshot_sample_count < SENSOR_WARMUP_SAMPLES:
-        # Snapshot not ready - use live status
-        sample_count = live_valid_count
-        is_ready = live_is_ready
-    else:
-        # Snapshot is ready - use snapshot values
-        sample_count = snapshot_sample_count
-        is_ready = True
-    
-    return {
-        "sensor_name": sensor_name,
-        "avg_temp": snapshot.get("avg_temp"),
-        "avg_humidity": snapshot.get("avg_humidity"),
-        "sample_count": sample_count,  # Live count during warmup, snapshot count when ready
-        "updated_at": updated_at if updated_at else None,
-        "last_good_at": last_good_at if last_good_at else None,
-        "is_stale": is_stale,
-        "age_seconds": age_seconds,  # Always int, never None
-        "is_ready": is_ready,
-    }
+    from smartify.services.sensors import get_sensor_snapshot as _get_snapshot
+    return _get_snapshot(sensor_name, db_get_sensor_snapshot, SENSOR_LIVE_STATUS, _sensor_live_status_lock)
 
 def _evaluate_temperature_condition(condition: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     """
