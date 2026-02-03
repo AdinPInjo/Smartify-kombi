@@ -15,8 +15,8 @@ def ads1115_read_response(channel: int, bus: int, addr: int, pga: float) -> JSON
         }, status_code=400)
 
     try:
-        # Import ads1115 module (same directory)
-        import ads1115
+        # Import ads1115 module (same package)
+        from smartify import ads1115
         ads_detect = ads1115.ads_detect
         ads_read_voltage = ads1115.ads_read_voltage
         ads_read_raw_single_ended = ads1115.ads_read_raw_single_ended
@@ -79,8 +79,8 @@ def ads1115_read_response(channel: int, bus: int, addr: int, pga: float) -> JSON
 
 def ads1115_detect_response(bus: int, addr: int) -> JSONResponse:
     try:
-        # Import ads1115 module (same directory)
-        import ads1115
+        # Import ads1115 module (same package)
+        from smartify import ads1115
         ads_detect = ads1115.ads_detect
     except ImportError as e:
         import traceback
