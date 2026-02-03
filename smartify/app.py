@@ -1422,10 +1422,6 @@ app.include_router(ads1115_api.router)
 from smartify.api import rules as rules_api
 app.include_router(rules_api.router)
 
-# Initialize and include frontend router
-from smartify.api import frontend as frontend_api
-app.include_router(frontend_api.router)
-
 # Initialize and include auth router
 from smartify.api import auth as auth_api
 app.include_router(auth_api.router)
@@ -3223,13 +3219,18 @@ def api_relay_header_post(
                 "message": str(e),
             }, status_code=500)
     
-    # No fallback - use new system only
-    # If we get here, the relay device wasn't found, which shouldn't happen after db_init()
-    return JSONResponse({
-        "ok": False,
-        "error": "relay_not_found",
-        "message": "Relay device not found in database",
-    }, status_code=404)
+# No fallback - use new system only
+# If we get here, the relay device wasn't found, which shouldn't happen after db_init()
+return JSONResponse({
+    "ok": False,
+    "error": "relay_not_found",
+    "message": "Relay device not found in database",
+}, status_code=404)
+
+
+# Initialize and include frontend router (must be last to avoid catch-all shadowing API routes)
+from smartify.api import frontend as frontend_api
+app.include_router(frontend_api.router)
 
 
 # =========================
