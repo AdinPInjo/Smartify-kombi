@@ -47,6 +47,8 @@ logger.info("[Config] DHT22_PINS=%s", DHT22_PINS)
 
 # Sensor polling interval
 SENSOR_LOG_INTERVAL = int(os.getenv("SENSOR_LOG_INTERVAL", "30"))
+SENSOR_WARMUP_SAMPLES = int(os.getenv("SENSOR_WARMUP_SAMPLES", "6"))
+SENSOR_STALE_THRESHOLD = int(os.getenv("SENSOR_STALE_THRESHOLD", "600"))
 
 # Legacy header relay (single relay control)
 HEADER_RELAY_NAME = os.getenv("HEADER_RELAY_NAME", "header")
@@ -62,4 +64,3 @@ _rule_evaluator_thread: Optional[threading.Thread] = None
 print(f"[Config] DB_PATH={DB_PATH}")
 print(f"[Config] GPS_ENABLED={GPS_ENABLED}, GPS_DEVICE={GPS_DEVICE if GPS_ENABLED else 'N/A'}")
 print(f"[Config] SMARTIFY_REQUIRE_AUTH={SMARTIFY_REQUIRE_AUTH}")
-
