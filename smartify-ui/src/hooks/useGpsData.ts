@@ -6,6 +6,8 @@ export interface GpsCurrentData {
   lat: number;
   lon: number;
   speed_m_s: number;
+  altitude_m?: number | null;
+  satellites?: number | null;
   mode: number;
 }
 
@@ -13,6 +15,7 @@ export interface GpsTrackPoint {
   ts: string;
   lat: number;
   lon: number;
+  speed_kmh?: number | null;
 }
 
 type LatLon = { lat: number; lon: number };
@@ -54,6 +57,8 @@ export const useGpsData = (trackMinutes: number) => {
         lat: number | null;
         lon: number | null;
         speed_kmh: number | null;
+        altitude_m?: number | null;
+        satellites?: number | null;
         ok: boolean;
       };
 
@@ -63,6 +68,8 @@ export const useGpsData = (trackMinutes: number) => {
         lat: raw.lat ?? 0,
         lon: raw.lon ?? 0,
         speed_m_s: raw.speed_kmh != null ? raw.speed_kmh / 3.6 : 0,
+        altitude_m: raw.altitude_m ?? null,
+        satellites: raw.satellites ?? null,
         mode,
       };
 
@@ -96,7 +103,7 @@ export const useGpsData = (trackMinutes: number) => {
       }
 
       const raw = (await response.json()) as {
-        rows: { ts: number; lat: number | null; lon: number | null }[];
+        rows: { ts: number; lat: number | null; lon: number | null; speed_kmh?: number | null }[];
       };
 
       const mapped: GpsTrackPoint[] =
@@ -104,6 +111,7 @@ export const useGpsData = (trackMinutes: number) => {
           ts: new Date(r.ts * 1000).toISOString(),
           lat: r.lat ?? 0,
           lon: r.lon ?? 0,
+          speed_kmh: r.speed_kmh ?? null,
         })) ?? [];
 
       setTrackData(mapped);

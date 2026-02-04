@@ -38,14 +38,16 @@ const TimeWindowControl = ({ minutes, onMinutesChange }: TimeWindowControlProps)
   };
 
   return (
-    <Card className="card-hover">
-      <CardHeader className="pb-3">
+    <Card className="glass-card p-0">
+      <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-base font-medium flex items-center gap-2">
-          <Clock className="w-4 h-4 text-primary" />
+          <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+            <Clock className="w-4 h-4 text-primary" />
+          </div>
           History Window
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 pb-4 pt-0">
         <div className="flex items-center justify-between">
           <span className="text-2xl font-bold">{formatDuration(minutes)}</span>
           <span className="text-sm text-muted-foreground">of track history</span>

@@ -115,6 +115,15 @@ def db_init() -> None:
     )
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS gps_distance_daily (
+            date TEXT PRIMARY KEY,
+            distance_km REAL NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+        );
+        """
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS relay_states (
             name TEXT PRIMARY KEY,
             pin INTEGER NOT NULL,
@@ -486,6 +495,81 @@ def db_query_gps_since(since_ts: int, limit: int = 1000) -> List[Dict[str, Any]]
     rows = [r for r in rows if r is not None]  # Filter out None values
     conn.close()
     return rows
+
+
+def db_query_gps_between(since_ts: int, until_ts: Optional[int] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    if until_ts is None:
+        sql = "SELECT ts, lat, lon, speed_kmh, course, altitude_m FROM gps_fixes WHERE ts >= ? ORDER BY ts ASC"
+        params = [since_ts]
+    else:
+        sql = "SELECT ts, lat, lon, speed_kmh, course, altitude_m FROM gps_fixes WHERE ts >= ? AND ts <= ? ORDER BY ts ASC"
+        params = [since_ts, until_ts]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    cur.execute(sql, params)
+    rows = [_safe_dict_from_row(r, context="db_query_gps_between") for r in cur.fetchall()]
+    rows = [r for r in rows if r is not None]
+    conn.close()
+    return rows
+
+
+def db_query_latest_gps_fix() -> Optional[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT ts, lat, lon, speed_kmh, course, altitude_m FROM gps_fixes ORDER BY ts DESC LIMIT 1"
+    )
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return _safe_dict_from_row(row, context="db_query_latest_gps_fix")
+    return None
+
+
+def db_add_gps_distance_daily(date: str, delta_km: float, ts: int) -> None:
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    cur = conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=5000")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.execute(
+        """
+        INSERT INTO gps_distance_daily (date, distance_km, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(date) DO UPDATE SET
+          distance_km = distance_km + excluded.distance_km,
+          updated_at = excluded.updated_at
+        """,
+        (date, float(delta_km), ts),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_sum_gps_distance_between(start_date: str, end_date: str) -> float:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT COALESCE(SUM(distance_km), 0) FROM gps_distance_daily WHERE date >= ? AND date <= ?",
+        (start_date, end_date),
+    )
+    total = cur.fetchone()[0] or 0.0
+    conn.close()
+    return float(total)
+
+
+def db_sum_gps_distance_all() -> float:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT COALESCE(SUM(distance_km), 0) FROM gps_distance_daily")
+    total = cur.fetchone()[0] or 0.0
+    conn.close()
+    return float(total)
 
 
 # =========================
@@ -945,4 +1029,3 @@ def db_update_rule_last_triggered(rule_id: str) -> None:
     cur.execute("UPDATE relay_rules SET last_triggered_at = ? WHERE id = ?", (now, rule_id))
     conn.commit()
     conn.close()
-

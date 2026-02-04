@@ -11,23 +11,23 @@ const RecentPointsTable = ({ points, isLoading }: Props) => {
   const last10 = safePoints.slice(-10).reverse();
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
+    <Card className="glass-card p-0">
+      <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-base">Recent points</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-2">
+      <CardContent className="space-y-2 px-4 pb-4 pt-0">
         {isLoading && safePoints.length === 0 ? (
-          <div className="text-sm opacity-70">Loading…</div>
+          <div className="text-sm text-muted-foreground">Loading…</div>
         ) : last10.length === 0 ? (
-          <div className="text-sm opacity-70">No points yet.</div>
+          <div className="text-sm text-muted-foreground">No points yet.</div>
         ) : (
           <div className="space-y-1">
             {last10.map((p, idx) => (
               <div
                 key={`${p.ts}-${idx}`}
-                className="flex items-center justify-between text-xs rounded-md border px-2 py-1"
+                className="flex items-center justify-between text-xs rounded-md border border-glass bg-secondary/30 px-2 py-1"
               >
-                <span className="opacity-80">{p.ts}</span>
+                <span className="text-muted-foreground">{p.ts}</span>
                 <span className="tabular-nums">
                   {p.lat.toFixed(6)}, {p.lon.toFixed(6)}
                 </span>

@@ -1,4 +1,4 @@
-import { MapPin, Clock, Gauge, Satellite } from "lucide-react";
+import { MapPin, Clock, Gauge, Satellite, Mountain } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -47,11 +47,13 @@ const CurrentLocationCard = ({ data, isLoading }: CurrentLocationCardProps) => {
   }
 
   return (
-    <Card className="card-hover">
-      <CardHeader className="pb-3">
+    <Card className="glass-card p-0">
+      <CardHeader className="pb-2 px-4 pt-4">
         <div className="flex items-center justify-between">
           <CardTitle className="text-base font-medium flex items-center gap-2">
-            <MapPin className="w-4 h-4 text-primary" />
+            <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+              <MapPin className="w-4 h-4 text-primary" />
+            </div>
             Current Location
           </CardTitle>
           <Badge 
@@ -66,7 +68,7 @@ const CurrentLocationCard = ({ data, isLoading }: CurrentLocationCardProps) => {
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 pb-4 pt-0">
         {data ? (
           <>
             <div className="grid grid-cols-2 gap-4">
@@ -84,7 +86,7 @@ const CurrentLocationCard = ({ data, isLoading }: CurrentLocationCardProps) => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-border">
+            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-glass">
               <div className="flex items-center gap-2">
                 <Gauge className="w-4 h-4 text-muted-foreground" />
                 <div>
@@ -98,6 +100,15 @@ const CurrentLocationCard = ({ data, isLoading }: CurrentLocationCardProps) => {
                   <p className="text-xs text-muted-foreground">Last Update</p>
                   <p className="font-medium">{formatTime(data.ts)}</p>
                 </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Mountain className="w-4 h-4 text-muted-foreground" />
+              <div>
+                <p className="text-xs text-muted-foreground">Altitude</p>
+                <p className="font-medium">
+                  {data.altitude_m != null ? `${data.altitude_m.toFixed(1)} m` : "—"}
+                </p>
               </div>
             </div>
           </>

@@ -171,6 +171,28 @@
   .icon-glow {
     filter: drop-shadow(0 0 6px hsl(217 91% 60% / 0.5));
   }
+
+  .gps-pulse-wrap {
+    position: relative;
+    width: 18px;
+    height: 18px;
+  }
+
+  .gps-pulse-core {
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: hsl(var(--primary));
+    box-shadow: 0 0 10px hsl(var(--primary) / 0.6);
+  }
+
+  .gps-pulse-ring {
+    position: absolute;
+    inset: -10px;
+    border-radius: 9999px;
+    background: hsl(var(--primary) / 0.25);
+    animation: gps-pulse 1.8s ease-out infinite;
+  }
 }
 
 @layer utilities {
@@ -205,6 +227,17 @@
     }
     50% {
       transform: translateY(-4px);
+    }
+  }
+
+  @keyframes gps-pulse {
+    0% {
+      transform: scale(0.6);
+      opacity: 0.8;
+    }
+    100% {
+      transform: scale(2.2);
+      opacity: 0;
     }
   }
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+import { cn } from "@/lib/utils";
 import type { GpsCurrentData, GpsTrackPoint } from "@/hooks/useGpsData";
 
 type Props = {
@@ -9,13 +10,14 @@ type Props = {
   trackData: GpsTrackPoint[];
   isLoading: boolean;
   fitKey: string;
+  className?: string;
 };
 
 function isValidLatLon(lat?: number, lon?: number) {
   return typeof lat === "number" && typeof lon === "number" && !Number.isNaN(lat) && !Number.isNaN(lon);
 }
 
-const GpsMap = ({ currentData, trackData, isLoading, fitKey }: Props) => {
+const GpsMap = ({ currentData, trackData, isLoading, fitKey, className }: Props) => {
   const mapDivRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
@@ -43,14 +45,12 @@ const GpsMap = ({ currentData, trackData, isLoading, fitKey }: Props) => {
     () =>
       L.divIcon({
         className: "",
-        html: `<div style="
-          width:14px;height:14px;border-radius:9999px;
-          background:#3b82f6;
-          box-shadow:0 0 0 4px rgba(59,130,246,0.25);
-          border:2px solid rgba(255,255,255,0.9);
-        "></div>`,
-        iconSize: [14, 14],
-        iconAnchor: [7, 7],
+        html: `<div class="gps-pulse-wrap">
+          <div class="gps-pulse-ring"></div>
+          <div class="gps-pulse-core"></div>
+        </div>`,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
       }),
     []
   );
@@ -139,8 +139,18 @@ const GpsMap = ({ currentData, trackData, isLoading, fitKey }: Props) => {
   }, [fitKey, trackLatLngs, currentPos]);
 
   return (
-    <div className="relative h-[70vh] w-full overflow-hidden rounded-xl border bg-background">
+    <div className={cn("relative h-[70vh] w-full overflow-hidden rounded-xl border border-glass bg-background", className)}>
       <div ref={mapDivRef} className="h-full w-full" />
+      <div className="pointer-events-none absolute inset-0 opacity-20">
+        <svg className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <pattern id="map-grid" width="50" height="50" patternUnits="userSpaceOnUse">
+              <path d="M 50 0 L 0 0 0 50" fill="none" stroke="currentColor" strokeWidth="0.5" className="text-primary" />
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#map-grid)" />
+        </svg>
+      </div>
       {isLoading && (
         <div className="pointer-events-none absolute left-0 top-0 flex h-full w-full items-center justify-center">
           <div className="rounded-md border bg-background/80 px-3 py-2 text-sm">

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { MapPin, Navigation, Home, Warehouse, Thermometer, Battery, Power, Droplets, Activity, Gauge, ListChecks, Plus, Trash2, Save, Settings2 } from "lucide-react";
+import { MapPin, Home, Warehouse, Thermometer, Battery, Power, Droplets, Activity, Gauge, ListChecks, Plus, Settings2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -369,8 +369,8 @@ function HeaderRelayCard() {
   };
 
   return (
-    <Card className="glass-card">
-      <CardHeader className="pb-3">
+    <Card className="glass-card p-0">
+      <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
             <Power className="h-4 w-4 text-primary" />
@@ -378,7 +378,7 @@ function HeaderRelayCard() {
           Header Relay
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 pb-4 pt-0">
         <div className="flex items-center justify-between">
           <div>
             <p className="font-medium text-foreground">Main Power</p>
@@ -514,8 +514,8 @@ function WaterLevelCard() {
     : "text-destructive";
 
   return (
-    <Card className="glass-card">
-      <CardHeader className="pb-3">
+    <Card className="glass-card p-0">
+      <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
             <Droplets className="h-4 w-4 text-primary" />
@@ -523,7 +523,7 @@ function WaterLevelCard() {
           Water Level
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 pb-4 pt-0">
         <div className="flex items-end justify-between">
           <span className={`text-3xl font-bold ${textColor}`}>
             {levelPercent !== null ? `${levelPercent}%` : "—"}
@@ -651,8 +651,8 @@ function RelayRulesWidget() {
   };
 
   return (
-    <Card className="glass-card">
-      <CardHeader className="pb-4">
+    <Card className="glass-card p-0">
+      <CardHeader className="pb-3 px-4 pt-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -675,7 +675,7 @@ function RelayRulesWidget() {
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-3 px-4 pb-4 pt-0">
         {isLoading ? (
           <div className="text-sm text-muted-foreground text-center py-4">Loading rules...</div>
         ) : rules.length === 0 ? (
@@ -869,8 +869,8 @@ export default function OverviewDashboard() {
 
   const modules: Record<OverviewModuleId, JSX.Element> = {
     gps_card: (
-      <Card className="glass-card">
-        <CardHeader className="pb-3">
+      <Card className="glass-card p-0">
+        <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
               <MapPin className="h-4 w-4 text-primary icon-glow" />
@@ -878,7 +878,7 @@ export default function OverviewDashboard() {
             GPS Status
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 px-4 pb-4 pt-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className={gpsHasFix ? "status-dot-online" : "status-dot-warning"} />
@@ -917,8 +917,8 @@ export default function OverviewDashboard() {
       </Card>
     ),
     temp_card: (
-      <Card className={`glass-card ${tempClass(kombiT)}`}>
-        <CardHeader className="pb-3">
+      <Card className={`glass-card p-0 ${tempClass(kombiT)}`}>
+        <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
               <Thermometer className="h-4 w-4 text-primary" />
@@ -926,7 +926,7 @@ export default function OverviewDashboard() {
             Temperature
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 px-4 pb-4 pt-0">
           {import.meta.env.DEV && (
             <div className="text-xs text-primary p-1.5 bg-secondary/40 rounded-lg border border-glass mb-1">
               <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : "null"}
@@ -963,8 +963,8 @@ export default function OverviewDashboard() {
     ),
     water_card: <WaterLevelCard />,
     battery: (
-      <Card className="glass-card">
-        <CardHeader className="pb-3">
+      <Card className="glass-card p-0">
+        <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
               <Battery className="h-4 w-4 text-primary" />
@@ -972,7 +972,7 @@ export default function OverviewDashboard() {
             Battery
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 px-4 pb-4 pt-0">
           <div className="flex items-end justify-between">
             <div className="flex items-baseline gap-1">
               <span className="text-3xl font-bold text-muted-foreground">—</span>
@@ -996,8 +996,8 @@ export default function OverviewDashboard() {
     header_relay: <HeaderRelayCard />,
     relay_rules: <RelayRulesWidget />,
     gps_map: (
-      <Card className="glass-card">
-        <CardHeader className="pb-4">
+      <Card className="glass-card p-0">
+        <CardHeader className="pb-3 px-4 pt-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -1013,7 +1013,7 @@ export default function OverviewDashboard() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 px-4 pb-4 pt-0">
           <GpsTrackMap data={track} currentLat={gps?.lat ?? null} currentLon={gps?.lon ?? null} />
 
           <div className="grid gap-4 md:grid-cols-3">
@@ -1043,14 +1043,6 @@ export default function OverviewDashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Overview</h1>
-          <p className="text-sm text-muted-foreground mt-1">Real-time monitoring of your van systems</p>
-        </div>
-      </div>
-
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6">
         {orderedIds.map((id) => (
           <div

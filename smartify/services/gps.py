@@ -4,13 +4,14 @@ Keeps shared state updated in smartify.state without importing smartify.app.
 """
 from collections import deque
 from pathlib import Path
+import math
 import threading
 import time
 from typing import Optional
 
 from smartify import state
 from smartify.config import GPS_DEVICE, GPS_BAUD
-from smartify.db import db_insert_gps
+from smartify.db import db_insert_gps, db_query_latest_gps_fix, db_add_gps_distance_daily
 
 
 def _nmea_to_decimal(coord: str, hemi: str) -> Optional[float]:
@@ -46,6 +47,16 @@ def _nmea_to_decimal(coord: str, hemi: str) -> Optional[float]:
         return None
 
 
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6371.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
 def _gps_reader_thread() -> None:
     try:
         import serial
@@ -60,6 +71,10 @@ def _gps_reader_thread() -> None:
     stationary_window_seconds = 5
     last_stationary_emit = 0
     sample_buffer = deque(maxlen=200)
+
+    last_fix = db_query_latest_gps_fix()
+    prev_lat = last_fix.get("lat") if last_fix else None
+    prev_lon = last_fix.get("lon") if last_fix else None
 
     while True:
         try:
@@ -91,6 +106,7 @@ def _gps_reader_thread() -> None:
 
                 def _emit_update(ts: int, lat: Optional[float], lon: Optional[float], speed: Optional[float],
                                  course: Optional[float], alt: Optional[float], sats: Optional[int]) -> None:
+                    nonlocal prev_lat, prev_lon
                     state._gps_latest.update({
                         "ts": ts,
                         "lat": lat,
@@ -103,6 +119,19 @@ def _gps_reader_thread() -> None:
                         "error": None,
                     })
                     db_insert_gps(ts, lat, lon, speed, course, alt)
+
+                    if lat is None or lon is None:
+                        return
+
+                    if prev_lat is not None and prev_lon is not None:
+                        if speed is None or speed >= 1.0:
+                            delta_km = _haversine_km(prev_lat, prev_lon, lat, lon)
+                            if 0 < delta_km < 5:
+                                day = time.strftime("%Y-%m-%d", time.localtime(ts))
+                                db_add_gps_distance_daily(day, delta_km, ts)
+
+                    prev_lat = lat
+                    prev_lon = lon
 
                 while True:
                     try:
