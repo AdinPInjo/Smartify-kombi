@@ -124,6 +124,15 @@ def db_init() -> None:
     )
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS weather_samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            temp_c REAL
+        );
+        """
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS relay_states (
             name TEXT PRIMARY KEY,
             pin INTEGER NOT NULL,
@@ -570,6 +579,34 @@ def db_sum_gps_distance_all() -> float:
     total = cur.fetchone()[0] or 0.0
     conn.close()
     return float(total)
+
+
+def db_insert_weather_sample(ts: int, temp_c: Optional[float]) -> None:
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    cur = conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=5000")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.execute(
+        "INSERT INTO weather_samples (ts, temp_c) VALUES (?, ?)",
+        (ts, temp_c),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_query_weather_since(since_ts: int, limit: int = 2000) -> List[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT ts, temp_c FROM weather_samples WHERE ts >= ? ORDER BY ts ASC LIMIT ?",
+        (since_ts, limit),
+    )
+    rows = [_safe_dict_from_row(r, context="db_query_weather_since") for r in cur.fetchall()]
+    rows = [r for r in rows if r is not None]
+    conn.close()
+    return rows
 
 
 # =========================

@@ -1,14 +1,15 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { MapPin, Gauge, Satellite, Route, AlertCircle } from "lucide-react";
 import { useGpsData } from "@/hooks/useGpsData";
 import GpsMap from "@/components/gps/GpsMap";
+import TimeWindowControl from "@/components/gps/TimeWindowControl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const GpsDashboard = () => {
-  const trackMinutes = 1440;
+  const [trackMinutes, setTrackMinutes] = useState(1440);
   const { currentData, uiCurrentData, trackData, isLoadingCurrent, isLoadingTrack, error } =
     useGpsData(trackMinutes);
 
@@ -162,6 +163,14 @@ const GpsDashboard = () => {
             </div>
           </CardContent>
         </Card>
+
+        {/* History Window */}
+        <div className="lg:col-span-1">
+          <TimeWindowControl
+            minutes={trackMinutes}
+            onMinutesChange={setTrackMinutes}
+          />
+        </div>
 
         {/* Trip Stats */}
         <Card className="glass-card p-0 lg:col-span-3">

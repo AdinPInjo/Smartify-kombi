@@ -21,6 +21,7 @@ const GpsMap = ({ currentData, trackData, isLoading, fitKey, className }: Props)
   const mapDivRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
+  const circleRef = useRef<L.CircleMarker | null>(null);
   const polyRef = useRef<L.Polyline | null>(null);
 
   // Fit control refs:
@@ -86,6 +87,13 @@ const GpsMap = ({ currentData, trackData, isLoading, fitKey, className }: Props)
 
     polyRef.current = L.polyline([], {}).addTo(map);
     markerRef.current = L.marker(currentPos ?? fallback, { icon: dotIcon }).addTo(map);
+    circleRef.current = L.circleMarker(currentPos ?? fallback, {
+      radius: 6,
+      color: "#22c55e",
+      fillColor: "#22c55e",
+      fillOpacity: 0.9,
+      weight: 2,
+    }).addTo(map);
 
     mapRef.current = map;
 
@@ -93,6 +101,7 @@ const GpsMap = ({ currentData, trackData, isLoading, fitKey, className }: Props)
       map.remove();
       mapRef.current = null;
       markerRef.current = null;
+      circleRef.current = null;
       polyRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -109,6 +118,9 @@ const GpsMap = ({ currentData, trackData, isLoading, fitKey, className }: Props)
     if (!markerRef.current) return;
     if (!currentPos) return;
     markerRef.current.setLatLng(currentPos);
+    if (circleRef.current) {
+      circleRef.current.setLatLng(currentPos);
+    }
   }, [currentPos]);
 
   // Fit logic:

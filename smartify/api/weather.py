@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from smartify import state
 from smartify.auth import require_auth
+from smartify.db import db_insert_weather_sample, db_query_weather_since
 
 
 router = APIRouter(tags=["weather"])
@@ -77,6 +78,7 @@ def api_weather_current(request: Request, x_api_key: Optional[str] = Header(defa
             "ok": True,
             "error": None,
         })
+        db_insert_weather_sample(now, temp_c)
     except URLError as e:
         state._weather_latest.update({
             "ok": False,
@@ -89,3 +91,27 @@ def api_weather_current(request: Request, x_api_key: Optional[str] = Header(defa
         })
 
     return JSONResponse(state._weather_latest)
+
+
+@router.get("/api/weather/history")
+def api_weather_history(
+    request: Request,
+    range: Optional[str] = None,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+
+    now = int(time.time())
+    if range == "week":
+        since = now - 7 * 24 * 3600
+    elif range == "month":
+        since = now - 30 * 24 * 3600
+    elif range == "year":
+        since = now - 365 * 24 * 3600
+    else:
+        since = now - 24 * 3600
+
+    rows = db_query_weather_since(since, limit=20000)
+    return JSONResponse({"since": since, "now": now, "rows": rows})

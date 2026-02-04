@@ -61,6 +61,21 @@ export default function TemperatureDashboard() {
     retry: 1,
   });
 
+  const { data: weatherHistory } = useQuery({
+    queryKey: ["weather", "history", range],
+    queryFn: async () => {
+      const r = await apiFetch(`/api/weather/history?range=${range}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`Weather history API returned ${r.status}`);
+      return (await r.json()) as {
+        since: number;
+        now: number;
+        rows: Array<{ ts: number; temp_c: number | null }>;
+      };
+    },
+    refetchInterval: 60000,
+    retry: 1,
+  });
+
   const { data: snapshot } = useQuery({
     queryKey: ["temperature", "snapshot", "latest"],
     queryFn: async () => {
@@ -114,11 +129,11 @@ export default function TemperatureDashboard() {
 
   const chartData = useMemo(() => {
     const rows = data?.rows ?? [];
-    const byTs = new Map<number, { ts: number; kombi: number | null; garaza: number | null }>();
+    const byTs = new Map<number, { ts: number; kombi: number | null; garaza: number | null; outside: number | null }>();
 
     for (const r of rows) {
       if (!byTs.has(r.ts)) {
-        byTs.set(r.ts, { ts: r.ts, kombi: null, garaza: null });
+        byTs.set(r.ts, { ts: r.ts, kombi: null, garaza: null, outside: null });
       }
       const entry = byTs.get(r.ts)!;
       if (r.sensor_index === 0) {
@@ -128,13 +143,22 @@ export default function TemperatureDashboard() {
       }
     }
 
+    const wrows = weatherHistory?.rows ?? [];
+    for (const r of wrows) {
+      if (!byTs.has(r.ts)) {
+        byTs.set(r.ts, { ts: r.ts, kombi: null, garaza: null, outside: null });
+      }
+      const entry = byTs.get(r.ts)!;
+      entry.outside = r.temp_c ?? null;
+    }
+
     const series = Array.from(byTs.values()).sort((a, b) => a.ts - b.ts);
 
     return series.map((p) => ({
       ...p,
       label: formatTs(p.ts, range),
     }));
-  }, [data, range]);
+  }, [data, weatherHistory, range]);
 
   const kombiSeries = useMemo(
     () => chartData.map((p) => p.kombi).filter((v) => v != null) as number[],
@@ -144,11 +168,17 @@ export default function TemperatureDashboard() {
     () => chartData.map((p) => p.garaza).filter((v) => v != null) as number[],
     [chartData]
   );
+  const outsideSeries = useMemo(
+    () => chartData.map((p) => p.outside).filter((v) => v != null) as number[],
+    [chartData]
+  );
 
   const kombiMin = kombiSeries.length ? Math.min(...kombiSeries) : null;
   const kombiMax = kombiSeries.length ? Math.max(...kombiSeries) : null;
   const garazaMin = garazaSeries.length ? Math.min(...garazaSeries) : null;
   const garazaMax = garazaSeries.length ? Math.max(...garazaSeries) : null;
+  const outsideMin = outsideSeries.length ? Math.min(...outsideSeries) : null;
+  const outsideMax = outsideSeries.length ? Math.max(...outsideSeries) : null;
 
   const snapshotKombi = snapshot?.sensors?.find((s) => s.sensor_index === 0 || s.sensor_name === "kombi") ?? null;
   const snapshotGaraza = snapshot?.sensors?.find((s) => s.sensor_index === 1 || s.sensor_name === "garaza") ?? null;
@@ -246,10 +276,10 @@ export default function TemperatureDashboard() {
             name: "Outside",
             location: "GPS weather",
             current: outsideNow,
-            min: null,
-            max: null,
-            trend: "stable",
-            history: Array.from({ length: 6 }, () => null),
+            min: outsideMin,
+            max: outsideMax,
+            trend: getTrend(outsideSeries),
+            history: spark(outsideSeries),
           },
         ].map((sensor) => (
           <Card key={sensor.id} className="glass-card">
@@ -363,6 +393,15 @@ export default function TemperatureDashboard() {
                   dot={false} 
                   stroke="#f59e0b" 
                   strokeWidth={2.5}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="outside"
+                  name="Outside (°C)"
+                  dot={false}
+                  stroke="#22c55e"
+                  strokeWidth={2}
                   connectNulls={false}
                 />
               </LineChart>
