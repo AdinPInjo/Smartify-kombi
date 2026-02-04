@@ -23,3 +23,15 @@ _gps_latest: Dict[str, Any] = {
     "ok": False,
     "error": None,
 }
+
+_weather_latest: Dict[str, Any] = {
+    "ts": None,
+    "lat": None,
+    "lon": None,
+    "temp_c": None,
+    "wind_kmh": None,
+    "weather_code": None,
+    "source": "open-meteo",
+    "ok": False,
+    "error": None,
+}

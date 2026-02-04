@@ -12,7 +12,8 @@ import {
   CartesianGrid,
   Legend,
 } from "recharts";
-import { Thermometer, TrendingUp } from "lucide-react";
+import { Thermometer, TrendingUp, TrendingDown, Minus, Clock } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 
 type Range = "day" | "week" | "month" | "year";
 
@@ -41,6 +42,43 @@ function formatTs(ts: number, range: Range) {
 export default function TemperatureDashboard() {
   const [range, setRange] = useState<Range>("day");
   const [data, setData] = useState<BackendPayload | null>(null);
+
+  const { data: weather } = useQuery({
+    queryKey: ["weather", "current"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/weather/current", { cache: "no-store" });
+      if (!r.ok) throw new Error(`Weather API returned ${r.status}`);
+      return (await r.json()) as {
+        ok: boolean;
+        temp_c: number | null;
+        wind_kmh: number | null;
+        weather_code: number | null;
+        ts: number | null;
+        error: string | null;
+      };
+    },
+    refetchInterval: 60000,
+    retry: 1,
+  });
+
+  const { data: snapshot } = useQuery({
+    queryKey: ["temperature", "snapshot", "latest"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/temperature/snapshot/latest", { cache: "no-store" });
+      if (!r.ok) throw new Error(`Snapshot API returned ${r.status}`);
+      return (await r.json()) as {
+        ts: number | null;
+        sensors: Array<{
+          sensor_index: number;
+          sensor_name?: string | null;
+          avg_temp: number | null;
+          avg_humidity: number | null;
+        }>;
+      };
+    },
+    refetchInterval: 5000,
+    retry: 1,
+  });
 
   useEffect(() => {
     let alive = true;
@@ -98,18 +136,72 @@ export default function TemperatureDashboard() {
     }));
   }, [data, range]);
 
+  const kombiSeries = useMemo(
+    () => chartData.map((p) => p.kombi).filter((v) => v != null) as number[],
+    [chartData]
+  );
+  const garazaSeries = useMemo(
+    () => chartData.map((p) => p.garaza).filter((v) => v != null) as number[],
+    [chartData]
+  );
+
+  const kombiMin = kombiSeries.length ? Math.min(...kombiSeries) : null;
+  const kombiMax = kombiSeries.length ? Math.max(...kombiSeries) : null;
+  const garazaMin = garazaSeries.length ? Math.min(...garazaSeries) : null;
+  const garazaMax = garazaSeries.length ? Math.max(...garazaSeries) : null;
+
+  const snapshotKombi = snapshot?.sensors?.find((s) => s.sensor_index === 0 || s.sensor_name === "kombi") ?? null;
+  const snapshotGaraza = snapshot?.sensors?.find((s) => s.sensor_index === 1 || s.sensor_name === "garaza") ?? null;
+
+  const kombiNow = snapshotKombi?.avg_temp ?? null;
+  const garazaNow = snapshotGaraza?.avg_temp ?? null;
+  const outsideNow = weather?.ok ? weather?.temp_c ?? null : null;
+
+  const getTrend = (series: number[]) => {
+    if (series.length < 2) return "stable";
+    const last = series[series.length - 1]!;
+    const prev = series[series.length - 2]!;
+    if (last > prev) return "up";
+    if (last < prev) return "down";
+    return "stable";
+  };
+
+  const getTrendIcon = (trend: string) => {
+    switch (trend) {
+      case "up":
+        return <TrendingUp className="w-4 h-4 text-warning" />;
+      case "down":
+        return <TrendingDown className="w-4 h-4 text-primary" />;
+      default:
+        return <Minus className="w-4 h-4 text-muted-foreground" />;
+    }
+  };
+
+  const getTemperatureColor = (temp: number | null) => {
+    if (temp == null) return "text-muted-foreground";
+    if (temp > 25) return "text-destructive";
+    if (temp < 15) return "text-primary";
+    return "text-success";
+  };
+
+  const spark = (series: number[]) => {
+    if (!series.length) return Array.from({ length: 6 }, () => null);
+    const slice = series.slice(-6);
+    return slice.length >= 6 ? slice : Array.from({ length: 6 - slice.length }, () => null).concat(slice);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
-              <Thermometer className="h-6 w-6 text-amber-400" />
+            <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+              <Thermometer className="h-6 w-6 text-primary icon-glow" />
             </div>
             Temperature History
           </h1>
-          <p className="text-sm text-zinc-400 mt-2">Kombi + Garaža sensor readings over time</p>
+          <p className="text-sm text-muted-foreground mt-2">Kombi + Garaža sensor readings over time</p>
         </div>
 
         <div className="flex gap-2">
@@ -119,11 +211,6 @@ export default function TemperatureDashboard() {
               variant={range === r ? "default" : "outline"}
               size="sm"
               onClick={() => setRange(r)}
-              className={
-                range === r
-                  ? "bg-blue-500 hover:bg-blue-600 text-white border-blue-500"
-                  : "bg-zinc-800/50 hover:bg-zinc-700/50 border-zinc-700/50 text-zinc-300"
-              }
             >
               {r.charAt(0).toUpperCase() + r.slice(1)}
             </Button>
@@ -131,16 +218,96 @@ export default function TemperatureDashboard() {
         </div>
       </div>
 
+      {/* Current Readings */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 lg:gap-6">
+        {[
+          {
+            id: "kombi",
+            name: "Kombi Interior",
+            location: "Main cabin",
+            current: kombiNow,
+            min: kombiMin,
+            max: kombiMax,
+            trend: getTrend(kombiSeries),
+            history: spark(kombiSeries),
+          },
+          {
+            id: "garaza",
+            name: "Garage",
+            location: "Rear storage",
+            current: garazaNow,
+            min: garazaMin,
+            max: garazaMax,
+            trend: getTrend(garazaSeries),
+            history: spark(garazaSeries),
+          },
+          {
+            id: "outside",
+            name: "Outside",
+            location: "GPS weather",
+            current: outsideNow,
+            min: null,
+            max: null,
+            trend: "stable",
+            history: Array.from({ length: 6 }, () => null),
+          },
+        ].map((sensor) => (
+          <Card key={sensor.id} className="glass-card">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+                  <Thermometer className="h-4 w-4 text-primary" />
+                </div>
+                {sensor.name}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-end justify-between">
+                <div>
+                  <span className={`text-4xl font-bold ${getTemperatureColor(sensor.current)}`}>
+                    {sensor.current != null ? sensor.current.toFixed(1) : "—"}
+                  </span>
+                  <span className="text-xl text-muted-foreground">°C</span>
+                </div>
+                {getTrendIcon(sensor.trend)}
+              </div>
+
+              <p className="text-sm text-muted-foreground">{sensor.location}</p>
+
+              <div className="h-12 flex items-end gap-1">
+                {sensor.history.map((val, i) => (
+                  <div
+                    key={i}
+                    className="flex-1 bg-primary/40 rounded-t"
+                    style={{ height: val == null ? "15%" : `${Math.max(15, ((val - 10) / 20) * 100)}%` }}
+                  />
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 pt-2 border-t border-glass">
+                <div>
+                  <p className="metric-label">Min</p>
+                  <p className="font-semibold">{sensor.min != null ? `${sensor.min.toFixed(1)}°C` : "—"}</p>
+                </div>
+                <div>
+                  <p className="metric-label">Max</p>
+                  <p className="font-semibold">{sensor.max != null ? `${sensor.max.toFixed(1)}°C` : "—"}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
       {/* Chart Card */}
-      <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
-        <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+      <Card className="glass-card">
         <CardHeader className="pb-4 relative z-10">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
-              <TrendingUp className="h-5 w-5 text-amber-400" />
-              Temperature Oscillations
+            <CardTitle className="text-lg font-semibold text-foreground flex items-center gap-2">
+              <Clock className="h-5 w-5 text-primary" />
+              History
             </CardTitle>
-            <div className="text-xs text-zinc-400">
+            <div className="text-xs text-muted-foreground">
               {data?.rows?.length ?? 0} data points
             </div>
           </div>
@@ -170,8 +337,8 @@ export default function TemperatureDashboard() {
                 />
                 <Tooltip 
                   contentStyle={{ 
-                    backgroundColor: "#18181b", 
-                    border: "1px solid #3f3f46",
+                    backgroundColor: "rgba(15, 23, 42, 0.9)", 
+                    border: "1px solid rgba(148, 163, 184, 0.2)",
                     borderRadius: "8px",
                     color: "#e4e4e7"
                   }}

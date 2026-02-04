@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { MapPin, Navigation, Car, Warehouse, Thermometer, Battery, Power, Droplet, Activity, TrendingUp, Plus, Trash2, Save, Settings2 } from "lucide-react";
+import { MapPin, Navigation, Home, Warehouse, Thermometer, Battery, Power, Droplets, Activity, Gauge, ListChecks, Plus, Trash2, Save, Settings2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -110,7 +110,7 @@ function GpsMiniMap({ lat, lon }: { lat: number | null; lon: number | null }) {
     }, 100);
   }, [lat, lon]);
 
-  return <div ref={elRef} className="h-32 w-full rounded-xl overflow-hidden border border-zinc-800/50" />;
+  return <div ref={elRef} className="h-32 w-full rounded-xl overflow-hidden border border-glass bg-secondary/30" />;
 }
 
 function GpsTrackMap({ data, currentLat, currentLon }: { data: TrackPayload | null; currentLat: number | null; currentLon: number | null }) {
@@ -237,7 +237,7 @@ function GpsTrackMap({ data, currentLat, currentLon }: { data: TrackPayload | nu
     map.fitBounds(bounds, { padding: [20, 20] });
   }, [data, currentLat, currentLon]);
 
-  return <div ref={elRef} className="h-[420px] w-full rounded-xl overflow-hidden border border-zinc-800/50" />;
+  return <div ref={elRef} className="h-[420px] w-full rounded-xl overflow-hidden border border-glass bg-secondary/30" />;
 }
 
 function HeaderRelayCard() {
@@ -369,52 +369,40 @@ function HeaderRelayCard() {
   };
 
   return (
-    <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
-      <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-      <CardHeader className="pb-3 relative z-10">
-        <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-          <div className="p-2 rounded-lg bg-orange-500/10 border border-orange-500/20">
-            <Power className="h-4 w-4 text-orange-400" />
+    <Card className="glass-card">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+          <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+            <Power className="h-4 w-4 text-primary" />
           </div>
-          Header ON-OFF
+          Header Relay
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4 relative z-10">
+      <CardContent className="space-y-4">
         <div className="flex items-center justify-between">
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-zinc-200">Relay Control</span>
-              {isManual ? (
-                <span className="text-xs px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">
-                  Manual
-                </span>
-              ) : (
-                <span className="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                  Auto
-                </span>
-              )}
-            </div>
+          <div>
+            <p className="font-medium text-foreground">Main Power</p>
             {error ? (
-              <span className="text-xs text-red-400">Offline</span>
+              <p className="text-sm text-destructive">Offline</p>
             ) : isUpdating ? (
-              <span className="text-xs text-zinc-400">Updating...</span>
+              <p className="text-sm text-muted-foreground">Updating...</p>
             ) : (
-              <span className={`text-xs ${isOn ? "text-emerald-400" : "text-zinc-400"}`}>
-                {isOn ? "ON" : "OFF"}
-              </span>
+              <p className="text-sm text-muted-foreground">
+                {isOn ? "Currently active" : "Currently off"}
+              </p>
             )}
             {manualUntil && manualUntil > Date.now() / 1000 && (
-              <span className="text-xs text-zinc-500">
+              <p className="text-xs text-muted-foreground">
                 Manual until {new Date(manualUntil * 1000).toLocaleTimeString()}
-              </span>
+              </p>
             )}
           </div>
           <div className="flex items-center gap-3">
             {isUpdating && (
-              <div className="h-4 w-4 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
+              <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
             )}
             {isPending && !isUpdating && (
-              <div className="h-4 w-4 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin opacity-50" />
+              <div className="h-4 w-4 border-2 border-muted border-t-transparent rounded-full animate-spin opacity-50" />
             )}
             <TooltipProvider>
               <Tooltip>
@@ -424,7 +412,7 @@ function HeaderRelayCard() {
                       checked={isOn}
                       onCheckedChange={handleToggle}
                       disabled={isDisabled}
-                      className="data-[state=checked]:bg-orange-500 data-[state=unchecked]:bg-zinc-700"
+                      className="data-[state=checked]:bg-primary data-[state=unchecked]:bg-secondary"
                     />
                   </div>
                 </TooltipTrigger>
@@ -433,15 +421,15 @@ function HeaderRelayCard() {
                     <p className="text-sm font-medium">
                       {pendingMessage}
                       {cooldownRemaining !== null && cooldownRemaining > 0 && (
-                        <span className="ml-1 text-orange-400">({cooldownRemaining}s)</span>
+                        <span className="ml-1 text-primary">({cooldownRemaining}s)</span>
                       )}
                     </p>
                     {sensorSampleCount !== null && relaysResponse?.sensor_sample_count !== undefined && (
-                      <p className="text-xs text-zinc-400 mt-1">
+                      <p className="text-xs text-muted-foreground mt-1">
                         Progress: {sensorSampleCount}/6 samples collected
                       </p>
                     )}
-                    <p className="text-xs text-zinc-400 mt-1">
+                    <p className="text-xs text-muted-foreground mt-1">
                       Manual control is disabled during this period.
                     </p>
                   </TooltipContent>
@@ -454,7 +442,7 @@ function HeaderRelayCard() {
           <Button
             size="sm"
             variant="outline"
-            className="w-full bg-zinc-800/50 border-zinc-700/50 text-zinc-300 hover:bg-zinc-700/50"
+            className="w-full"
             onClick={handleReturnToAuto}
             disabled={isDisabled || isPending}
           >
@@ -462,7 +450,7 @@ function HeaderRelayCard() {
           </Button>
         )}
         {error && (
-          <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-2 py-1">
+          <div className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded px-2 py-1">
             Failed to connect to relay
           </div>
         )}
@@ -510,36 +498,47 @@ function WaterLevelCard() {
 
   const levelPercent = waterData?.level_percent ?? null;
 
+  const statusColor = levelPercent == null
+    ? "bg-secondary"
+    : levelPercent > 50
+    ? "bg-success"
+    : levelPercent > 25
+    ? "bg-warning"
+    : "bg-destructive";
+  const textColor = levelPercent == null
+    ? "text-muted-foreground"
+    : levelPercent > 50
+    ? "text-success"
+    : levelPercent > 25
+    ? "text-warning"
+    : "text-destructive";
+
   return (
-    <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-blue-950/30 to-blue-900/20 backdrop-blur-sm transition-all duration-300 hover:border-blue-700/50 hover:shadow-xl hover:shadow-blue-900/20 flex-1">
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-      <CardHeader className="pb-3 relative z-10">
-        <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-          <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
-            <Droplet className="h-4 w-4 text-blue-400" />
+    <Card className="glass-card">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+          <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+            <Droplets className="h-4 w-4 text-primary" />
           </div>
           Water Level
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3 text-sm py-2 relative z-10">
-        <div className="flex items-center justify-between">
-          <span className="text-zinc-400">Level</span>
-          <span className="font-semibold text-zinc-200">
+      <CardContent className="space-y-4">
+        <div className="flex items-end justify-between">
+          <span className={`text-3xl font-bold ${textColor}`}>
             {levelPercent !== null ? `${levelPercent}%` : "—"}
           </span>
+          <span className="text-sm text-muted-foreground">— L</span>
         </div>
-        <div className="flex items-center justify-between">
-          <span className="text-zinc-400">Status</span>
-          <span className={`font-semibold ${
-            waterData?.status === "error" || waterData?.status === "stale"
-              ? "text-amber-400"
-              : waterData?.status === "ok"
-              ? "text-zinc-200"
-              : "text-zinc-400"
-          }`}>
-            {waterData?.message ?? "—"}
-          </span>
+        <div className="h-3 bg-secondary/50 rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${statusColor}`}
+            style={{ width: `${levelPercent ?? 0}%` }}
+          />
         </div>
+        <p className="text-xs text-muted-foreground">
+          {waterData?.message ?? "—"}
+        </p>
       </CardContent>
     </Card>
   );
@@ -652,22 +651,23 @@ function RelayRulesWidget() {
   };
 
   return (
-    <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
-      <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-      <CardHeader className="pb-4 relative z-10">
+    <Card className="glass-card">
+      <CardHeader className="pb-4">
         <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
-              <Settings2 className="h-5 w-5 text-purple-400" />
-              Relay Rules
-            </CardTitle>
-            <p className="text-sm text-zinc-400 mt-1">
-              {enabledRules.length} active rule{enabledRules.length !== 1 ? "s" : ""}
-            </p>
+          <div className="flex items-center gap-2">
+            <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+              <ListChecks className="h-4 w-4 text-primary" />
+            </div>
+            <div>
+              <CardTitle className="text-lg font-semibold text-foreground">Active Rules</CardTitle>
+              <p className="text-sm text-muted-foreground mt-1">
+                {enabledRules.length} active rule{enabledRules.length !== 1 ? "s" : ""}
+              </p>
+            </div>
           </div>
           <Button
             size="sm"
-            className="bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 text-purple-400"
+            variant="outline"
             onClick={() => navigate("/dashboard/relays")}
           >
             <Plus className="h-4 w-4 mr-1.5" />
@@ -675,58 +675,31 @@ function RelayRulesWidget() {
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4 relative z-10">
-        {lastFiredRule && (
-          <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 p-3 backdrop-blur-sm">
-            <div className="text-xs text-zinc-400 mb-1">Last fired</div>
-            <div className="text-sm font-medium text-zinc-200">{lastFiredRule.name}</div>
-            <div className="text-xs text-zinc-500 mt-1">{formatTimeAgo(lastFiredRule.last_triggered_at)}</div>
+      <CardContent className="space-y-3">
+        {isLoading ? (
+          <div className="text-sm text-muted-foreground text-center py-4">Loading rules...</div>
+        ) : rules.length === 0 ? (
+          <div className="rounded-lg border-2 border-dashed border-glass p-6 text-center">
+            <Settings2 className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">No rules configured</p>
+            <p className="text-xs text-muted-foreground mt-1">Click "Manage" to create automation rules</p>
           </div>
-        )}
-
-        <div className="space-y-2 max-h-[300px] overflow-y-auto">
-          {isLoading ? (
-            <div className="text-sm text-zinc-400 text-center py-4">Loading rules...</div>
-          ) : rules.length === 0 ? (
-            <div className="rounded-lg border-2 border-dashed border-zinc-700/30 p-8 text-center">
-              <Settings2 className="h-8 w-8 text-zinc-600 mx-auto mb-2" />
-              <p className="text-sm text-zinc-500">No rules configured</p>
-              <p className="text-xs text-zinc-600 mt-1">Click "Manage" to create automation rules</p>
-            </div>
-          ) : (
-            rules.slice(0, 3).map((rule: any) => (
-              <div key={rule.id} className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 p-3 backdrop-blur-sm">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm font-semibold text-zinc-200">{rule.name}</span>
-                      {rule.is_enabled ? (
-                        <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          Active
-                        </span>
-                      ) : (
-                        <span className="text-xs px-2 py-0.5 rounded bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
-                          Disabled
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-zinc-400">{formatRuleDescription(rule)}</p>
-                  </div>
+        ) : (
+          rules.slice(0, 3).map((rule: any) => (
+            <div
+              key={rule.id}
+              className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-glass"
+            >
+              <div className="flex items-center gap-3">
+                <Thermometer className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <p className="font-medium text-sm text-foreground">{rule.name}</p>
+                  <p className="text-xs text-muted-foreground">{formatRuleDescription(rule)}</p>
                 </div>
               </div>
-            ))
-          )}
-        </div>
-
-        {rules.length > 3 && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full bg-zinc-800/50 border-zinc-700/50 text-zinc-300 hover:bg-zinc-700/50"
-            onClick={() => navigate("/dashboard/relays")}
-          >
-            View all {rules.length} rules
-          </Button>
+              <span className={rule.is_enabled ? "status-dot-online" : "status-dot-offline"} />
+            </div>
+          ))
         )}
       </CardContent>
     </Card>
@@ -897,79 +870,92 @@ export default function OverviewDashboard() {
   const modules: Record<OverviewModuleId, JSX.Element> = {
     gps_card: (
       <Card className="glass-card">
-        <CardHeader className="pb-3 relative z-10">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <div className="p-2 rounded-lg bg-primary/20 border border-glass">
-                <MapPin className="h-4 w-4 text-primary icon-glow" />
-              </div>
-              Van Location
-            </CardTitle>
-          </div>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+            <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+              <MapPin className="h-4 w-4 text-primary icon-glow" />
+            </div>
+            GPS Status
+          </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4 relative z-10">
-          <GpsMiniMap lat={gps?.lat ?? null} lon={gps?.lon ?? null} />
-
-          <div className="space-y-2.5">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Status</span>
-              <span className={`font-semibold ${gpsHasFix ? "text-success" : "text-warning"}`}>
-                {gpsStatus}
-              </span>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className={gpsHasFix ? "status-dot-online" : "status-dot-warning"} />
+              <span className="text-sm text-muted-foreground">Signal</span>
             </div>
+            <span className={`text-sm font-medium ${gpsHasFix ? "text-success" : "text-warning"}`}>
+              {gpsHasFix ? "Strong" : "Weak"}
+            </span>
+          </div>
 
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Location</span>
-              <span className="font-medium text-xs text-right max-w-[60%] truncate text-foreground/80" title={address || undefined}>
-                {gpsHasFix ? (address || `${gps?.lat?.toFixed(4)}, ${gps?.lon?.toFixed(4)}`) : "—"}
-              </span>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <p className="metric-label">Latitude</p>
+              <p className="text-lg font-semibold">
+                {gps?.lat != null ? `${gps.lat.toFixed(4)}°` : "—"}
+              </p>
             </div>
+            <div>
+              <p className="metric-label">Longitude</p>
+              <p className="text-lg font-semibold">
+                {gps?.lon != null ? `${gps.lon.toFixed(4)}°` : "—"}
+              </p>
+            </div>
+          </div>
 
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground flex items-center gap-2">
-                <Navigation className="h-3.5 w-3.5" />
-                Speed
-              </span>
-              <span className="font-semibold tabular-nums text-foreground">
-                {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
-              </span>
+          <div className="flex items-center gap-3 pt-2 border-t border-glass">
+            <div className="flex items-center gap-2">
+              <Gauge className="w-4 h-4 text-primary" />
+              <span className="text-sm text-muted-foreground">Speed</span>
             </div>
+            <span className="text-lg font-bold text-primary">
+              {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
+            </span>
           </div>
         </CardContent>
       </Card>
     ),
     temp_card: (
       <Card className={`glass-card ${tempClass(kombiT)}`}>
-        <CardContent className="flex flex-col space-y-3 py-4 relative z-10">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+            <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+              <Thermometer className="h-4 w-4 text-primary" />
+            </div>
+            Temperature
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
           {import.meta.env.DEV && (
             <div className="text-xs text-primary p-1.5 bg-secondary/40 rounded-lg border border-glass mb-1">
               <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : "null"}
             </div>
           )}
-
-          <div className="flex items-center justify-between rounded-lg bg-secondary/40 border border-glass px-4 py-3 backdrop-blur-sm transition-all hover:bg-secondary/60">
-            <span className="flex items-center gap-2.5 text-foreground/80">
-              <Car className="h-4 w-4 text-primary" />
-              <span className="font-medium">Kombi</span>
-            </span>
-            <div className="flex items-center gap-2">
-              <span className="font-bold tabular-nums text-lg text-foreground">
-                {formatTemp(temps?.kombi?.temp_c ?? null)}
-              </span>
-              <span className="text-xs text-muted-foreground">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-glass">
+              <div className="flex items-center gap-3">
+                <Home className="w-5 h-5 text-muted-foreground" />
+                <span className="font-medium">Kombi</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-bold text-success">
+                  {temps?.kombi?.temp_c != null ? temps.kombi.temp_c.toFixed(1) : "—"}
+                </span>
+                <span className="text-sm text-muted-foreground">°C</span>
+              </div>
             </div>
-          </div>
-
-          <div className="flex items-center justify-between rounded-lg bg-secondary/40 border border-glass px-4 py-3 backdrop-blur-sm transition-all hover:bg-secondary/60">
-            <span className="flex items-center gap-2.5 text-foreground/80">
-              <Warehouse className="h-4 w-4 text-warning" />
-              <span className="font-medium">Garaža</span>
-            </span>
-            <div className="flex items-center gap-2">
-              <span className="font-bold tabular-nums text-lg text-foreground">
-                {formatTemp(temps?.garaza?.temp_c ?? null)}
-              </span>
-              <span className="text-xs text-muted-foreground">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
+            <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-glass">
+              <div className="flex items-center gap-3">
+                <Warehouse className="w-5 h-5 text-muted-foreground" />
+                <span className="font-medium">Garaža</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-bold text-success">
+                  {temps?.garaza?.temp_c != null ? temps.garaza.temp_c.toFixed(1) : "—"}
+                </span>
+                <span className="text-sm text-muted-foreground">°C</span>
+              </div>
             </div>
           </div>
         </CardContent>
@@ -978,22 +964,31 @@ export default function OverviewDashboard() {
     water_card: <WaterLevelCard />,
     battery: (
       <Card className="glass-card">
-        <CardHeader className="pb-3 relative z-10">
+        <CardHeader className="pb-3">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-            <div className="p-2 rounded-lg bg-secondary/50 border border-glass">
-              <Battery className="h-4 w-4 text-success" />
+            <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+              <Battery className="h-4 w-4 text-primary" />
             </div>
             Battery
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 relative z-10">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">State of charge</span>
-            <span className="font-semibold text-foreground">— %</span>
+        <CardContent className="space-y-4">
+          <div className="flex items-end justify-between">
+            <div className="flex items-baseline gap-1">
+              <span className="text-3xl font-bold text-muted-foreground">—</span>
+              <span className="text-lg text-muted-foreground">%</span>
+            </div>
+            <div className="text-sm text-muted-foreground">Status</div>
           </div>
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Voltage</span>
-            <span className="font-semibold text-foreground">— V</span>
+          <div className="grid grid-cols-2 gap-4 pt-2 border-t border-glass">
+            <div>
+              <p className="metric-label">Voltage</p>
+              <p className="text-lg font-semibold">— V</p>
+            </div>
+            <div>
+              <p className="metric-label">Health</p>
+              <p className="text-lg font-semibold text-muted-foreground">Unknown</p>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1002,43 +997,37 @@ export default function OverviewDashboard() {
     relay_rules: <RelayRulesWidget />,
     gps_map: (
       <Card className="glass-card">
-        <CardHeader className="pb-4 relative z-10">
+        <CardHeader className="pb-4">
           <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-lg font-semibold text-foreground">GPS Map & Track</CardTitle>
-              <p className="text-sm text-muted-foreground mt-1">Last 24 hours location history</p>
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+                <Activity className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <CardTitle className="text-lg font-semibold text-foreground">GPS Track</CardTitle>
+                <p className="text-sm text-muted-foreground mt-1">Last 24 hours location history</p>
+              </div>
             </div>
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary/40 border border-glass">
-              <Activity className="h-4 w-4 text-primary" />
               <span className="text-xs font-medium text-foreground/80">Live</span>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4 relative z-10">
+        <CardContent className="space-y-4">
           <GpsTrackMap data={track} currentLat={gps?.lat ?? null} currentLon={gps?.lon ?? null} />
 
           <div className="grid gap-4 md:grid-cols-3">
-            <div className="rounded-lg bg-secondary/40 border border-glass px-4 py-3 backdrop-blur-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Track Points</span>
-                <span className="font-bold text-lg tabular-nums text-foreground">{track?.count ?? 0}</span>
-              </div>
+            <div className="text-center p-3 rounded-xl bg-secondary/30 border border-glass">
+              <p className="metric-label">Track Points</p>
+              <p className="text-xl font-bold text-primary">{track?.count ?? 0}</p>
             </div>
-            <div className="rounded-lg bg-secondary/40 border border-glass px-4 py-3 backdrop-blur-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Current Speed</span>
-                <span className="font-bold text-lg tabular-nums text-foreground">
-                  {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
-                </span>
-              </div>
+            <div className="text-center p-3 rounded-xl bg-secondary/30 border border-glass">
+              <p className="metric-label">Current Speed</p>
+              <p className="text-xl font-bold">{speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}</p>
             </div>
-            <div className="rounded-lg bg-secondary/40 border border-glass px-4 py-3 backdrop-blur-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">GPS Status</span>
-                <span className={`font-bold text-lg ${gpsHasFix ? "text-success" : "text-warning"}`}>
-                  {gpsStatus}
-                </span>
-              </div>
+            <div className="text-center p-3 rounded-xl bg-secondary/30 border border-glass">
+              <p className="metric-label">GPS Status</p>
+              <p className={`text-xl font-bold ${gpsHasFix ? "text-success" : "text-warning"}`}>{gpsStatus}</p>
             </div>
           </div>
         </CardContent>
@@ -1050,29 +1039,24 @@ export default function OverviewDashboard() {
   const topIds = layout.topOrder.filter((id) => !hidden.has(id));
   const bottomIds = layout.bottomOrder.filter((id) => !hidden.has(id));
 
+  const orderedIds = [...topIds, ...bottomIds];
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard Overview</h1>
-          <p className="text-sm text-zinc-400 mt-1">Real-time monitoring of your van systems</p>
+          <h1 className="text-3xl font-bold tracking-tight">Overview</h1>
+          <p className="text-sm text-muted-foreground mt-1">Real-time monitoring of your van systems</p>
         </div>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-        {topIds.map((id) => (
-          <div key={id} className="min-w-0">
-            {modules[id]}
-          </div>
-        ))}
-      </div>
-
-      {/* Relay Rules + GPS Map Section */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        {bottomIds.map((id) => (
-          <div key={id} className="min-w-0">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6">
+        {orderedIds.map((id) => (
+          <div
+            key={id}
+            className={`min-w-0 ${id === "gps_map" ? "lg:col-span-2" : ""}`}
+          >
             {modules[id]}
           </div>
         ))}

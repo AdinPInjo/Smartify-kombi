@@ -389,18 +389,18 @@ function RelaysDashboard() {
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
-              <ToggleLeft className="h-6 w-6 text-blue-400" />
+            <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+              <ToggleLeft className="h-6 w-6 text-primary icon-glow" />
             </div>
             Relay Control
           </h1>
-          <p className="text-sm text-zinc-400 mt-2">Manage connected devices and automation rules</p>
+          <p className="text-sm text-muted-foreground mt-2">Manage connected devices and automation rules</p>
         </div>
         {relaysError ? (
-          <Card className="border-red-500/50 bg-gradient-to-br from-red-900/20 to-zinc-950/50">
+          <Card className="glass-card">
             <CardContent className="py-12 text-center">
-              <p className="text-red-400 font-medium mb-2">Error loading relays</p>
-              <p className="text-sm text-zinc-400 mb-4">
+              <p className="text-destructive font-medium mb-2">Error loading relays</p>
+              <p className="text-sm text-muted-foreground mb-4">
                 {relaysError instanceof Error ? relaysError.message : "Unknown error occurred"}
               </p>
               <Button 
@@ -413,9 +413,9 @@ function RelaysDashboard() {
             </CardContent>
           </Card>
         ) : (
-          <Card className="border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50">
+          <Card className="glass-card">
             <CardContent className="py-12 text-center">
-              <p className="text-zinc-400">No relays found</p>
+              <p className="text-muted-foreground">No relays found</p>
               <Button 
                 onClick={() => queryClient.invalidateQueries({ queryKey: ["relays"] })} 
                 className="mt-4"
@@ -434,12 +434,12 @@ function RelaysDashboard() {
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
-            <ToggleLeft className="h-6 w-6 text-blue-400" />
+          <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+            <ToggleLeft className="h-6 w-6 text-primary icon-glow" />
           </div>
           Relay Control
         </h1>
-        <p className="text-sm text-zinc-400 mt-2">Manage connected devices and automation rules</p>
+        <p className="text-sm text-muted-foreground mt-2">Manage connected devices and automation rules</p>
       </div>
 
       {/* Relays */}
@@ -455,14 +455,14 @@ function RelaysDashboard() {
           return (
           <Card
             key={relay.id}
-            className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20"
+            className="glass-card group relative overflow-hidden transition-all duration-300 hover:shadow-glow"
           >
-            <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+            <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
             <CardHeader className="pb-4 relative z-10">
                 {/* Header row: Relay name (left) + Status badge (right) */}
                 <div className="flex items-center justify-between mb-3">
-                  <CardTitle className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
-                    <Power className="h-5 w-5 text-orange-400" />
+                  <CardTitle className="text-lg font-semibold text-foreground flex items-center gap-2">
+                    <Power className="h-5 w-5 text-primary" />
                     {editingRelayId === relay.id ? (
                       <div className="flex items-center gap-2">
                         <Input
@@ -505,11 +505,11 @@ function RelaysDashboard() {
                   <div className="flex items-center gap-2 text-xs max-w-[60%] text-right flex-shrink-0">
                     {isPending && relay.pending_reason === "reconciling" ? (
                       <div className="flex items-center gap-1.5">
-                        <div className="h-3 w-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-                        <span className="text-zinc-400">Reconciling...</span>
+                        <div className="h-3 w-3 border-2 border-muted border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                        <span className="text-muted-foreground">Reconciling...</span>
                       </div>
                     ) : (
-                      <span className="text-zinc-500">
+                      <span className="text-muted-foreground">
                         {isAuto ? (
                           <>AUTO: monitoring {relayRules.length > 0 ? `${relayRules.length} rule${relayRules.length !== 1 ? "s" : ""}` : "no rules"}</>
                         ) : (
@@ -525,13 +525,13 @@ function RelaysDashboard() {
                     <span
                       className={`text-xs px-2 py-0.5 rounded border ${
                         isAuto
-                          ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
-                          : "bg-orange-500/10 text-orange-400 border-orange-500/20"
+                          ? "bg-primary/20 text-primary border-primary/30"
+                          : "bg-secondary/40 text-foreground/80 border-glass"
                       }`}
                     >
                       {relay.mode.toUpperCase()}
                     </span>
-                    <span className={`text-xs ${isOn ? "text-emerald-400" : "text-zinc-400"}`}>
+                    <span className={`text-xs ${isOn ? "text-success" : "text-muted-foreground"}`}>
                       {isOn ? "ON" : "OFF"}
                     </span>
                   </div>
@@ -565,7 +565,7 @@ function RelaysDashboard() {
                         <TooltipTrigger asChild>
                           <div className="flex items-center gap-2">
                             {isPending && (
-                              <div className="h-3 w-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin opacity-50" />
+                              <div className="h-3 w-3 border-2 border-muted border-t-transparent rounded-full animate-spin opacity-50" />
                             )}
                           </div>
                         </TooltipTrigger>
@@ -574,7 +574,7 @@ function RelaysDashboard() {
                             <p className="text-sm font-medium">
                               {relay.pending_message || "Relay is reconciling state"}
                             </p>
-                            <p className="text-xs text-zinc-400 mt-1">
+                            <p className="text-xs text-muted-foreground mt-1">
                               Controls are disabled during this period.
                             </p>
                           </TooltipContent>
@@ -588,10 +588,10 @@ function RelaysDashboard() {
               {/* Rules Section */}
                     <div>
                 <div className="flex items-center justify-between mb-3">
-                  <Label className="text-sm font-semibold text-zinc-200">Rules</Label>
+                  <Label className="text-sm font-semibold text-foreground">Rules</Label>
                   <Button
                     size="sm"
-                    className="bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 text-purple-400"
+                    className="bg-primary/20 hover:bg-primary/30 border border-glass text-primary"
                     onClick={() => handleAddRule(relay.id)}
                   >
                     <Plus className="h-4 w-4 mr-1.5" />
@@ -600,40 +600,40 @@ function RelaysDashboard() {
                 </div>
 
                 {isLoadingRules ? (
-                  <div className="text-sm text-zinc-400 py-4">Loading rules...</div>
+                  <div className="text-sm text-muted-foreground py-4">Loading rules...</div>
                 ) : relayRules.length === 0 ? (
-                  <div className="rounded-lg border-2 border-dashed border-zinc-700/30 p-6 text-center">
-                    <p className="text-sm text-zinc-500">No rules configured</p>
+                  <div className="rounded-lg border-2 border-dashed border-glass p-6 text-center">
+                    <p className="text-sm text-muted-foreground">No rules configured</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
                     {relayRules.map((rule) => (
                       <div
                         key={rule.id}
-                        className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 p-4 backdrop-blur-sm relative"
+                        className="rounded-lg bg-secondary/40 border border-glass p-4 backdrop-blur-sm relative"
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-2">
-                              <span className="text-sm font-semibold text-zinc-200">{rule.name}</span>
+                              <span className="text-sm font-semibold text-foreground">{rule.name}</span>
                               {rule.is_enabled ? (
-                                <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                <span className="text-xs px-2 py-0.5 rounded bg-success/15 text-success border border-success/20">
                                   Active
                                 </span>
                               ) : (
-                                <span className="text-xs px-2 py-0.5 rounded bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
+                                <span className="text-xs px-2 py-0.5 rounded bg-secondary/40 text-muted-foreground border border-glass">
                                   Disabled
                                 </span>
                               )}
                               {rule.runtime_status?.is_winner && (
-                                <span className="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                <span className="text-xs px-2 py-0.5 rounded bg-primary/20 text-primary border border-primary/30">
                                   Winner
                                 </span>
                               )}
-                              <span className="text-xs text-zinc-500">Priority: {rule.priority}</span>
+                              <span className="text-xs text-muted-foreground">Priority: {rule.priority}</span>
                             </div>
-                            <p className="text-xs text-zinc-400 mb-2">{formatRuleDescription(rule)}</p>
-                            <div className="flex items-center gap-3 text-xs text-zinc-500">
+                            <p className="text-xs text-muted-foreground mb-2">{formatRuleDescription(rule)}</p>
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
                               <span>Cooldown: {rule.cooldown_seconds}s</span>
                               {rule.last_triggered_at && (
                                 <span className="flex items-center gap-1">
@@ -650,12 +650,12 @@ function RelaysDashboard() {
                                 toggleRuleMutation.mutate({ ruleId: rule.id, isEnabled: checked })
                               }
                               disabled={toggleRuleMutation.isPending}
-                              className="data-[state=checked]:bg-emerald-500"
+                              className="data-[state=checked]:bg-success"
                             />
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-8 w-8 p-0 text-zinc-400 hover:text-amber-400"
+                              className="h-8 w-8 p-0 text-muted-foreground hover:text-warning"
                               onClick={() => {
                                 toggleRuleMutation.mutate({ ruleId: rule.id, isEnabled: !rule.is_enabled });
                               }}
@@ -671,7 +671,7 @@ function RelaysDashboard() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-8 w-8 p-0 text-zinc-400 hover:text-blue-400"
+                              className="h-8 w-8 p-0 text-muted-foreground hover:text-primary"
                               onClick={() => handleEditRule(rule)}
                               title="Edit rule"
                             >
@@ -680,7 +680,7 @@ function RelaysDashboard() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-8 w-8 p-0 text-zinc-400 hover:text-red-400"
+                              className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
                               onClick={() => {
                                 if (confirm(`Delete rule "${rule.name}"?`)) {
                                   deleteRuleMutation.mutate(rule.id);
@@ -698,12 +698,12 @@ function RelaysDashboard() {
                           <div className="absolute bottom-2 right-2 text-xs">
                             <span className={
                               rule.runtime_status.reason_code === "sensor_stale" || rule.runtime_status.reason_code === "error" || rule.runtime_status.reason_code === "parse_error"
-                                ? "text-amber-400"
+                                ? "text-warning"
                                 : rule.runtime_status.reason_code === "sensor_warming_up" || rule.runtime_status.reason_code === "cooldown"
-                                ? "text-zinc-400"
+                                ? "text-muted-foreground"
                                 : rule.runtime_status.reason_code === "ok" && rule.runtime_status.matched
-                                ? "text-emerald-400"
-                                : "text-zinc-500"
+                                ? "text-success"
+                                : "text-muted-foreground"
                             }>
                               {rule.runtime_status.message}
                             </span>

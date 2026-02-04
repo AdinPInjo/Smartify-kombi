@@ -1409,7 +1409,9 @@ app.include_router(sensors_api.router)
 
 # Initialize and include gps router
 from smartify.api import gps as gps_api
+from smartify.api import weather as weather_api
 app.include_router(gps_api.router)
+app.include_router(weather_api.router)
 
 # Initialize and include network router
 from smartify.api import network as network_api
