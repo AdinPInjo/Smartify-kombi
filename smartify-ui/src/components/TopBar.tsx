@@ -92,15 +92,15 @@ const TopBar = () => {
   const hasFix = gps.ok && gps.lat != null && gps.lon != null;
 
   return (
-    <header className="h-16 border-b border-zinc-800/50 flex items-center justify-between px-6 bg-zinc-950/50 backdrop-blur-xl">
+    <header className="h-16 border-b border-white/10 flex items-center justify-between px-6 bg-white/5 backdrop-blur-2xl">
       <div className="flex items-center gap-4 min-w-0">
-        <div className="md:hidden h-9 w-9 rounded-lg border border-zinc-800/50 flex items-center justify-center bg-zinc-900/50">
-          <BrandMark className="h-5 w-5 text-zinc-300" />
+        <div className="md:hidden h-9 w-9 rounded-xl border border-white/10 flex items-center justify-center bg-white/5">
+          <BrandMark className="h-5 w-5 text-blue-200" />
         </div>
 
-        <div className="font-semibold tracking-tight flex items-center gap-2.5 text-zinc-200">
-          <BrandMark className="h-5 w-5 hidden md:block text-zinc-300" />
-          <span className="text-lg">Smartify</span>
+        <div className="font-semibold tracking-tight flex items-center gap-2.5 text-zinc-100">
+          <BrandMark className="h-5 w-5 hidden md:block text-blue-200" />
+          <span className="text-lg glass-text">Smartify</span>
         </div>
 
         <div className={`text-xs px-3 py-1.5 rounded-lg border backdrop-blur-sm font-medium flex items-center gap-2 transition-all ${badge.cls}`}>
@@ -113,14 +113,14 @@ const TopBar = () => {
       </div>
 
       <div className="flex items-center gap-4">
-        <div className="text-sm text-zinc-400 hidden sm:block font-medium">
+        <div className="text-sm text-zinc-300 hidden sm:block font-medium">
           {me.user ? me.user : ""}
         </div>
         <Button 
           variant="secondary" 
           size="sm" 
           onClick={doLogout}
-          className="bg-zinc-800/50 hover:bg-zinc-700/50 border-zinc-700/50 text-zinc-200"
+          className="bg-white/5 hover:bg-white/10 border-white/10 text-zinc-100"
         >
           Logout
         </Button>
