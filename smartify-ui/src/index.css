@@ -152,7 +152,7 @@
   }
 
   .glass-card {
-    @apply border border-white/10 bg-white/6 backdrop-blur-xl shadow-[0_24px_80px_-50px_rgba(59,130,246,0.7)] rounded-2xl;
+    @apply border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_24px_80px_-50px_rgba(59,130,246,0.7)] rounded-2xl;
   }
 
   .glass-chip {
