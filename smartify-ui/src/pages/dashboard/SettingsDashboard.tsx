@@ -104,14 +104,14 @@ const SettingsDashboard = () => {
           {networks.length > 0 && (
             <div className="space-y-2">
               <div className="text-sm font-medium">Available networks</div>
-              <div className="max-h-56 overflow-auto rounded-lg border">
+              <div className="max-h-56 overflow-auto rounded-xl border border-glass bg-secondary/30 backdrop-blur-xl">
                 {networks.map((n) => (
                   <button
                     key={n.ssid}
                     onClick={() => setSelectedSsid(n.ssid)}
                     className={[
-                      "w-full text-left px-3 py-2 text-sm flex items-center justify-between border-b last:border-b-0",
-                      selectedSsid === n.ssid ? "bg-muted" : "hover:bg-muted/60",
+                      "w-full text-left px-3 py-2 text-sm flex items-center justify-between border-b border-glass last:border-b-0",
+                      selectedSsid === n.ssid ? "bg-secondary/60" : "hover:bg-secondary/40",
                     ].join(" ")}
                   >
                     <span className="truncate">{n.ssid}</span>

@@ -93,7 +93,7 @@ export default function DbIntegrityDashboard() {
           <CardTitle className="text-base text-zinc-200">Raw Output</CardTitle>
         </CardHeader>
         <CardContent>
-          <pre className="max-h-80 overflow-auto rounded-lg bg-zinc-900/60 p-4 text-xs text-zinc-200 border border-zinc-800/70">
+          <pre className="max-h-80 overflow-auto rounded-lg bg-secondary/40 p-4 text-xs text-foreground border border-glass backdrop-blur-xl">
 {data?.result || "No output recorded yet."}
           </pre>
         </CardContent>

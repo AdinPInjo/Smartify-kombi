@@ -4,7 +4,7 @@ import TopBar from "@/components/TopBar";
 
 const DashboardLayout = () => {
   return (
-    <div className="min-h-screen text-foreground">
+    <div className="min-h-screen text-foreground bg-gradient-radial">
       <div className="flex">
         <Sidebar />
 

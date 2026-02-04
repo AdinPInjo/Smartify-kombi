@@ -1,177 +1,218 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Smartify Design System - Glassmorphism Blue Theme */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
 
 @layer base {
   :root {
-    --background: 220 30% 96%;
-    --foreground: 220 25% 12%;
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
 
-    --card: 220 35% 98%;
-    --card-foreground: 220 25% 12%;
+    --card: 222 47% 8%;
+    --card-foreground: 210 40% 98%;
 
-    --popover: 220 35% 98%;
-    --popover-foreground: 220 25% 12%;
+    --popover: 222 47% 10%;
+    --popover-foreground: 210 40% 98%;
 
     --primary: 217 91% 60%;
-    --primary-foreground: 0 0% 100%;
+    --primary-foreground: 222 47% 6%;
 
-    --secondary: 220 20% 94%;
-    --secondary-foreground: 220 25% 12%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
 
-    --muted: 220 20% 94%;
-    --muted-foreground: 220 10% 42%;
+    --muted: 217 33% 14%;
+    --muted-foreground: 215 20% 55%;
 
-    --accent: 142 76% 36%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 217 91% 60%;
+    --accent-foreground: 222 47% 6%;
 
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
 
-    --border: 220 18% 90%;
-    --input: 220 18% 90%;
+    --success: 142 76% 36%;
+    --success-foreground: 210 40% 98%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 222 47% 6%;
+
+    --border: 217 33% 20%;
+    --input: 217 33% 17%;
     --ring: 217 91% 60%;
 
     --radius: 1rem;
 
-    --sidebar-background: 220 35% 98%;
-    --sidebar-foreground: 220 12% 38%;
-    --sidebar-primary: 217 91% 60%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 20% 94%;
-    --sidebar-accent-foreground: 220 25% 12%;
-    --sidebar-border: 220 18% 90%;
-    --sidebar-ring: 217 91% 60%;
+    --glass-bg: 222 47% 11% / 0.6;
+    --glass-border: 217 33% 30% / 0.3;
+    --glass-glow: 217 91% 60% / 0.15;
+    --glass-blur: 16px;
 
-    /* Custom Smartify tokens */
-    --success: 142 76% 36%;
-    --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 100%;
-    --info: 199 89% 48%;
-    --info-foreground: 0 0% 100%;
+    --glow-primary: 0 0 20px hsl(217 91% 60% / 0.3), 0 0 40px hsl(217 91% 60% / 0.1);
+    --glow-success: 0 0 20px hsl(142 76% 36% / 0.3), 0 0 40px hsl(142 76% 36% / 0.1);
+    --glow-warning: 0 0 20px hsl(38 92% 50% / 0.3), 0 0 40px hsl(38 92% 50% / 0.1);
+    --glow-destructive: 0 0 20px hsl(0 72% 51% / 0.3), 0 0 40px hsl(0 72% 51% / 0.1);
+
+    --sidebar-background: 222 47% 7%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 222 47% 6%;
+    --sidebar-accent: 217 33% 14%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 18%;
+    --sidebar-ring: 217 91% 60%;
   }
 
   .dark {
-    --background: 222 40% 6%;
-    --foreground: 210 20% 98%;
-
-    --card: 224 28% 12%;
-    --card-foreground: 210 20% 98%;
-
-    --popover: 224 28% 12%;
-    --popover-foreground: 210 20% 98%;
-
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
+    --card: 222 47% 8%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222 47% 10%;
+    --popover-foreground: 210 40% 98%;
     --primary: 217 91% 60%;
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 224 25% 18%;
-    --secondary-foreground: 210 20% 98%;
-
-    --muted: 224 25% 18%;
-    --muted-foreground: 215 15% 58%;
-
-    --accent: 142 70% 45%;
-    --accent-foreground: 0 0% 100%;
-
+    --primary-foreground: 222 47% 6%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217 33% 14%;
+    --muted-foreground: 215 20% 55%;
+    --accent: 217 91% 60%;
+    --accent-foreground: 222 47% 6%;
     --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 100%;
-
-    --border: 224 22% 22%;
-    --input: 224 22% 22%;
-    --ring: 217 91% 60%;
-
-    --sidebar-background: 224 35% 6%;
-    --sidebar-foreground: 215 18% 70%;
-    --sidebar-primary: 217 91% 60%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 224 24% 14%;
-    --sidebar-accent-foreground: 210 20% 98%;
-    --sidebar-border: 224 24% 16%;
-    --sidebar-ring: 217 91% 60%;
-
-    /* Custom Smartify tokens */
-    --success: 142 70% 45%;
-    --success-foreground: 0 0% 100%;
+    --destructive-foreground: 210 40% 98%;
+    --success: 142 76% 36%;
+    --success-foreground: 210 40% 98%;
     --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 100%;
-    --info: 199 89% 48%;
-    --info-foreground: 0 0% 100%;
+    --warning-foreground: 222 47% 6%;
+    --border: 217 33% 20%;
+    --input: 217 33% 17%;
+    --ring: 217 91% 60%;
   }
-}
 
-@layer base {
   * {
     @apply border-border;
   }
 
-  html {
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
     font-family: 'Space Grotesk', system-ui, sans-serif;
   }
-
-  body {
-    @apply bg-background text-foreground antialiased;
-  }
 }
 
-/* Glassmorphism shell */
-.dark {
-  min-height: 100vh;
-  background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(59, 130, 246, 0.25), transparent 60%),
-    radial-gradient(900px 500px at 90% 0%, rgba(14, 165, 233, 0.2), transparent 55%),
-    radial-gradient(1000px 800px at 50% 120%, rgba(99, 102, 241, 0.2), transparent 65%),
-    linear-gradient(160deg, rgba(5, 10, 20, 0.98), rgba(9, 12, 24, 0.98));
-}
-
-#root {
-  position: relative;
-  min-height: 100vh;
-  isolation: isolate;
-}
-
-#root::before {
-  content: "";
-  position: fixed;
-  inset: -20%;
-  background:
-    radial-gradient(400px 300px at 15% 25%, rgba(56, 189, 248, 0.2), transparent 60%),
-    radial-gradient(420px 360px at 85% 35%, rgba(59, 130, 246, 0.2), transparent 65%),
-    radial-gradient(360px 300px at 50% 85%, rgba(99, 102, 241, 0.18), transparent 60%);
-  z-index: -1;
-  filter: blur(10px);
-}
-
-@layer utilities {
+@layer components {
   .glass-panel {
-    @apply border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_20px_60px_-40px_rgba(14,165,233,0.6)] rounded-2xl;
+    @apply relative overflow-hidden;
+    background: hsl(var(--glass-bg));
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid hsl(var(--glass-border));
   }
 
   .glass-card {
-    @apply border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_24px_80px_-50px_rgba(59,130,246,0.7)] rounded-2xl;
+    @apply glass-panel rounded-2xl p-5 transition-all duration-300;
   }
 
-  .glass-chip {
-    @apply border border-white/15 bg-white/10 backdrop-blur-lg;
+  .glass-card:hover {
+    border-color: hsl(217 91% 60% / 0.4);
+    box-shadow: var(--glow-primary);
   }
 
-  .glass-divider {
-    @apply border-white/10;
+  .glass-card-static {
+    @apply glass-panel rounded-2xl p-5;
+  }
+
+  .glow-text {
+    text-shadow: 0 0 10px hsl(217 91% 60% / 0.5);
   }
 
   .glass-text {
     text-shadow: 0 12px 40px rgba(59, 130, 246, 0.25);
+  }
+
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+
+  .status-dot-online {
+    @apply status-dot bg-success;
+    box-shadow: 0 0 8px hsl(142 76% 36% / 0.6);
+  }
+
+  .status-dot-offline {
+    @apply status-dot bg-destructive;
+    box-shadow: 0 0 8px hsl(0 72% 51% / 0.6);
+  }
+
+  .status-dot-warning {
+    @apply status-dot bg-warning;
+    box-shadow: 0 0 8px hsl(38 92% 50% / 0.6);
+  }
+
+  .nav-link {
+    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground transition-all duration-200;
+  }
+
+  .nav-link:hover {
+    @apply bg-secondary/50 text-foreground;
+  }
+
+  .nav-link.active {
+    @apply bg-primary/20 text-primary;
+    box-shadow: inset 0 0 20px hsl(217 91% 60% / 0.1);
+  }
+
+  .metric-value {
+    @apply text-3xl font-bold tracking-tight;
+  }
+
+  .metric-label {
+    @apply text-sm text-muted-foreground uppercase tracking-wider;
+  }
+
+  .icon-glow {
+    filter: drop-shadow(0 0 6px hsl(217 91% 60% / 0.5));
+  }
+}
+
+@layer utilities {
+  .bg-gradient-radial {
+    background: radial-gradient(ellipse at top, hsl(217 91% 60% / 0.08) 0%, transparent 50%);
+  }
+
+  .border-glass {
+    border-color: hsl(var(--glass-border));
+  }
+
+  .animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.6;
+    }
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-4px);
+    }
   }
 }
 
 /* Leaflet map styling for dark theme */
 .leaflet-container {
   background: hsl(224 30% 8%) !important;
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
 }
 
 .dark .leaflet-tile-pane {
@@ -211,14 +252,4 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.5);
-}
-
-/* Card hover effects */
-.card-hover {
-  @apply transition-all duration-200;
-}
-
-.card-hover:hover {
-  @apply shadow-lg;
-  transform: translateY(-1px);
 }

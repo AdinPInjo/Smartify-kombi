@@ -67,8 +67,8 @@ const OverviewLayoutSettings = () => {
             <div
               key={item.id}
               className={[
-                "flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur-xl transition-all",
-                dragging?.id === item.id ? "opacity-60 ring-2 ring-blue-400/40" : "",
+                "flex flex-col gap-3 rounded-xl border border-glass bg-secondary/30 px-4 py-3 backdrop-blur-xl transition-all",
+                dragging?.id === item.id ? "opacity-60 ring-2 ring-primary/40" : "",
               ].join(" ")}
               draggable
               onDragStart={() => setDragging({ id: item.id, zone })}
