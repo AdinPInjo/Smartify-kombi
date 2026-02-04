@@ -939,48 +939,45 @@ export default function OverviewDashboard() {
         </CardContent>
       </Card>
     ),
-    temp_water: (
-      <div className="flex flex-col gap-6">
-        <Card className={`group relative overflow-hidden border shadow-lg transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20 flex-1 ${tempClass(kombiT)}`}>
-          <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-          <CardContent className="flex flex-col space-y-3 py-4 relative z-10">
-            {import.meta.env.DEV && (
-              <div className="text-xs text-blue-400 p-1.5 bg-blue-950/50 rounded-lg border border-blue-800/30 mb-1">
-                <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : "null"}
-              </div>
-            )}
-
-            <div className="flex items-center justify-between rounded-lg bg-blue-500/10 border border-blue-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-blue-500/15">
-              <span className="flex items-center gap-2.5 text-zinc-300">
-                <Car className="h-4 w-4 text-blue-400" />
-                <span className="font-medium">Kombi</span>
-              </span>
-              <div className="flex items-center gap-2">
-                <span className="font-bold tabular-nums text-lg text-blue-300">
-                  {formatTemp(temps?.kombi?.temp_c ?? null)}
-                </span>
-                <span className="text-xs text-zinc-400">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
-              </div>
+    temp_card: (
+      <Card className={`group relative overflow-hidden border shadow-lg transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20 ${tempClass(kombiT)}`}>
+        <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+        <CardContent className="flex flex-col space-y-3 py-4 relative z-10">
+          {import.meta.env.DEV && (
+            <div className="text-xs text-blue-400 p-1.5 bg-blue-950/50 rounded-lg border border-blue-800/30 mb-1">
+              <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : "null"}
             </div>
+          )}
 
-            <div className="flex items-center justify-between rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-amber-500/15">
-              <span className="flex items-center gap-2.5 text-zinc-300">
-                <Warehouse className="h-4 w-4 text-amber-400" />
-                <span className="font-medium">Garaža</span>
+          <div className="flex items-center justify-between rounded-lg bg-blue-500/10 border border-blue-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-blue-500/15">
+            <span className="flex items-center gap-2.5 text-zinc-300">
+              <Car className="h-4 w-4 text-blue-400" />
+              <span className="font-medium">Kombi</span>
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-bold tabular-nums text-lg text-blue-300">
+                {formatTemp(temps?.kombi?.temp_c ?? null)}
               </span>
-              <div className="flex items-center gap-2">
-                <span className="font-bold tabular-nums text-lg text-amber-300">
-                  {formatTemp(temps?.garaza?.temp_c ?? null)}
-                </span>
-                <span className="text-xs text-zinc-400">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
-              </div>
+              <span className="text-xs text-zinc-400">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
             </div>
-          </CardContent>
-        </Card>
+          </div>
 
-        <WaterLevelCard />
-      </div>
+          <div className="flex items-center justify-between rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-amber-500/15">
+            <span className="flex items-center gap-2.5 text-zinc-300">
+              <Warehouse className="h-4 w-4 text-amber-400" />
+              <span className="font-medium">Garaža</span>
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-bold tabular-nums text-lg text-amber-300">
+                {formatTemp(temps?.garaza?.temp_c ?? null)}
+              </span>
+              <span className="text-xs text-zinc-400">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     ),
+    water_card: <WaterLevelCard />,
     battery: (
       <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
         <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
