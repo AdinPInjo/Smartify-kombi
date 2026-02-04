@@ -245,7 +245,7 @@ function HeaderRelayCard() {
 
   // Fetch heater relay from new API
   const { data: relaysResponse, isLoading, error } = useQuery({
-    queryKey: ["relays"],
+    queryKey: ["relays", "heater"],
     queryFn: async () => {
       const r = await apiFetch("/api/relays", { cache: "no-store" });
       if (!r.ok) throw new Error(`Relays API returned ${r.status}`);
@@ -307,6 +307,7 @@ function HeaderRelayCard() {
       const result = await r.json();
       // Refetch relays to get updated state
       await queryClient.invalidateQueries({ queryKey: ["relays"] });
+      await queryClient.invalidateQueries({ queryKey: ["relays", "heater"] });
       return result;
     },
     onError: (error) => {
@@ -315,6 +316,7 @@ function HeaderRelayCard() {
         description: error instanceof Error ? error.message : "Unknown error occurred",
       });
       queryClient.invalidateQueries({ queryKey: ["relays"] });
+      queryClient.invalidateQueries({ queryKey: ["relays", "heater"] });
     },
   });
 
@@ -331,6 +333,7 @@ function HeaderRelayCard() {
         throw new Error(err.message || `Failed to set auto mode: ${r.status}`);
       }
       await queryClient.invalidateQueries({ queryKey: ["relays"] });
+      await queryClient.invalidateQueries({ queryKey: ["relays", "heater"] });
       return await r.json();
     },
     onError: (error) => {
@@ -550,7 +553,7 @@ function RelayRulesWidget() {
 
   // Fetch heater relay
   const { data: relaysResponse } = useQuery({
-    queryKey: ["relays"],
+    queryKey: ["relays", "heater"],
     queryFn: async () => {
       const r = await apiFetch("/api/relays", { cache: "no-store" });
       if (!r.ok) throw new Error(`Relays API returned ${r.status}`);
