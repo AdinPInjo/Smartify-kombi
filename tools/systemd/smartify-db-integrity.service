@@ -1,0 +1,7 @@
+[Unit]
+Description=Smartify DB integrity check
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/adinpinjo/repos/Smartify-kombi
+ExecStart=/home/adinpinjo/repos/Smartify-kombi/tools/db_integrity_check.sh

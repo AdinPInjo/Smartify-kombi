@@ -14,6 +14,7 @@ import EnergyDashboard from "./pages/dashboard/EnergyDashboard";
 import RelaysDashboard from "./pages/dashboard/RelaysDashboard";
 import SettingsDashboard from "./pages/dashboard/SettingsDashboard";
 import TemperatureDashboard from "./pages/dashboard/TemperatureDashboard";
+import DbIntegrityDashboard from "./pages/dashboard/DbIntegrityDashboard";
 
 import NotFound from "./pages/NotFound";
 
@@ -47,6 +48,7 @@ const App = () => (
 <Route path="temperature" element={<TemperatureDashboard />} />
               <Route path="relays" element={<RelaysDashboard />} />
               <Route path="settings" element={<SettingsDashboard />} />
+              <Route path="system/db" element={<DbIntegrityDashboard />} />
 
             </Route>
 

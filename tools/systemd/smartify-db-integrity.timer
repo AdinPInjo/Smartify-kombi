@@ -1,0 +1,9 @@
+[Unit]
+Description=Run Smartify DB integrity check weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 03:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

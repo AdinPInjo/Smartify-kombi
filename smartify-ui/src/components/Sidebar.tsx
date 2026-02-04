@@ -6,6 +6,7 @@ import {
   ToggleLeft,
   Settings,
   Thermometer,
+  Database,
 } from "lucide-react";
 
 const BrandMark = ({ className = "" }: { className?: string }) => (
@@ -39,6 +40,10 @@ const nav = [
   { to: "/dashboard/relays", label: "Relays", Icon: ToggleLeft },
   { to: "/dashboard/temperature", label: "Temperature", Icon: Thermometer },
   { to: "/dashboard/settings", label: "Settings", Icon: Settings },
+];
+
+const systemNav = [
+  { to: "/dashboard/system/db", label: "DB Integrity", Icon: Database },
 ];
 
 export default function Sidebar() {
@@ -78,6 +83,37 @@ export default function Sidebar() {
                     <span className="relative z-10">{label}</span>
                     {isActive && (
                       <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-blue-400 rounded-r-full" />
+                    )}
+                  </>
+                )}
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+
+        <div className="mt-6 px-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500/80">
+          System
+        </div>
+        <ul className="mt-2 space-y-1.5">
+          {systemNav.map(({ to, label, Icon }) => (
+            <li key={to}>
+              <NavLink
+                to={to}
+                className={({ isActive }) =>
+                  [
+                    "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all duration-200 relative group",
+                    isActive
+                      ? "bg-gradient-to-r from-emerald-500/10 to-emerald-600/5 text-emerald-300 font-medium border border-emerald-500/20 shadow-lg shadow-emerald-500/5"
+                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/30",
+                  ].join(" ")
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <Icon className="h-4 w-4 relative z-10" />
+                    <span className="relative z-10">{label}</span>
+                    {isActive && (
+                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-emerald-400 rounded-r-full" />
                     )}
                   </>
                 )}
