@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { ListChecks } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +11,16 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 type NetItem = { ssid: string; signal: number | null; security: string };
 type NetStatus = { ssid: string | null; ip: string | null };
+type SystemHealthPayload = {
+  now: number;
+  threads: Array<{
+    name: string;
+    status: string;
+    error: string | null;
+    last_heartbeat: number | null;
+    age_seconds: number | null;
+  }>;
+};
 
 const SettingsDashboard = () => {
   const [status, setStatus] = useState<NetStatus>({ ssid: null, ip: null });
@@ -70,6 +81,26 @@ const SettingsDashboard = () => {
     loadStatus();
   }, []);
 
+  const formatAge = (seconds: number | null | undefined) => {
+    if (seconds == null) return "—";
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    return `${hours}h`;
+  };
+
+  const { data: systemHealth } = useQuery<SystemHealthPayload>({
+    queryKey: ["system", "health"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/system/health", { cache: "no-store" });
+      if (!r.ok) throw new Error(`System health API returned ${r.status}`);
+      return (await r.json()) as SystemHealthPayload;
+    },
+    refetchInterval: 10000,
+    retry: 1,
+  });
+
   return (
     <div className="space-y-6">
       <Card>
@@ -83,6 +114,49 @@ const SettingsDashboard = () => {
           <Button asChild>
             <Link to="/dashboard/settings/overview">Customize Overview</Link>
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <ListChecks className="h-4 w-4 text-primary" />
+            System Health
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {(systemHealth?.threads?.length ?? 0) === 0 ? (
+            <div className="text-sm text-muted-foreground">No health data yet</div>
+          ) : (
+            <div className="space-y-2">
+              {systemHealth?.threads?.map((row) => {
+                const status = row.status || "unknown";
+                const color =
+                  status === "ok"
+                    ? "text-success"
+                    : status === "error"
+                    ? "text-warning"
+                    : "text-muted-foreground";
+                return (
+                  <div
+                    key={row.name}
+                    className="flex items-center justify-between rounded-lg bg-secondary/30 border border-glass px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={status === "ok" ? "status-dot-online" : "status-dot-warning"} />
+                      <span className="text-sm font-medium capitalize">{row.name.replace("_", " ")}</span>
+                    </div>
+                    <div className="text-right">
+                      <div className={`text-xs font-medium ${color}`}>{status}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {formatAge(row.age_seconds)}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </CardContent>
       </Card>
 

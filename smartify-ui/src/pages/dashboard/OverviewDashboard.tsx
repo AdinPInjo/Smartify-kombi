@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { MapPin, Home, Warehouse, Thermometer, Battery, Power, Droplets, Activity, Gauge, ListChecks, Plus, Settings2 } from "lucide-react";
+import { MapPin, Home, Warehouse, Thermometer, Battery, Power, Droplets, Activity, Gauge, Plus, Settings2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -46,6 +46,7 @@ function tempClass(t: number | null) {
   if (t < 24) return "ring-1 ring-amber-400/40";
   return "ring-1 ring-red-400/40";
 }
+
 
 function GpsMiniMap({ lat, lon }: { lat: number | null; lon: number | null }) {
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -796,6 +797,7 @@ export default function OverviewDashboard() {
     refetchInterval: 60000,
     retry: 1,
   });
+
 
 
   // GPS track (24h)

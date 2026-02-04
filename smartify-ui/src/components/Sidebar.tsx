@@ -7,6 +7,7 @@ import {
   Settings,
   Thermometer,
   Database,
+  FileText,
 } from "lucide-react";
 
 const BrandMark = ({ className = "" }: { className?: string }) => (
@@ -44,6 +45,7 @@ const nav = [
 
 const systemNav = [
   { to: "/dashboard/system/db", label: "DB Integrity", Icon: Database },
+  { to: "/dashboard/system/logs", label: "Logs", Icon: FileText },
 ];
 
 export default function Sidebar() {

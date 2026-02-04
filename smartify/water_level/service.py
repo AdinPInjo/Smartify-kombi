@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from . import db as water_db
+from smartify import state
 from . import reader
 from . import calibration
 from .models import WaterLevelSnapshot
@@ -52,6 +53,7 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
     while True:
         try:
             now = int(time.time())
+            state._thread_health["water_level"] = {"last_heartbeat": now, "status": "ok", "error": None}
             conn = sqlite3.connect(str(db_path), timeout=5.0)
             
             # Load settings
@@ -365,4 +367,3 @@ def _water_level_thread_loop(db_path: Path, app_state: Optional[Dict[str, Any]])
         
         # Wait 60 seconds before next sample
         time.sleep(60)
-

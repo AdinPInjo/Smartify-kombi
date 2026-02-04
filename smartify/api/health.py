@@ -3,10 +3,12 @@
 from typing import Optional
 from pathlib import Path
 import json
+import time
 from fastapi import APIRouter, Request, Header
 from fastapi.responses import JSONResponse
 import smartify.config as config
-from smartify.auth import is_authenticated
+from smartify.auth import is_authenticated, require_auth
+from smartify import state
 
 
 def create_health_router(
@@ -62,6 +64,27 @@ def create_health_router(
             "db_path": payload.get("db_path", config.DB_PATH),
             "last_run_ts": payload.get("last_run_ts"),
         })
+
+    @router.get("/api/system/health")
+    def api_system_health(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+        """Get background thread health status."""
+        err = require_auth(request, x_api_key)
+        if err:
+            return err
+
+        now = int(time.time())
+        threads = []
+        for name, info in state._thread_health.items():
+            last = info.get("last_heartbeat") or 0
+            threads.append({
+                "name": name,
+                "status": info.get("status", "unknown"),
+                "error": info.get("error"),
+                "last_heartbeat": last or None,
+                "age_seconds": (now - last) if last else None,
+            })
+        threads.sort(key=lambda x: x["name"])
+        return JSONResponse({"now": now, "threads": threads})
 
     return router
 

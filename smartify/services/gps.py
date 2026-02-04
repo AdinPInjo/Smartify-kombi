@@ -10,6 +10,7 @@ import time
 from typing import Optional
 
 from smartify import state
+from smartify.logging_setup import logger, log_exception
 from smartify.config import GPS_DEVICE, GPS_BAUD
 from smartify.db import db_insert_gps, db_query_latest_gps_fix, db_add_gps_distance_daily
 
@@ -174,6 +175,7 @@ def _gps_reader_thread() -> None:
                             latest_lon = lon if lon is not None else latest_lon
                             latest_speed = speed_kmh if speed_kmh is not None else latest_speed
                             latest_course = course if course is not None else latest_course
+                            state._thread_health["gps"] = {"last_heartbeat": now, "status": "ok", "error": None}
 
                             _record_sample(now, latest_lat, latest_lon, latest_speed)
 
@@ -218,6 +220,7 @@ def _gps_reader_thread() -> None:
                             latest_lon = lon if lon is not None else latest_lon
                             latest_alt = alt if alt is not None else latest_alt
                             latest_sats = satellites if satellites is not None else latest_sats
+                            state._thread_health["gps"] = {"last_heartbeat": now, "status": "ok", "error": None}
 
                             _record_sample(now, latest_lat, latest_lon, latest_speed)
 
@@ -242,6 +245,8 @@ def _gps_reader_thread() -> None:
                     except Exception as e:
                         state._gps_latest["ok"] = False
                         state._gps_latest["error"] = f"Serial read error: {e}"
+                        state._thread_health["gps"] = {"last_heartbeat": int(time.time()), "status": "error", "error": str(e)}
+                        log_exception(logger, "[GPS] Serial read error", error=str(e))
                         time.sleep(1)
                         continue
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
 # Import centralized logging
-from smartify.logging_setup import logger
+from smartify.logging_setup import logger, log_exception
 
 # Import centralized configuration
 from smartify.config import (
@@ -91,6 +91,8 @@ from smartify.db import (
 from smartify.water_level import api as water_level_api, service as water_level_service
 from smartify.services import gps as gps_service
 from smartify.services import weather as weather_service
+from smartify.services import watchdog as watchdog_service
+from smartify.services import db_integrity as db_integrity_service
 from smartify import rule_engine
 
 # Import core functions from extracted modules
@@ -830,8 +832,10 @@ app.include_router(sensors_api.router)
 # Initialize and include gps router
 from smartify.api import gps as gps_api
 from smartify.api import weather as weather_api
+from smartify.api import logs as logs_api
 app.include_router(gps_api.router)
 app.include_router(weather_api.router)
+app.include_router(logs_api.router)
 
 # Initialize and include network router
 from smartify.api import network as network_api
@@ -937,6 +941,7 @@ def _dht22_poller_thread() -> None:
     """Background thread that polls DHT22 sensors at fixed intervals."""
     while True:
         try:
+            state._thread_health["dht22_poller"] = {"last_heartbeat": int(time.time()), "status": "ok", "error": None}
             results = read_dht22_all()
             state._temp_latest.clear()
             state._temp_latest.update({
@@ -944,11 +949,13 @@ def _dht22_poller_thread() -> None:
                 "sensors": results,
             })
         except Exception as e:
+            state._thread_health["dht22_poller"] = {"last_heartbeat": int(time.time()), "status": "error", "error": str(e)}
             state._temp_latest.clear()
             state._temp_latest.update({
                 "ts": int(time.time()),
                 "sensors": [],
             })
+            log_exception(logger, "[DHT22] Poller error", error=str(e))
         
         # Poll every SENSOR_LOG_INTERVAL seconds (default 30s)
         time.sleep(SENSOR_LOG_INTERVAL)
@@ -992,6 +999,7 @@ def _sensor_sampler_thread() -> None:
     while True:
         try:
             now = int(time.time())
+            state._thread_health["sensor_sampler"] = {"last_heartbeat": now, "status": "ok", "error": None}
             
             # Read all sensors
             results = read_dht22_all()
@@ -1131,9 +1139,9 @@ def _sensor_sampler_thread() -> None:
             time.sleep(SENSOR_SAMPLE_INTERVAL)
             
         except Exception as e:
+            state._thread_health["sensor_sampler"] = {"last_heartbeat": int(time.time()), "status": "error", "error": str(e)}
             print(f"[Sensor Sampler] Error: {e}")
-            import traceback
-            traceback.print_exc()
+            log_exception(logger, "[Sensor Sampler] Thread error", error=str(e))
             time.sleep(SENSOR_SAMPLE_INTERVAL)
 
 
@@ -1262,21 +1270,41 @@ def on_startup() -> None:
     # Step 3: Explicitly evaluate rules for AUTO mode relays
     # This ensures rules with conditions already TRUE at boot will trigger immediately
     evaluate_rules_on_startup()
+    def _start_dht_thread() -> None:
+        t = threading.Thread(target=_dht22_poller_thread, daemon=True, name="DHT22Poller")
+        t.start()
+
+    def _start_sampler_thread() -> None:
+        t = threading.Thread(target=_sensor_sampler_thread, daemon=True, name="SensorSampler")
+        t.start()
+
+    def _start_rule_thread() -> None:
+        t = threading.Thread(target=_rule_evaluator_thread, daemon=True, name="RuleEvaluator")
+        t.start()
+
     # Start GPS reader thread
     gps_service.start_gps_thread()
     # Start weather fetcher thread (background samples)
     weather_service.start_weather_thread()
+    # Start DB integrity checker + backups
+    db_integrity_service.start_db_integrity_thread()
     # Start DHT22 poller thread (for legacy API compatibility)
-    t_dht = threading.Thread(target=_dht22_poller_thread, daemon=True)
-    t_dht.start()
+    _start_dht_thread()
     # Start sensor sampler thread (for snapshot system)
-    t_sampler = threading.Thread(target=_sensor_sampler_thread, daemon=True)
-    t_sampler.start()
+    _start_sampler_thread()
     # Start rule evaluator thread
-    t_rules = threading.Thread(target=_rule_evaluator_thread, daemon=True)
-    t_rules.start()
+    _start_rule_thread()
     # Start water level thread (using new module)
     water_level_service.start_water_level_thread(DB_PATH, app.state)
+
+    # Watchdog registrations
+    watchdog_service.register_thread("dht22_poller", _start_dht_thread, timeout_seconds=max(60, SENSOR_LOG_INTERVAL * 3))
+    watchdog_service.register_thread("sensor_sampler", _start_sampler_thread, timeout_seconds=max(30, SENSOR_SAMPLE_INTERVAL * 6))
+    watchdog_service.register_thread("gps", gps_service.start_gps_thread, timeout_seconds=90)
+    watchdog_service.register_thread("weather", weather_service.start_weather_thread, timeout_seconds=3600)
+    watchdog_service.register_thread("db_integrity", db_integrity_service.start_db_integrity_thread, timeout_seconds=3600 * 8)
+    watchdog_service.register_thread("water_level", lambda: water_level_service.start_water_level_thread(DB_PATH, app.state), timeout_seconds=180)
+    watchdog_service.start_watchdog_thread()
 
 
 # Application state for sharing between modules

@@ -10,6 +10,7 @@ from urllib.request import urlopen
 from urllib.error import URLError
 
 from smartify import state
+from smartify.logging_setup import logger, log_exception
 from smartify.db import db_insert_weather_sample
 
 
@@ -73,17 +74,22 @@ def _weather_thread() -> None:
             last_fetch_ts = now
             last_lat = lat
             last_lon = lon
+            state._thread_health["weather"] = {"last_heartbeat": now, "status": "ok", "error": None}
         except URLError as e:
             state._weather_latest.update({
                 "ok": False,
                 "error": f"fetch_error: {e}",
             })
+            state._thread_health["weather"] = {"last_heartbeat": int(time.time()), "status": "error", "error": str(e)}
+            log_exception(logger, "[Weather] Fetch error", error=str(e))
             time.sleep(10)
         except Exception as e:
             state._weather_latest.update({
                 "ok": False,
                 "error": f"fetch_error: {e}",
             })
+            state._thread_health["weather"] = {"last_heartbeat": int(time.time()), "status": "error", "error": str(e)}
+            log_exception(logger, "[Weather] Unexpected error", error=str(e))
             time.sleep(10)
 
 

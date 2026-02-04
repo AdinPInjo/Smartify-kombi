@@ -35,3 +35,5 @@ _weather_latest: Dict[str, Any] = {
     "ok": False,
     "error": None,
 }
+
+_thread_health: Dict[str, Dict[str, Any]] = {}

@@ -16,6 +16,7 @@ import SettingsDashboard from "./pages/dashboard/SettingsDashboard";
 import TemperatureDashboard from "./pages/dashboard/TemperatureDashboard";
 import DbIntegrityDashboard from "./pages/dashboard/DbIntegrityDashboard";
 import OverviewLayoutSettings from "./pages/dashboard/OverviewLayoutSettings";
+import LogsDashboard from "./pages/dashboard/LogsDashboard";
 
 import NotFound from "./pages/NotFound";
 
@@ -51,6 +52,7 @@ const App = () => (
               <Route path="settings" element={<SettingsDashboard />} />
               <Route path="settings/overview" element={<OverviewLayoutSettings />} />
               <Route path="system/db" element={<DbIntegrityDashboard />} />
+              <Route path="system/logs" element={<LogsDashboard />} />
 
             </Route>
 
