@@ -3,14 +3,22 @@ Rules engine API endpoints.
 """
 from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, Request, Header
+from fastapi import APIRouter, Request, Header, Body
 from fastapi.responses import JSONResponse
 
 from smartify.auth import require_auth
-from smartify.db import db_get_relay_state_new
+from smartify.db import (
+    db_get_relay_state_new,
+    db_get_relay_device,
+    db_create_relay_rule,
+    db_get_relay_rule,
+    db_update_relay_rule,
+    db_delete_relay_rule,
+)
 from smartify.services.rules import db_list_relay_rules, evaluate_rules, evaluate_single_rule
+from smartify.services.relays import reconcile_relay
 from smartify.utils import coerce_to_dict
-from smartify.validators import validate_rule_condition
+from smartify.validators import validate_rule_condition, validate_rule_action
 
 
 router = APIRouter(tags=["rules"])
@@ -147,3 +155,375 @@ def api_relay_rules_list(
             "message": f"Failed to load rules: {str(e)[:200]}",
             "rules": []
         }, status_code=200)
+
+
+@router.post("/api/relays/{relay_id}/rules")
+def api_relay_rule_create(
+    relay_id: str,
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Create a new rule."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    relay = db_get_relay_device(relay_id)
+    if not relay:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    
+    name = body.get("name", "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name_required"}, status_code=400)
+    
+    # Validate condition (composite/range schema)
+    condition_raw = body.get("condition", {})
+    is_valid, error_msg, condition = validate_rule_condition(condition_raw)
+    if not is_valid or condition is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_condition",
+            "message": error_msg,
+            "received_type": type(condition_raw).__name__
+        }, status_code=400)
+    
+    action_raw = body.get("action")
+    is_valid_action, action_error, action = validate_rule_action(action_raw)
+    if not is_valid_action or action is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_action",
+            "message": action_error or "Invalid action payload"
+        }, status_code=400)
+    
+    priority = int(body.get("priority", 100))
+    cooldown_seconds = int(body.get("cooldown_seconds", 60))
+    is_enabled = body.get("is_enabled", True)
+    
+    if cooldown_seconds < 5:
+        cooldown_seconds = 5
+    
+    rule_id = db_create_relay_rule(relay_id, name, condition, action, priority, cooldown_seconds, is_enabled)
+    rule = db_get_relay_rule(rule_id)
+    
+    # Reconcile relay to apply new rule immediately
+    reconcile_relay(relay_id, force=True)
+    
+    return JSONResponse({"ok": True, "rule": rule}, status_code=201)
+
+
+@router.post("/api/relays/{relay_id}/rules/temperature-band")
+def api_relay_rule_create_temperature_band(
+    relay_id: str,
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Create a temperature band rule (range-based thermostat)."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    relay = db_get_relay_device(relay_id)
+    if not relay:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    
+    name = body.get("name", "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name_required"}, status_code=400)
+    
+    condition_raw = {
+        "type": "temperature_between",
+        "sensor": body.get("sensor"),
+        "min": body.get("min"),
+        "max": body.get("max"),
+        "min_inclusive": body.get("min_inclusive", True),
+        "max_inclusive": body.get("max_inclusive", False),
+    }
+    is_valid_condition, condition_error, condition = validate_rule_condition(condition_raw)
+    if not is_valid_condition or condition is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_condition",
+            "message": condition_error or "Invalid temperature band payload"
+        }, status_code=400)
+    
+    action_raw = {"type": "set_state", "state": body.get("on_state", "on")}
+    is_valid_action, action_error, action = validate_rule_action(action_raw)
+    if not is_valid_action or action is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_action",
+            "message": action_error or "Invalid action payload"
+        }, status_code=400)
+    
+    priority = int(body.get("priority", 100))
+    cooldown_seconds = int(body.get("cooldown_seconds", 60))
+    is_enabled = body.get("is_enabled", True)
+    if cooldown_seconds < 5:
+        cooldown_seconds = 5
+    
+    rule_id = db_create_relay_rule(relay_id, name, condition, action, priority, cooldown_seconds, is_enabled)
+    rule = db_get_relay_rule(rule_id)
+    
+    reconcile_relay(relay_id, force=True)
+    return JSONResponse({"ok": True, "rule": rule}, status_code=201)
+
+
+@router.post("/api/relays/{relay_id}/rules/humidity-band")
+def api_relay_rule_create_humidity_band(
+    relay_id: str,
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Create a humidity band rule (range-based)."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    relay = db_get_relay_device(relay_id)
+    if not relay:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    
+    name = body.get("name", "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name_required"}, status_code=400)
+    
+    condition_raw = {
+        "type": "humidity_between",
+        "sensor": body.get("sensor"),
+        "min": body.get("min"),
+        "max": body.get("max"),
+        "min_inclusive": body.get("min_inclusive", True),
+        "max_inclusive": body.get("max_inclusive", False),
+    }
+    is_valid_condition, condition_error, condition = validate_rule_condition(condition_raw)
+    if not is_valid_condition or condition is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_condition",
+            "message": condition_error or "Invalid humidity band payload"
+        }, status_code=400)
+    
+    action_raw = {"type": "set_state", "state": body.get("on_state", "on")}
+    is_valid_action, action_error, action = validate_rule_action(action_raw)
+    if not is_valid_action or action is None:
+        return JSONResponse({
+            "ok": False,
+            "error": "invalid_action",
+            "message": action_error or "Invalid action payload"
+        }, status_code=400)
+    
+    priority = int(body.get("priority", 100))
+    cooldown_seconds = int(body.get("cooldown_seconds", 60))
+    is_enabled = body.get("is_enabled", True)
+    if cooldown_seconds < 5:
+        cooldown_seconds = 5
+    
+    rule_id = db_create_relay_rule(relay_id, name, condition, action, priority, cooldown_seconds, is_enabled)
+    rule = db_get_relay_rule(rule_id)
+    
+    reconcile_relay(relay_id, force=True)
+    return JSONResponse({"ok": True, "rule": rule}, status_code=201)
+
+
+@router.put("/api/rules/{rule_id}")
+def api_rule_update(
+    rule_id: str,
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """
+    Update a rule from dashboard UI.
+    Accepts: name, condition, action, priority, cooldown_seconds, is_enabled (or enabled).
+    NEVER returns 500 - returns 400 for validation errors, 200 for success.
+    """
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    try:
+        rule = db_get_relay_rule(rule_id)
+        if not rule:
+            return JSONResponse({"ok": False, "error": "not_found", "message": "Rule not found"}, status_code=404)
+        
+        # Extract fields from body (support both is_enabled and enabled for UI compatibility)
+        name = body.get("name")
+        condition_raw = body.get("condition")
+        action = body.get("action")
+        priority = body.get("priority")
+        cooldown_seconds = body.get("cooldown_seconds")
+        is_enabled = body.get("is_enabled")
+        if is_enabled is None:
+            is_enabled = body.get("enabled")  # UI might send "enabled" instead
+        
+        # Validate condition if provided (composite/range schema)
+        condition = None
+        if condition_raw is not None:
+            is_valid, error_msg, condition = validate_rule_condition(condition_raw)
+            if not is_valid or condition is None:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_condition",
+                    "message": error_msg,
+                    "received_type": type(condition_raw).__name__
+                }, status_code=400)
+        
+        # Validate action if provided
+        if action is not None:
+            is_valid_action, action_error, action = validate_rule_action(action)
+            if not is_valid_action or action is None:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "invalid_action",
+                    "message": action_error or "Invalid action payload"
+                }, status_code=400)
+        
+        # Enforce minimum cooldown
+        if cooldown_seconds is not None and cooldown_seconds < 5:
+            cooldown_seconds = 5
+        
+        # Update rule in database
+        updated = db_update_relay_rule(rule_id, name, condition, action, priority, cooldown_seconds, is_enabled)
+        if not updated:
+            return JSONResponse({
+                "ok": False,
+                "error": "update_failed",
+                "message": "Failed to update rule in database"
+            }, status_code=400)
+        
+        # Get updated rule (safely)
+        try:
+            rule = db_get_relay_rule(rule_id)
+            relay_id = rule.get("relay_id") if rule else None
+        except Exception as e:
+            print(f"[API] Error fetching updated rule {rule_id}: {e}")
+            relay_id = None
+            rule = {"id": rule_id, "error": "fetch_failed"}
+        
+        # Reconcile relay to apply updated rule immediately (in background, don't block response)
+        if relay_id:
+            try:
+                reconcile_relay(relay_id, force=True)
+            except Exception as e:
+                # Don't fail the API response if reconciliation fails
+                print(f"[API] Error reconciling relay {relay_id} after rule update: {e}")
+        
+        # Return success with updated rule
+        return JSONResponse({"ok": True, "rule": rule}, status_code=200)
+        
+    except Exception as e:
+        # Catch-all for unexpected errors - return 400 (not 500)
+        print(f"[API] Unexpected error in PUT /api/rules/{rule_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({
+            "ok": False,
+            "error": "internal_error",
+            "message": f"Failed to update rule: {str(e)[:200]}"
+        }, status_code=400)
+
+
+@router.delete("/api/rules/{rule_id}")
+def api_rule_delete(
+    rule_id: str,
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Delete a rule."""
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    # Get relay_id before deleting
+    rule = db_get_relay_rule(rule_id)
+    relay_id = rule.get("relay_id") if rule else None
+    
+    deleted = db_delete_relay_rule(rule_id)
+    if not deleted:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    
+    if relay_id:
+        # Reconcile relay to apply deletion immediately (may turn relay off if no other rules match)
+        reconcile_relay(relay_id, force=True)
+    
+    return JSONResponse({"ok": True})
+
+
+@router.post("/api/rules/{rule_id}/toggle")
+def api_rule_toggle(
+    rule_id: str,
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """
+    Toggle rule enabled state.
+    ALWAYS returns 200 OK with JSON response.
+    Does NOT compute runtime_status (to avoid evaluation errors blocking toggle).
+    """
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+    
+    try:
+        # Get is_enabled from body (support both is_enabled and enabled for UI compatibility)
+        is_enabled = body.get("is_enabled")
+        if is_enabled is None:
+            is_enabled = body.get("enabled")
+        
+        if not isinstance(is_enabled, bool):
+            return JSONResponse({
+                "ok": False,
+                "error": "invalid_is_enabled",
+                "message": "is_enabled must be a boolean (true/false)"
+            }, status_code=400)
+        
+        # Get rule to check it exists and get relay_id
+        rule = db_get_relay_rule(rule_id)
+        if not rule:
+            return JSONResponse({
+                "ok": False,
+                "error": "not_found",
+                "message": "Rule not found"
+            }, status_code=404)
+        
+        relay_id = rule.get("relay_id")
+        
+        # Update rule enabled state in database
+        updated = db_update_relay_rule(rule_id, is_enabled=is_enabled)
+        if not updated:
+            return JSONResponse({
+                "ok": False,
+                "error": "update_failed",
+                "message": "Failed to update rule in database"
+            }, status_code=400)
+        
+        # Reconcile relay immediately when rule is enabled/disabled (in background, don't block)
+        if relay_id:
+            try:
+                reconcile_relay(relay_id, force=True)
+            except Exception as e:
+                # Don't fail the API response if reconciliation fails
+                print(f"[API] Error reconciling relay {relay_id} after toggle: {e}")
+        
+        # Return simple success response (no runtime_status to avoid evaluation errors)
+        return JSONResponse({
+            "ok": True,
+            "rule_id": rule_id,
+            "is_enabled": is_enabled
+        }, status_code=200)
+        
+    except Exception as e:
+        # Catch-all for unexpected errors - return 400 (not 500)
+        print(f"[API] Unexpected error in POST /api/rules/{rule_id}/toggle: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({
+            "ok": False,
+            "error": "internal_error",
+            "message": f"Failed to toggle rule: {str(e)[:200]}"
+        }, status_code=400)
