@@ -46,7 +46,7 @@ export const useGpsData = (trackMinutes: number) => {
   // Fetch current GPS data
   const fetchCurrentData = useCallback(async () => {
     try {
-      const response = await apiFetch("/api/gps/current");
+      const response = await apiFetch("/api/gps/current", { cache: "no-store" });
 
       if (!response.ok) {
         throw new Error("Failed to fetch GPS data");
@@ -96,7 +96,8 @@ export const useGpsData = (trackMinutes: number) => {
   const fetchTrackData = useCallback(async () => {
     try {
       setIsLoadingTrack(true);
-      const response = await apiFetch(`/api/gps/track?minutes=${trackMinutes}&limit=50000`);
+      setTrackData([]);
+      const response = await apiFetch(`/api/gps/track?minutes=${trackMinutes}&limit=50000`, { cache: "no-store" });
 
       if (!response.ok) {
         throw new Error("Failed to fetch track data");
@@ -106,17 +107,22 @@ export const useGpsData = (trackMinutes: number) => {
         rows: { ts: number; lat: number | null; lon: number | null; speed_kmh?: number | null }[];
       };
 
-      const mapped: GpsTrackPoint[] =
+      const nowMs = Date.now();
+      const cutoffMs = nowMs - trackMinutes * 60 * 1000;
+
+      const mapped =
         raw.rows
           ?.filter((r) => r.lat != null && r.lon != null)
           .map((r) => ({
             ts: new Date(r.ts * 1000).toISOString(),
+            tsMs: r.ts * 1000,
             lat: r.lat as number,
             lon: r.lon as number,
             speed_kmh: r.speed_kmh ?? null,
           })) ?? [];
 
-      setTrackData(mapped);
+      const windowed = mapped.filter((r) => r.tsMs >= cutoffMs);
+      setTrackData(windowed.map(({ tsMs, ...rest }) => rest));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch track data");

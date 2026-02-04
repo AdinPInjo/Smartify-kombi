@@ -127,6 +127,8 @@ export default function TemperatureDashboard() {
     };
   }, [range]);
 
+  const outsideNow = weather?.ok ? weather?.temp_c ?? null : null;
+
   const chartData = useMemo(() => {
     const rows = data?.rows ?? [];
     const byTs = new Map<number, { ts: number; kombi: number | null; garaza: number | null; outside: number | null }>();
@@ -154,13 +156,44 @@ export default function TemperatureDashboard() {
       entry.outside = r.temp_c ?? null;
     }
 
+    if (!wrows.length && outsideNow != null) {
+      if (!byTs.size) {
+        const ts = weather?.ts ? Math.floor(weather.ts / bucketSeconds) * bucketSeconds : Math.floor(Date.now() / 1000 / bucketSeconds) * bucketSeconds;
+        byTs.set(ts, { ts, kombi: null, garaza: null, outside: outsideNow });
+      } else {
+        for (const entry of byTs.values()) {
+          if (entry.outside == null) {
+            entry.outside = outsideNow;
+          }
+        }
+      }
+    }
+
     const series = Array.from(byTs.values()).sort((a, b) => a.ts - b.ts);
+
+    // Fill gaps between known outside samples with linear interpolation
+    let lastKnownIdx = -1;
+    for (let i = 0; i < series.length; i++) {
+      if (series[i]?.outside != null) {
+        if (lastKnownIdx >= 0 && i - lastKnownIdx > 1) {
+          const start = series[lastKnownIdx]!;
+          const end = series[i]!;
+          const steps = i - lastKnownIdx;
+          for (let j = 1; j < steps; j++) {
+            const ratio = j / steps;
+            series[lastKnownIdx + j]!.outside =
+              start.outside! + (end.outside! - start.outside!) * ratio;
+          }
+        }
+        lastKnownIdx = i;
+      }
+    }
 
     return series.map((p) => ({
       ...p,
       label: formatTs(p.ts, range),
     }));
-  }, [data, weatherHistory, range]);
+  }, [data, weatherHistory, range, outsideNow, weather?.ts]);
 
   const kombiSeries = useMemo(
     () => chartData.map((p) => p.kombi).filter((v) => v != null) as number[],
@@ -187,7 +220,6 @@ export default function TemperatureDashboard() {
 
   const kombiNow = snapshotKombi?.avg_temp ?? null;
   const garazaNow = snapshotGaraza?.avg_temp ?? null;
-  const outsideNow = weather?.ok ? weather?.temp_c ?? null : null;
 
   const getTrend = (series: number[]) => {
     if (series.length < 2) return "stable";

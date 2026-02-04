@@ -71,6 +71,7 @@ def _gps_reader_thread() -> None:
     stationary_window_seconds = 5
     last_stationary_emit = 0
     sample_buffer = deque(maxlen=200)
+    min_movement_kmh = 5.0
 
     last_fix = db_query_latest_gps_fix()
     prev_lat = last_fix.get("lat") if last_fix else None
@@ -107,6 +108,8 @@ def _gps_reader_thread() -> None:
                 def _emit_update(ts: int, lat: Optional[float], lon: Optional[float], speed: Optional[float],
                                  course: Optional[float], alt: Optional[float], sats: Optional[int]) -> None:
                     nonlocal prev_lat, prev_lon
+                    if speed is not None and speed < min_movement_kmh:
+                        return
                     state._gps_latest.update({
                         "ts": ts,
                         "lat": lat,
@@ -124,7 +127,7 @@ def _gps_reader_thread() -> None:
                         return
 
                     if prev_lat is not None and prev_lon is not None:
-                        if speed is None or speed >= 1.0:
+                        if speed is None or speed >= min_movement_kmh:
                             delta_km = _haversine_km(prev_lat, prev_lon, lat, lon)
                             if 0 < delta_km < 5:
                                 day = time.strftime("%Y-%m-%d", time.localtime(ts))

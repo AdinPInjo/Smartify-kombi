@@ -90,6 +90,7 @@ from smartify.db import (
 # Water level module
 from smartify.water_level import api as water_level_api, service as water_level_service
 from smartify.services import gps as gps_service
+from smartify.services import weather as weather_service
 from smartify import rule_engine
 
 # Import core functions from extracted modules
@@ -1263,6 +1264,8 @@ def on_startup() -> None:
     evaluate_rules_on_startup()
     # Start GPS reader thread
     gps_service.start_gps_thread()
+    # Start weather fetcher thread (background samples)
+    weather_service.start_weather_thread()
     # Start DHT22 poller thread (for legacy API compatibility)
     t_dht = threading.Thread(target=_dht22_poller_thread, daemon=True)
     t_dht.start()
