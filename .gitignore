@@ -17,6 +17,10 @@ __pycache__/
 # Local data
 *.db
 *.log
+*.db-wal
+*.db-shm
+*.db-journal
+smartify/data/db_integrity_status.json
 
 # Ignore .DS_Store everywhere
 **/.DS_Store
