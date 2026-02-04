@@ -18,14 +18,14 @@ def frontend_ready() -> bool:
 def root():
     if not frontend_ready():
         return JSONResponse({"error": "frontend_not_built"}, status_code=500)
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/dashboard")
 def dashboard():
     if not frontend_ready():
         return JSONResponse({"error": "frontend_not_built"}, status_code=500)
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/{full_path:path}")
@@ -35,4 +35,4 @@ def spa_fallback(full_path: str):
     target = STATIC_DIR / full_path
     if target.exists() and target.is_file():
         return FileResponse(target)
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
