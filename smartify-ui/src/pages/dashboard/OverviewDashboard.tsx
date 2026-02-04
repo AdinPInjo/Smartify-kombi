@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { MapPin, Home, Warehouse, Thermometer, Battery, Power, Droplets, Activity, Gauge, Plus, Settings2 } from "lucide-react";
+import { MapPin, Home, Warehouse, Thermometer, Battery, Power, Droplets, Activity, Gauge, Plus, Settings2, ListChecks } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
