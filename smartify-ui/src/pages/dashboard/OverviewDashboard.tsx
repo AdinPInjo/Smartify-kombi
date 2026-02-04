@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/utils";
+import { getOverviewLayout, OverviewModuleId } from "@/lib/overviewLayout";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -734,6 +735,13 @@ function RelayRulesWidget() {
 
 export default function OverviewDashboard() {
   const [track, setTrack] = useState<TrackPayload | null>(null);
+  const [layout, setLayout] = useState(getOverviewLayout());
+
+  useEffect(() => {
+    const handler = () => setLayout(getOverviewLayout());
+    window.addEventListener("overview-layout-change", handler);
+    return () => window.removeEventListener("overview-layout-change", handler);
+  }, []);
 
   // GPS current data with React Query (polls every 60s, keeps previous data)
   const { data: gpsData } = useQuery({
@@ -886,6 +894,169 @@ export default function OverviewDashboard() {
     retry: 1,
   });
 
+  const modules: Record<OverviewModuleId, JSX.Element> = {
+    gps_card: (
+      <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
+        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+        <CardHeader className="pb-3 relative z-10">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                <MapPin className="h-4 w-4 text-blue-400" />
+              </div>
+              Van Location
+            </CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4 relative z-10">
+          <GpsMiniMap lat={gps?.lat ?? null} lon={gps?.lon ?? null} />
+
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-zinc-400">Status</span>
+              <span className={`font-semibold ${gpsHasFix ? "text-emerald-400" : "text-amber-400"}`}>
+                {gpsStatus}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-zinc-400">Location</span>
+              <span className="font-medium text-xs text-right max-w-[60%] truncate text-zinc-300" title={address || undefined}>
+                {gpsHasFix ? (address || `${gps?.lat?.toFixed(4)}, ${gps?.lon?.toFixed(4)}`) : "—"}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-zinc-400 flex items-center gap-2">
+                <Navigation className="h-3.5 w-3.5" />
+                Speed
+              </span>
+              <span className="font-semibold tabular-nums text-zinc-200">
+                {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
+              </span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    ),
+    temp_water: (
+      <div className="flex flex-col gap-6">
+        <Card className={`group relative overflow-hidden border shadow-lg transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20 flex-1 ${tempClass(kombiT)}`}>
+          <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardContent className="flex flex-col space-y-3 py-4 relative z-10">
+            {import.meta.env.DEV && (
+              <div className="text-xs text-blue-400 p-1.5 bg-blue-950/50 rounded-lg border border-blue-800/30 mb-1">
+                <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : "null"}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between rounded-lg bg-blue-500/10 border border-blue-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-blue-500/15">
+              <span className="flex items-center gap-2.5 text-zinc-300">
+                <Car className="h-4 w-4 text-blue-400" />
+                <span className="font-medium">Kombi</span>
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="font-bold tabular-nums text-lg text-blue-300">
+                  {formatTemp(temps?.kombi?.temp_c ?? null)}
+                </span>
+                <span className="text-xs text-zinc-400">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-amber-500/15">
+              <span className="flex items-center gap-2.5 text-zinc-300">
+                <Warehouse className="h-4 w-4 text-amber-400" />
+                <span className="font-medium">Garaža</span>
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="font-bold tabular-nums text-lg text-amber-300">
+                  {formatTemp(temps?.garaza?.temp_c ?? null)}
+                </span>
+                <span className="text-xs text-zinc-400">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <WaterLevelCard />
+      </div>
+    ),
+    battery: (
+      <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
+        <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+        <CardHeader className="pb-3 relative z-10">
+          <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+            <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+              <Battery className="h-4 w-4 text-emerald-400" />
+            </div>
+            Battery
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 relative z-10">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-zinc-400">State of charge</span>
+            <span className="font-semibold text-zinc-200">— %</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-zinc-400">Voltage</span>
+            <span className="font-semibold text-zinc-200">— V</span>
+          </div>
+        </CardContent>
+      </Card>
+    ),
+    header_relay: <HeaderRelayCard />,
+    relay_rules: <RelayRulesWidget />,
+    gps_map: (
+      <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
+        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+        <CardHeader className="pb-4 relative z-10">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-lg font-semibold text-zinc-200">GPS Map & Track</CardTitle>
+              <p className="text-sm text-zinc-400 mt-1">Last 24 hours location history</p>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800/50 border border-zinc-700/50">
+              <Activity className="h-4 w-4 text-blue-400" />
+              <span className="text-xs font-medium text-zinc-300">Live</span>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4 relative z-10">
+          <GpsTrackMap data={track} currentLat={gps?.lat ?? null} currentLon={gps?.lon ?? null} />
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-zinc-400">Track Points</span>
+                <span className="font-bold text-lg tabular-nums text-zinc-200">{track?.count ?? 0}</span>
+              </div>
+            </div>
+            <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-zinc-400">Current Speed</span>
+                <span className="font-bold text-lg tabular-nums text-zinc-200">
+                  {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
+                </span>
+              </div>
+            </div>
+            <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-zinc-400">GPS Status</span>
+                <span className={`font-bold text-lg ${gpsHasFix ? "text-emerald-400" : "text-amber-400"}`}>
+                  {gpsStatus}
+                </span>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    ),
+  };
+
+  const hidden = new Set(layout.hidden);
+  const topIds = layout.topOrder.filter((id) => !hidden.has(id));
+  const bottomIds = layout.bottomOrder.filter((id) => !hidden.has(id));
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -898,170 +1069,20 @@ export default function OverviewDashboard() {
 
       {/* Stats Grid */}
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-        {/* GPS Location Card */}
-        <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-          <CardHeader className="pb-3 relative z-10">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-                <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                  <MapPin className="h-4 w-4 text-blue-400" />
-                </div>
-                Van Location
-            </CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4 relative z-10">
-            <GpsMiniMap lat={gps?.lat ?? null} lon={gps?.lon ?? null} />
-
-            <div className="space-y-2.5">
-            <div className="flex items-center justify-between text-sm">
-                <span className="text-zinc-400">Status</span>
-                <span className={`font-semibold ${gpsHasFix ? "text-emerald-400" : "text-amber-400"}`}>
-                  {gpsStatus}
-                </span>
-            </div>
-
-            <div className="flex items-center justify-between text-sm">
-                <span className="text-zinc-400">Location</span>
-                <span className="font-medium text-xs text-right max-w-[60%] truncate text-zinc-300" title={address || undefined}>
-                  {gpsHasFix ? (address || `${gps?.lat?.toFixed(4)}, ${gps?.lon?.toFixed(4)}`) : "—"}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between text-sm">
-                <span className="text-zinc-400 flex items-center gap-2">
-                  <Navigation className="h-3.5 w-3.5" />
-                Speed
-              </span>
-                <span className="font-semibold tabular-nums text-zinc-200">
-                {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
-              </span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Temperature + Water Stacked */}
-        <div className="flex flex-col gap-6">
-          {/* Temperature Card */}
-          <Card className={`group relative overflow-hidden border shadow-lg transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20 flex-1 ${tempClass(kombiT)}`}>
-            <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-            <CardContent className="flex flex-col space-y-3 py-4 relative z-10">
-              {import.meta.env.DEV && (
-                <div className="text-xs text-blue-400 p-1.5 bg-blue-950/50 rounded-lg border border-blue-800/30 mb-1">
-                  <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : 'null'}
-                </div>
-              )}
-              
-              <div className="flex items-center justify-between rounded-lg bg-blue-500/10 border border-blue-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-blue-500/15">
-                <span className="flex items-center gap-2.5 text-zinc-300">
-                  <Car className="h-4 w-4 text-blue-400" />
-                  <span className="font-medium">Kombi</span>
-              </span>
-                <div className="flex items-center gap-2">
-                  <span className="font-bold tabular-nums text-lg text-blue-300">
-                {formatTemp(temps?.kombi?.temp_c ?? null)}
-              </span>
-                  <span className="text-xs text-zinc-400">{formatHum(temps?.kombi?.hum_pct ?? null)}</span>
-                </div>
-            </div>
-
-              <div className="flex items-center justify-between rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 backdrop-blur-sm transition-all hover:bg-amber-500/15">
-                <span className="flex items-center gap-2.5 text-zinc-300">
-                  <Warehouse className="h-4 w-4 text-amber-400" />
-                  <span className="font-medium">Garaža</span>
-              </span>
-                <div className="flex items-center gap-2">
-                  <span className="font-bold tabular-nums text-lg text-amber-300">
-                {formatTemp(temps?.garaza?.temp_c ?? null)}
-              </span>
-                  <span className="text-xs text-zinc-400">{formatHum(temps?.garaza?.hum_pct ?? null)}</span>
-                </div>
-            </div>
-          </CardContent>
-        </Card>
-
-          {/* Water Level Card */}
-          <WaterLevelCard />
-        </div>
-
-        {/* Battery Card */}
-        <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:shadow-xl hover:shadow-zinc-900/20">
-          <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-          <CardHeader className="pb-3 relative z-10">
-            <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-              <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
-                <Battery className="h-4 w-4 text-emerald-400" />
-              </div>
-              Battery
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 relative z-10">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-zinc-400">State of charge</span>
-              <span className="font-semibold text-zinc-200">— %</span>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-zinc-400">Voltage</span>
-              <span className="font-semibold text-zinc-200">— V</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Header ON-OFF Card */}
-        <HeaderRelayCard />
-            </div>
+        {topIds.map((id) => (
+          <div key={id} className="min-w-0">
+            {modules[id]}
+          </div>
+        ))}
+      </div>
 
       {/* Relay Rules + GPS Map Section */}
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Relay Rules Card (Left) */}
-        <RelayRulesWidget />
-
-        {/* GPS Map Card (Right) */}
-        <Card className="group relative overflow-hidden border-zinc-800/50 bg-gradient-to-br from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-zinc-900/20">
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-          <CardHeader className="pb-4 relative z-10">
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-lg font-semibold text-zinc-200">GPS Map & Track</CardTitle>
-                <p className="text-sm text-zinc-400 mt-1">Last 24 hours location history</p>
-            </div>
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800/50 border border-zinc-700/50">
-                <Activity className="h-4 w-4 text-blue-400" />
-                <span className="text-xs font-medium text-zinc-300">Live</span>
-      </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4 relative z-10">
-            <GpsTrackMap data={track} currentLat={gps?.lat ?? null} currentLon={gps?.lon ?? null} />
-
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-zinc-400">Track Points</span>
-                  <span className="font-bold text-lg tabular-nums text-zinc-200">{track?.count ?? 0}</span>
-                </div>
-              </div>
-              <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-zinc-400">Current Speed</span>
-                  <span className="font-bold text-lg tabular-nums text-zinc-200">
-                {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
-              </span>
-            </div>
-              </div>
-              <div className="rounded-lg bg-zinc-800/30 border border-zinc-700/30 px-4 py-3 backdrop-blur-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-zinc-400">GPS Status</span>
-                  <span className={`font-bold text-lg ${gpsHasFix ? "text-emerald-400" : "text-amber-400"}`}>
-                    {gpsStatus}
-                  </span>
-                </div>
-            </div>
+        {bottomIds.map((id) => (
+          <div key={id} className="min-w-0">
+            {modules[id]}
           </div>
-        </CardContent>
-      </Card>
+        ))}
       </div>
     </div>
   );
