@@ -108,8 +108,6 @@ def _gps_reader_thread() -> None:
                 def _emit_update(ts: int, lat: Optional[float], lon: Optional[float], speed: Optional[float],
                                  course: Optional[float], alt: Optional[float], sats: Optional[int]) -> None:
                     nonlocal prev_lat, prev_lon
-                    if speed is not None and speed < min_movement_kmh:
-                        return
                     state._gps_latest.update({
                         "ts": ts,
                         "lat": lat,
@@ -121,6 +119,9 @@ def _gps_reader_thread() -> None:
                         "ok": True,
                         "error": None,
                     })
+                    if speed is not None and speed < min_movement_kmh:
+                        return
+
                     db_insert_gps(ts, lat, lon, speed, course, alt)
 
                     if lat is None or lon is None:
