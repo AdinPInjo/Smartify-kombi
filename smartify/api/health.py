@@ -86,6 +86,15 @@ def create_health_router(
         threads.sort(key=lambda x: x["name"])
         return JSONResponse({"now": now, "threads": threads})
 
+    @router.get("/api/remote-sync/status")
+    def api_remote_sync_status(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+        """Get remote sync polling status."""
+        err = require_auth(request, x_api_key)
+        if err:
+            return err
+
+        return JSONResponse(state._remote_sync_status)
+
     return router
 
 

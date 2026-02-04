@@ -1296,6 +1296,9 @@ def on_startup() -> None:
     _start_rule_thread()
     # Start water level thread (using new module)
     water_level_service.start_water_level_thread(DB_PATH, app.state)
+    # Start remote desired_state sync (Supabase)
+    from smartify.services import remote_sync as remote_sync_service
+    remote_sync_service.start_remote_sync_thread()
 
     # Watchdog registrations
     watchdog_service.register_thread("dht22_poller", _start_dht_thread, timeout_seconds=max(60, SENSOR_LOG_INTERVAL * 3))

@@ -31,6 +31,16 @@ SMARTIFY_REQUIRE_AUTH = os.getenv("SMARTIFY_REQUIRE_AUTH", "1") in ("1", "true",
 SMARTIFY_TRUST_LOCALHOST = os.getenv("SMARTIFY_TRUST_LOCALHOST", "1") in ("1", "true", "yes", "on")
 SMARTIFY_SECRET = os.getenv("SMARTIFY_SECRET", "change-this-secret-in-production")
 
+# Remote sync (Supabase)
+SMARTIFY_SUPABASE_URL = os.getenv("SMARTIFY_SUPABASE_URL", "").strip()
+SMARTIFY_SUPABASE_SERVICE_KEY = (
+    os.getenv("SMARTIFY_SUPABASE_SERVICE_KEY", "").strip()
+    or os.getenv("SMARTIFY_SUPABASE_SERVICE_ROLE_KEY", "").strip()
+)
+SMARTIFY_DEVICE_ID = os.getenv("SMARTIFY_DEVICE_ID", "").strip()
+SMARTIFY_REMOTE_SYNC_ENABLED = os.getenv("SMARTIFY_REMOTE_SYNC_ENABLED", "0") in ("1", "true", "yes", "on")
+SMARTIFY_REMOTE_SYNC_INTERVAL_SECONDS = int(os.getenv("SMARTIFY_REMOTE_SYNC_INTERVAL_SECONDS", "10"))
+
 # GPS configuration
 GPS_ENABLED = os.getenv("GPS_ENABLED", "0") in ("1", "true", "yes", "on")
 GPS_DEVICE = os.getenv("GPS_DEVICE", "/dev/serial0")

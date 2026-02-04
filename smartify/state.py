@@ -37,3 +37,13 @@ _weather_latest: Dict[str, Any] = {
 }
 
 _thread_health: Dict[str, Dict[str, Any]] = {}
+
+# Remote sync status (Supabase desired_state polling)
+_remote_sync_status: Dict[str, Any] = {
+    "last_poll_ts": None,
+    "last_success_ts": None,
+    "last_error": None,
+    "last_desired_version": None,
+    "last_applied_version": None,
+    "last_change_count": 0,
+}
