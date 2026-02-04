@@ -89,6 +89,7 @@ from smartify.db import (
 
 # Water level module
 from smartify.water_level import api as water_level_api, service as water_level_service
+from smartify.services import gps as gps_service
 from smartify import rule_engine
 
 # Import core functions from extracted modules
@@ -1715,162 +1716,6 @@ def _sensor_sampler_thread() -> None:
 
 
 # =========================
-# Sensor: GPS (USB NMEA)
-# =========================
-
-state._gps_latest["device"] = GPS_DEVICE
-
-
-def _nmea_to_decimal(coord: str, hemi: str) -> Optional[float]:
-    """
-    Convert NMEA coordinate format (ddmm.mmmm or dddmm.mmmm) to decimal degrees.
-    
-    - Latitude (N/S): uses 2 digits for degrees (ddmm.mmmm)
-    - Longitude (E/W): uses 3 digits for degrees (dddmm.mmmm)
-    """
-    if not coord or not hemi:
-        return None
-    try:
-        if "." not in coord:
-            return None
-        
-        # Determine degrees length based on hemisphere:
-        # N/S (latitude) = 2 digits, E/W (longitude) = 3 digits
-        hemi_upper = hemi.upper()
-        if hemi_upper in ("N", "S"):
-            deg_len = 2  # Latitude: ddmm.mmmm
-        elif hemi_upper in ("E", "W"):
-            deg_len = 3  # Longitude: dddmm.mmmm
-        else:
-            return None  # Invalid hemisphere
-        
-        deg = float(coord[:deg_len])
-        minutes = float(coord[deg_len:])
-        dec = deg + minutes / 60.0
-        
-        # Apply sign based on hemisphere
-        if hemi_upper in ("S", "W"):
-            dec *= -1.0
-        
-        return dec
-    except Exception:
-        return None
-
-
-def _gps_reader_thread() -> None:
-    try:
-        import serial
-    except Exception as e:
-        state._gps_latest["ok"] = False
-        state._gps_latest["error"] = f"pyserial not available: {e}"
-        return
-
-    while True:
-        try:
-            if not Path(GPS_DEVICE).exists():
-                state._gps_latest["ok"] = False
-                state._gps_latest["error"] = f"GPS device not found: {GPS_DEVICE}"
-                time.sleep(2)
-                continue
-
-            # Use timeout for serial reads to prevent blocking
-            with serial.Serial(GPS_DEVICE, GPS_BAUD, timeout=2) as ser:
-                state._gps_latest["error"] = None
-                while True:
-                    try:
-                        # readline with timeout will return empty string if timeout
-                        line = ser.readline().decode(errors="ignore").strip()
-                        if not line or not line.startswith("$"):
-                            continue
-
-                        parts = line.split(",")
-                        if not parts:
-                            continue
-                        sentence = parts[0]
-                        now = int(time.time())
-
-                        if sentence.endswith("RMC") and len(parts) >= 12:
-                            status = parts[2] if len(parts) > 2 else ""
-                            if status != "A":
-                                continue
-
-                            lat = _nmea_to_decimal(parts[3], parts[4])
-                            lon = _nmea_to_decimal(parts[5], parts[6])
-
-                            speed_kn = None
-                            course = None
-                            try:
-                                speed_kn = float(parts[7]) if parts[7] else None
-                            except Exception:
-                                speed_kn = None
-                            try:
-                                course = float(parts[8]) if parts[8] else None
-                            except Exception:
-                                course = None
-
-                            speed_kmh = speed_kn * 1.852 if speed_kn is not None else None
-
-                            state._gps_latest.update({
-                                "ts": now,
-                                "lat": lat,
-                                "lon": lon,
-                                "speed_kmh": speed_kmh,
-                                "course": course,
-                                "ok": True,
-                                "error": None,
-                            })
-                            db_insert_gps(now, lat, lon, speed_kmh, course, state._gps_latest.get("altitude_m"))
-
-                        if sentence.endswith("GGA") and len(parts) >= 10:
-                            fix = parts[6] if len(parts) > 6 else "0"
-                            if fix == "0":
-                                continue
-
-                            lat = _nmea_to_decimal(parts[2], parts[3])
-                            lon = _nmea_to_decimal(parts[4], parts[5])
-
-                            alt = None
-                            try:
-                                alt = float(parts[9]) if parts[9] else None
-                            except Exception:
-                                alt = None
-
-                            # Extract satellite count (field 7 in GGA sentence)
-                            satellites = None
-                            try:
-                                if len(parts) > 7 and parts[7]:
-                                    satellites = int(parts[7])
-                            except Exception:
-                                satellites = None
-
-                            state._gps_latest.update({
-                                "ts": now,
-                                "lat": lat if lat is not None else state._gps_latest.get("lat"),
-                                "lon": lon if lon is not None else state._gps_latest.get("lon"),
-                                "altitude_m": alt,
-                                "satellites": satellites,
-                                "ok": True,
-                                "error": None,
-                            })
-                            db_insert_gps(now, state._gps_latest.get("lat"), state._gps_latest.get("lon"),
-                                          state._gps_latest.get("speed_kmh"), state._gps_latest.get("course"), alt)
-                    
-                    except serial.SerialTimeoutException:
-                        # Timeout is normal, continue polling
-                        continue
-                    except Exception as e:
-                        state._gps_latest["ok"] = False
-                        state._gps_latest["error"] = f"Serial read error: {e}"
-                        time.sleep(1)
-                        continue
-
-        except Exception as e:
-            state._gps_latest["ok"] = False
-            state._gps_latest["error"] = f"GPS read error: {e}"
-            time.sleep(2)
-
-
-# =========================
 # Startup
 # =========================
 
@@ -1996,8 +1841,7 @@ def on_startup() -> None:
     # This ensures rules with conditions already TRUE at boot will trigger immediately
     evaluate_rules_on_startup()
     # Start GPS reader thread
-    t_gps = threading.Thread(target=_gps_reader_thread, daemon=True)
-    t_gps.start()
+    gps_service.start_gps_thread()
     # Start DHT22 poller thread (for legacy API compatibility)
     t_dht = threading.Thread(target=_dht22_poller_thread, daemon=True)
     t_dht.start()
