@@ -85,7 +85,7 @@ const GpsMap = ({ currentData, trackData, isLoading, fitKey, className }: Props)
 
     tileLayer.addTo(map);
 
-    polyRef.current = L.polyline([], {}).addTo(map);
+    polyRef.current = L.polyline([], { weight: 4, color: "#22c55e", opacity: 0.8 }).addTo(map);
     markerRef.current = L.marker(currentPos ?? fallback, { icon: dotIcon }).addTo(map);
     circleRef.current = L.circleMarker(currentPos ?? fallback, {
       radius: 6,

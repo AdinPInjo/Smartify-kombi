@@ -182,15 +182,15 @@
     position: absolute;
     inset: 0;
     border-radius: 9999px;
-    background: hsl(var(--primary));
-    box-shadow: 0 0 10px hsl(var(--primary) / 0.6);
+    background: hsl(var(--success));
+    box-shadow: 0 0 10px hsl(var(--success) / 0.6);
   }
 
   .gps-pulse-ring {
     position: absolute;
     inset: -10px;
     border-radius: 9999px;
-    background: hsl(var(--primary) / 0.25);
+    background: hsl(var(--success) / 0.25);
     animation: gps-pulse 1.8s ease-out infinite;
   }
 }

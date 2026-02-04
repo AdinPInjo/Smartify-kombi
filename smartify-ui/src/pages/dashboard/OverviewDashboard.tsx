@@ -369,7 +369,7 @@ function HeaderRelayCard() {
   };
 
   return (
-    <Card className="glass-card p-0">
+    <Card className="glass-card p-0 h-full">
       <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -514,7 +514,7 @@ function WaterLevelCard() {
     : "text-destructive";
 
   return (
-    <Card className="glass-card p-0">
+    <Card className="glass-card p-0 h-full">
       <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -651,7 +651,7 @@ function RelayRulesWidget() {
   };
 
   return (
-    <Card className="glass-card p-0">
+    <Card className="glass-card p-0 h-full">
       <CardHeader className="pb-3 px-4 pt-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -783,6 +783,17 @@ export default function OverviewDashboard() {
     };
   }, [tempData]);
 
+  const { data: weatherCurrent } = useQuery({
+    queryKey: ["weather", "current"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/weather/current", { cache: "no-store" });
+      if (!r.ok) throw new Error(`Weather API returned ${r.status}`);
+      return (await r.json()) as { ok: boolean; temp_c: number | null };
+    },
+    refetchInterval: 60000,
+    retry: 1,
+  });
+
 
   // GPS track (24h)
   useEffect(() => {
@@ -827,6 +838,7 @@ export default function OverviewDashboard() {
   const speedKmh = useMemo(() => gps?.speed_kmh ?? null, [gps?.speed_kmh]);
 
   const kombiT = temps?.kombi?.temp_c ?? null;
+  const outsideT = weatherCurrent?.ok ? weatherCurrent.temp_c ?? null : null;
 
   const gpsStatus = gps?.ok === false ? "Disconnected" : gpsHasFix ? "Fix" : "No fix";
 
@@ -869,7 +881,7 @@ export default function OverviewDashboard() {
 
   const modules: Record<OverviewModuleId, JSX.Element> = {
     gps_card: (
-      <Card className="glass-card p-0">
+      <Card className="glass-card p-0 h-full">
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -917,7 +929,7 @@ export default function OverviewDashboard() {
       </Card>
     ),
     temp_card: (
-      <Card className={`glass-card p-0 ${tempClass(kombiT)}`}>
+      <Card className={`glass-card p-0 h-full ${tempClass(kombiT)}`}>
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -957,13 +969,25 @@ export default function OverviewDashboard() {
                 <span className="text-sm text-muted-foreground">°C</span>
               </div>
             </div>
+            <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-glass">
+              <div className="flex items-center gap-3">
+                <Thermometer className="w-5 h-5 text-muted-foreground" />
+                <span className="font-medium">Outside</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-bold text-success">
+                  {outsideT != null ? outsideT.toFixed(1) : "—"}
+                </span>
+                <span className="text-sm text-muted-foreground">°C</span>
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
     ),
     water_card: <WaterLevelCard />,
     battery: (
-      <Card className="glass-card p-0">
+      <Card className="glass-card p-0 h-full">
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -996,7 +1020,7 @@ export default function OverviewDashboard() {
     header_relay: <HeaderRelayCard />,
     relay_rules: <RelayRulesWidget />,
     gps_map: (
-      <Card className="glass-card p-0">
+      <Card className="glass-card p-0 h-full">
         <CardHeader className="pb-3 px-4 pt-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1043,11 +1067,11 @@ export default function OverviewDashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6 auto-rows-[1fr]">
         {orderedIds.map((id) => (
           <div
             key={id}
-            className={`min-w-0 ${id === "gps_map" ? "lg:col-span-2" : ""}`}
+            className={`min-w-0 h-full ${id === "gps_map" ? "lg:col-span-2" : ""}`}
           >
             {modules[id]}
           </div>

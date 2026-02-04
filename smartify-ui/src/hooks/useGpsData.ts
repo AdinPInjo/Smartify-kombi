@@ -107,12 +107,14 @@ export const useGpsData = (trackMinutes: number) => {
       };
 
       const mapped: GpsTrackPoint[] =
-        raw.rows?.map((r) => ({
-          ts: new Date(r.ts * 1000).toISOString(),
-          lat: r.lat ?? 0,
-          lon: r.lon ?? 0,
-          speed_kmh: r.speed_kmh ?? null,
-        })) ?? [];
+        raw.rows
+          ?.filter((r) => r.lat != null && r.lon != null)
+          .map((r) => ({
+            ts: new Date(r.ts * 1000).toISOString(),
+            lat: r.lat as number,
+            lon: r.lon as number,
+            speed_kmh: r.speed_kmh ?? null,
+          })) ?? [];
 
       setTrackData(mapped);
       setError(null);

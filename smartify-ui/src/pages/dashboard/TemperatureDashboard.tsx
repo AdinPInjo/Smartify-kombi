@@ -144,11 +144,13 @@ export default function TemperatureDashboard() {
     }
 
     const wrows = weatherHistory?.rows ?? [];
+    const bucketSeconds = data?.bucket_seconds ?? 300;
     for (const r of wrows) {
-      if (!byTs.has(r.ts)) {
-        byTs.set(r.ts, { ts: r.ts, kombi: null, garaza: null, outside: null });
+      const bucketTs = Math.floor(r.ts / bucketSeconds) * bucketSeconds;
+      if (!byTs.has(bucketTs)) {
+        byTs.set(bucketTs, { ts: bucketTs, kombi: null, garaza: null, outside: null });
       }
-      const entry = byTs.get(r.ts)!;
+      const entry = byTs.get(bucketTs)!;
       entry.outside = r.temp_c ?? null;
     }
 
