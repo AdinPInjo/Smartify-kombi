@@ -1298,7 +1298,7 @@ export default function OverviewDashboard() {
 
   return (
     <div className="space-y-6">
-      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 auto-rows-[minmax(0,300px)] items-stretch ${gridDensityClass}`}>
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 auto-rows-[360px] items-stretch ${gridDensityClass}`}>
         {orderedIds.map((id) => (
           <div
             key={id}
