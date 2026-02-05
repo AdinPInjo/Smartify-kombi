@@ -60,6 +60,14 @@ function tempStyle(t: number | null) {
   return { card: "bg-red-500/10 border-red-400/30", text: "text-red-200", Icon: Sun };
 }
 
+function tempLabel(t: number | null) {
+  if (t == null) return "Unknown";
+  if (t < 8) return "Cold";
+  if (t < 16) return "Cool";
+  if (t < 24) return "Comfort";
+  return "Hot";
+}
+
 function weatherTheme(code: number | null | undefined) {
   if (code == null) return { theme: "weather-cloud", icon: CloudSun, label: "Mixed" };
   if (code === 0) return { theme: "weather-sun", icon: Sun, label: "Clear" };
@@ -412,7 +420,7 @@ function HeaderRelayCard() {
   };
 
   return (
-    <Card className="glass-card p-0 h-full">
+    <Card className="glass-card p-0 h-full card-compact">
       <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -551,7 +559,7 @@ function WaterLevelCard() {
       : { card: "bg-red-500/10 border-red-400/30", text: "text-red-200", bar: "bg-destructive", label: "Low" };
 
   return (
-    <Card className={`glass-card p-0 h-full ${waterStyle.card}`}>
+    <Card className={`glass-card p-0 h-full card-compact ${waterStyle.card}`}>
       <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -693,7 +701,7 @@ function RelayRulesWidget() {
   };
 
   return (
-    <Card className="glass-card p-0 h-full">
+    <Card className="glass-card p-0 h-full card-compact">
       <CardHeader className="pb-3 px-4 pt-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -899,6 +907,15 @@ export default function OverviewDashboard() {
   const weatherMeta = weatherTheme(currentWeatherCode);
   const WeatherIcon = weatherMeta.icon;
   const currentOutsideTemp = currentForecast?.temp_c ?? outsideT;
+  const altitudeM = gps?.altitude_m ?? null;
+  const terrainClass =
+    altitudeM == null
+      ? "gps-terrain-mid"
+      : altitudeM < 200
+      ? "gps-terrain-low"
+      : altitudeM >= 1000
+      ? "gps-terrain-high"
+      : "gps-terrain-mid";
 
   const gpsStatus = gps?.ok === false ? "Disconnected" : gpsHasFix ? "Fix" : "No fix";
 
@@ -941,7 +958,7 @@ export default function OverviewDashboard() {
 
   const modules: Record<OverviewModuleId, JSX.Element> = {
     gps_card: (
-      <Card className="glass-card p-0 h-full">
+      <Card className={`glass-card p-0 h-full card-compact ${terrainClass} relative overflow-hidden`}>
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -961,22 +978,14 @@ export default function OverviewDashboard() {
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="metric-label">Latitude</p>
-              <p className="text-lg font-semibold">
-                {gps?.lat != null ? `${gps.lat.toFixed(4)}°` : "—"}
-              </p>
-            </div>
-            <div>
-              <p className="metric-label">Longitude</p>
-              <p className="text-lg font-semibold">
-                {gps?.lon != null ? `${gps.lon.toFixed(4)}°` : "—"}
-              </p>
-            </div>
+          <div className="space-y-2">
+            <p className="metric-label">Approx Location</p>
+            <p className="text-sm font-semibold text-foreground">
+              {address ?? "—"}
+            </p>
           </div>
 
-          <div className="flex items-center gap-3 pt-2 border-t border-glass">
+          <div className="flex items-center justify-between pt-2 border-t border-glass">
             <div className="flex items-center gap-2">
               <Gauge className="w-4 h-4 text-primary" />
               <span className="text-sm text-muted-foreground">Speed</span>
@@ -985,11 +994,22 @@ export default function OverviewDashboard() {
               {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
             </span>
           </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Activity className="w-4 h-4 text-primary" />
+              <span className="text-sm text-muted-foreground">Altitude</span>
+            </div>
+            <span className="text-lg font-bold text-foreground">
+              {altitudeM != null ? `${Math.round(altitudeM)} m` : "—"}
+            </span>
+          </div>
+          <div className="gps-illustration" />
         </CardContent>
       </Card>
     ),
     temp_card: (
-      <Card className={`glass-card p-0 h-full ${tempClass(kombiT)}`}>
+      <Card className={`glass-card p-0 h-full card-compact ${tempClass(kombiT)}`}>
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -998,28 +1018,46 @@ export default function OverviewDashboard() {
             Temperature
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4 px-4 pb-4 pt-0">
+        <CardContent className="space-y-3 px-4 pb-4 pt-0">
           {import.meta.env.DEV && (
             <div className="text-xs text-primary p-1.5 bg-secondary/40 rounded-lg border border-glass mb-1">
               <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : "null"}
             </div>
           )}
-          <div className="space-y-4">
+          <div className="space-y-3">
             {(() => {
               const t = temps?.kombi?.temp_c ?? null;
               const style = tempStyle(t);
+              const hum = temps?.kombi?.hum_pct ?? null;
               return (
-                <div className={`flex items-center justify-between p-3 rounded-xl border ${style.card}`}>
-                  <div className="flex items-center gap-3">
-                    <Home className="w-5 h-5 text-muted-foreground" />
-                    <span className="font-medium">Kombi</span>
-                  </div>
+                <div className={`temp-tile ${style.card}`}>
                   <div className="flex items-center gap-2">
-                    <style.Icon className={`w-5 h-5 ${style.text}`} />
-                    <span className={`text-2xl font-bold ${style.text}`}>
-                      {t != null ? t.toFixed(1) : "—"}
-                    </span>
-                    <span className="text-sm text-muted-foreground">°C</span>
+                    <div className="p-2 rounded-lg bg-secondary/40 border border-glass">
+                      <Home className="w-4 h-4 text-muted-foreground" />
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Kombi</p>
+                      <p className="text-sm text-muted-foreground">Interior</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <style.Icon className={`w-5 h-5 ${style.text}`} />
+                      <span className={`text-2xl font-bold ${style.text}`}>
+                        {t != null ? t.toFixed(1) : "—"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">°C</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="rounded-full px-2 py-0.5 text-xs bg-secondary/40 border border-glass text-muted-foreground">
+                        {tempLabel(t)}
+                      </div>
+                      {hum != null && (
+                        <div className="rounded-full px-2 py-0.5 text-xs bg-secondary/40 border border-glass text-muted-foreground">
+                          {Math.round(hum)}%
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -1027,18 +1065,36 @@ export default function OverviewDashboard() {
             {(() => {
               const t = temps?.garaza?.temp_c ?? null;
               const style = tempStyle(t);
+              const hum = temps?.garaza?.hum_pct ?? null;
               return (
-                <div className={`flex items-center justify-between p-3 rounded-xl border ${style.card}`}>
-                  <div className="flex items-center gap-3">
-                    <Warehouse className="w-5 h-5 text-muted-foreground" />
-                    <span className="font-medium">Garaža</span>
-                  </div>
+                <div className={`temp-tile ${style.card}`}>
                   <div className="flex items-center gap-2">
-                    <style.Icon className={`w-5 h-5 ${style.text}`} />
-                    <span className={`text-2xl font-bold ${style.text}`}>
-                      {t != null ? t.toFixed(1) : "—"}
-                    </span>
-                    <span className="text-sm text-muted-foreground">°C</span>
+                    <div className="p-2 rounded-lg bg-secondary/40 border border-glass">
+                      <Warehouse className="w-4 h-4 text-muted-foreground" />
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Garaža</p>
+                      <p className="text-sm text-muted-foreground">Storage</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <style.Icon className={`w-5 h-5 ${style.text}`} />
+                      <span className={`text-2xl font-bold ${style.text}`}>
+                        {t != null ? t.toFixed(1) : "—"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">°C</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="rounded-full px-2 py-0.5 text-xs bg-secondary/40 border border-glass text-muted-foreground">
+                        {tempLabel(t)}
+                      </div>
+                      {hum != null && (
+                        <div className="rounded-full px-2 py-0.5 text-xs bg-secondary/40 border border-glass text-muted-foreground">
+                          {Math.round(hum)}%
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -1048,7 +1104,7 @@ export default function OverviewDashboard() {
       </Card>
     ),
     weather_card: (
-      <Card className={`glass-card p-0 h-full weather-card ${weatherMeta.theme}`}>
+      <Card className={`glass-card p-0 h-full card-compact weather-card ${weatherMeta.theme}`}>
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -1112,7 +1168,7 @@ export default function OverviewDashboard() {
     ),
     water_card: <WaterLevelCard />,
     battery: (
-      <Card className="glass-card p-0 h-full">
+      <Card className="glass-card p-0 h-full card-compact">
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -1145,7 +1201,7 @@ export default function OverviewDashboard() {
     header_relay: <HeaderRelayCard />,
     relay_rules: <RelayRulesWidget />,
     gps_map: (
-      <Card className="glass-card p-0 h-full">
+      <Card className="glass-card p-0 h-full card-compact">
         <CardHeader className="pb-3 px-4 pt-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">

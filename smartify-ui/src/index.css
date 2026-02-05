@@ -271,6 +271,66 @@
       linear-gradient(135deg, rgba(226, 232, 240, 0.12), transparent 60%);
   }
 
+  .card-compact .card-header {
+    padding: 0.75rem 0.75rem 0.25rem 0.75rem !important;
+  }
+
+  .card-compact .card-content {
+    padding: 0 0.75rem 0.75rem 0.75rem !important;
+  }
+
+  .temp-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border-radius: 0.75rem;
+    border-width: 1px;
+  }
+
+  .gps-terrain-low {
+    background: radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.2), transparent 55%),
+      linear-gradient(160deg, rgba(14, 116, 144, 0.2), transparent 60%);
+  }
+
+  .gps-terrain-mid {
+    background: radial-gradient(circle at 20% 20%, rgba(34, 197, 94, 0.18), transparent 55%),
+      linear-gradient(160deg, rgba(22, 101, 52, 0.2), transparent 60%);
+  }
+
+  .gps-terrain-high {
+    background: radial-gradient(circle at 20% 20%, rgba(148, 163, 184, 0.25), transparent 55%),
+      linear-gradient(160deg, rgba(71, 85, 105, 0.25), transparent 60%);
+  }
+
+  .gps-illustration {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -6px;
+    height: 44px;
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  .gps-terrain-low .gps-illustration {
+    background: radial-gradient(circle at 10% 90%, rgba(56, 189, 248, 0.55), transparent 60%),
+      radial-gradient(circle at 40% 110%, rgba(14, 116, 144, 0.6), transparent 70%),
+      linear-gradient(0deg, rgba(15, 23, 42, 0.4), transparent 60%);
+  }
+
+  .gps-terrain-mid .gps-illustration {
+    background: radial-gradient(circle at 10% 90%, rgba(34, 197, 94, 0.45), transparent 60%),
+      radial-gradient(circle at 50% 120%, rgba(22, 101, 52, 0.55), transparent 70%),
+      linear-gradient(0deg, rgba(15, 23, 42, 0.4), transparent 60%);
+  }
+
+  .gps-terrain-high .gps-illustration {
+    background: radial-gradient(circle at 10% 90%, rgba(148, 163, 184, 0.5), transparent 60%),
+      radial-gradient(circle at 55% 120%, rgba(71, 85, 105, 0.6), transparent 70%),
+      linear-gradient(0deg, rgba(15, 23, 42, 0.45), transparent 60%);
+  }
+
   .sun-pulse {
     animation: sun-pulse 4s ease-in-out infinite;
   }
