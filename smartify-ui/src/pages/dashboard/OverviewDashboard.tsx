@@ -52,6 +52,14 @@ function tempClass(t: number | null) {
   return "ring-1 ring-red-400/40";
 }
 
+function tempStyle(t: number | null) {
+  if (t == null) return { card: "bg-secondary/30 border-glass", text: "text-muted-foreground", Icon: Thermometer };
+  if (t < 8) return { card: "bg-sky-500/10 border-sky-400/30", text: "text-sky-200", Icon: CloudSnow };
+  if (t < 16) return { card: "bg-emerald-500/10 border-emerald-400/30", text: "text-emerald-200", Icon: CloudSun };
+  if (t < 24) return { card: "bg-amber-500/10 border-amber-400/30", text: "text-amber-200", Icon: Sun };
+  return { card: "bg-red-500/10 border-red-400/30", text: "text-red-200", Icon: Sun };
+}
+
 function weatherTheme(code: number | null | undefined) {
   if (code == null) return { theme: "weather-cloud", icon: CloudSun, label: "Mixed" };
   if (code === 0) return { theme: "weather-sun", icon: Sun, label: "Clear" };
@@ -533,23 +541,17 @@ function WaterLevelCard() {
 
   const levelPercent = waterData?.level_percent ?? null;
 
-  const statusColor = levelPercent == null
-    ? "bg-secondary"
-    : levelPercent > 50
-    ? "bg-success"
-    : levelPercent > 25
-    ? "bg-warning"
-    : "bg-destructive";
-  const textColor = levelPercent == null
-    ? "text-muted-foreground"
-    : levelPercent > 50
-    ? "text-success"
-    : levelPercent > 25
-    ? "text-warning"
-    : "text-destructive";
+  const waterStyle =
+    levelPercent == null
+      ? { card: "bg-secondary/30 border-glass", text: "text-muted-foreground", bar: "bg-secondary", label: "Unknown" }
+      : levelPercent > 60
+      ? { card: "bg-emerald-500/10 border-emerald-400/30", text: "text-emerald-200", bar: "bg-success", label: "Full" }
+      : levelPercent > 30
+      ? { card: "bg-amber-500/10 border-amber-400/30", text: "text-amber-200", bar: "bg-warning", label: "Medium" }
+      : { card: "bg-red-500/10 border-red-400/30", text: "text-red-200", bar: "bg-destructive", label: "Low" };
 
   return (
-    <Card className="glass-card p-0 h-full">
+    <Card className={`glass-card p-0 h-full ${waterStyle.card}`}>
       <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -560,14 +562,19 @@ function WaterLevelCard() {
       </CardHeader>
       <CardContent className="space-y-4 px-4 pb-4 pt-0">
         <div className="flex items-end justify-between">
-          <span className={`text-3xl font-bold ${textColor}`}>
-            {levelPercent !== null ? `${levelPercent}%` : "—"}
-          </span>
-          <span className="text-sm text-muted-foreground">— L</span>
+          <div>
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Status</p>
+            <p className={`text-sm font-semibold ${waterStyle.text}`}>{waterStyle.label}</p>
+          </div>
+          <div className="text-right">
+            <span className={`text-3xl font-bold ${waterStyle.text}`}>
+              {levelPercent !== null ? `${levelPercent}%` : "—"}
+            </span>
+          </div>
         </div>
         <div className="h-3 bg-secondary/50 rounded-full overflow-hidden">
           <div
-            className={`h-full rounded-full transition-all duration-500 ${statusColor}`}
+            className={`h-full rounded-full transition-all duration-500 ${waterStyle.bar}`}
             style={{ width: `${levelPercent ?? 0}%` }}
           />
         </div>
@@ -998,30 +1005,44 @@ export default function OverviewDashboard() {
             </div>
           )}
           <div className="space-y-4">
-            <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-glass">
-              <div className="flex items-center gap-3">
-                <Home className="w-5 h-5 text-muted-foreground" />
-                <span className="font-medium">Kombi</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-2xl font-bold text-success">
-                  {temps?.kombi?.temp_c != null ? temps.kombi.temp_c.toFixed(1) : "—"}
-                </span>
-                <span className="text-sm text-muted-foreground">°C</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-glass">
-              <div className="flex items-center gap-3">
-                <Warehouse className="w-5 h-5 text-muted-foreground" />
-                <span className="font-medium">Garaža</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-2xl font-bold text-success">
-                  {temps?.garaza?.temp_c != null ? temps.garaza.temp_c.toFixed(1) : "—"}
-                </span>
-                <span className="text-sm text-muted-foreground">°C</span>
-              </div>
-            </div>
+            {(() => {
+              const t = temps?.kombi?.temp_c ?? null;
+              const style = tempStyle(t);
+              return (
+                <div className={`flex items-center justify-between p-3 rounded-xl border ${style.card}`}>
+                  <div className="flex items-center gap-3">
+                    <Home className="w-5 h-5 text-muted-foreground" />
+                    <span className="font-medium">Kombi</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <style.Icon className={`w-5 h-5 ${style.text}`} />
+                    <span className={`text-2xl font-bold ${style.text}`}>
+                      {t != null ? t.toFixed(1) : "—"}
+                    </span>
+                    <span className="text-sm text-muted-foreground">°C</span>
+                  </div>
+                </div>
+              );
+            })()}
+            {(() => {
+              const t = temps?.garaza?.temp_c ?? null;
+              const style = tempStyle(t);
+              return (
+                <div className={`flex items-center justify-between p-3 rounded-xl border ${style.card}`}>
+                  <div className="flex items-center gap-3">
+                    <Warehouse className="w-5 h-5 text-muted-foreground" />
+                    <span className="font-medium">Garaža</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <style.Icon className={`w-5 h-5 ${style.text}`} />
+                    <span className={`text-2xl font-bold ${style.text}`}>
+                      {t != null ? t.toFixed(1) : "—"}
+                    </span>
+                    <span className="text-sm text-muted-foreground">°C</span>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </CardContent>
       </Card>
@@ -1168,10 +1189,11 @@ export default function OverviewDashboard() {
   const bottomIds = layout.bottomOrder.filter((id) => !hidden.has(id));
 
   const orderedIds = [...topIds, ...bottomIds];
+  const gridColsClass = layout.columns === 4 ? "lg:grid-cols-4" : "lg:grid-cols-3";
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6 auto-rows-[1fr]">
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 auto-rows-[1fr]`}>
         {orderedIds.map((id) => (
           <div
             key={id}

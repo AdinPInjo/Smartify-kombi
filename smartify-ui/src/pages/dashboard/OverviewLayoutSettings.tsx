@@ -39,6 +39,10 @@ const OverviewLayoutSettings = () => {
     updateLayout({ ...layout, hidden: Array.from(hidden) as OverviewModuleId[] });
   };
 
+  const setColumns = (cols: 3 | 4) => {
+    updateLayout({ ...layout, columns: cols });
+  };
+
   const moveByDrop = (activeId: OverviewModuleId, overId: OverviewModuleId, zone: "top" | "bottom") => {
     if (activeId === overId) return;
     const list = zone === "top" ? [...layout.topOrder] : [...layout.bottomOrder];
@@ -129,6 +133,31 @@ const OverviewLayoutSettings = () => {
           </Button>
         </div>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Grid Columns</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant={layout.columns === 3 ? "default" : "outline"}
+              onClick={() => setColumns(3)}
+            >
+              3 Columns
+            </Button>
+            <Button
+              variant={layout.columns === 4 ? "default" : "outline"}
+              onClick={() => setColumns(4)}
+            >
+              4 Columns
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Smaller cards look better on large screens with 4 columns.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

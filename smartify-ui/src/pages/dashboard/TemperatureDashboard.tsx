@@ -12,7 +12,7 @@ import {
   CartesianGrid,
   Legend,
 } from "recharts";
-import { Thermometer, TrendingUp, TrendingDown, Minus, Clock } from "lucide-react";
+import { Thermometer, TrendingUp, TrendingDown, Minus, Clock, Sun, CloudSun, CloudRain, CloudSnow, CloudLightning } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 
 type Range = "day" | "week" | "month" | "year";
@@ -37,6 +37,32 @@ function formatTs(ts: number, range: Range) {
   if (range === "week") return d.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
   if (range === "month") return d.toLocaleDateString([], { month: "short", day: "2-digit" });
   return d.toLocaleDateString([], { year: "numeric", month: "short" });
+}
+
+function weatherTheme(code: number | null | undefined) {
+  if (code == null) return { theme: "weather-cloud", icon: CloudSun, label: "Mixed" };
+  if (code === 0) return { theme: "weather-sun", icon: Sun, label: "Clear" };
+  if (code >= 1 && code <= 3) return { theme: "weather-cloud", icon: CloudSun, label: "Partly Cloudy" };
+  if (code >= 45 && code <= 48) return { theme: "weather-cloud", icon: CloudSun, label: "Fog" };
+  if (code >= 51 && code <= 67) return { theme: "weather-rain", icon: CloudRain, label: "Rain" };
+  if (code >= 71 && code <= 77) return { theme: "weather-snow", icon: CloudSnow, label: "Snow" };
+  if (code >= 80 && code <= 82) return { theme: "weather-rain", icon: CloudRain, label: "Showers" };
+  if (code >= 95) return { theme: "weather-storm", icon: CloudLightning, label: "Storm" };
+  return { theme: "weather-cloud", icon: CloudSun, label: "Mixed" };
+}
+
+function ForecastChip({ day, max, min, code }: { day: string; max: number | null; min: number | null; code: number | null }) {
+  const { icon: Icon, label } = weatherTheme(code);
+  return (
+    <div className="flex flex-col items-center gap-1 rounded-xl bg-secondary/30 border border-glass px-3 py-2 text-center">
+      <div className="text-xs text-muted-foreground">{day}</div>
+      <Icon className="h-5 w-5 text-primary" />
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-sm font-semibold text-foreground">
+        {max != null ? max.toFixed(0) : "—"}° / {min != null ? min.toFixed(0) : "—"}°
+      </div>
+    </div>
+  );
 }
 
 export default function TemperatureDashboard() {
@@ -73,6 +99,21 @@ export default function TemperatureDashboard() {
       };
     },
     refetchInterval: 60000,
+    retry: 1,
+  });
+
+  const { data: weatherForecast } = useQuery({
+    queryKey: ["weather", "forecast"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/weather/forecast", { cache: "no-store" });
+      if (!r.ok) throw new Error(`Weather forecast API returned ${r.status}`);
+      return (await r.json()) as {
+        ok: boolean;
+        current?: { temp_c: number | null; weather_code: number | null; wind_kmh: number | null };
+        daily: Array<{ date: string; temp_max: number | null; temp_min: number | null; weather_code: number | null }>;
+      };
+    },
+    refetchInterval: 600000,
     retry: 1,
   });
 
@@ -128,6 +169,11 @@ export default function TemperatureDashboard() {
   }, [range]);
 
   const outsideNow = weather?.ok ? weather?.temp_c ?? null : null;
+  const forecastDays = (weatherForecast?.daily || []).slice(1, 5);
+  const currentForecast = weatherForecast?.current ?? null;
+  const weatherMeta = weatherTheme(currentForecast?.weather_code ?? weather?.weather_code ?? null);
+  const WeatherIcon = weatherMeta.icon;
+  const outsideNowEffective = currentForecast?.temp_c ?? outsideNow;
 
   const chartData = useMemo(() => {
     const rows = data?.rows ?? [];
@@ -305,16 +351,6 @@ export default function TemperatureDashboard() {
             trend: getTrend(garazaSeries),
             history: spark(garazaSeries),
           },
-          {
-            id: "outside",
-            name: "Outside",
-            location: "GPS weather",
-            current: outsideNow,
-            min: outsideMin,
-            max: outsideMax,
-            trend: getTrend(outsideSeries),
-            history: spark(outsideSeries),
-          },
         ].map((sensor) => (
           <Card key={sensor.id} className="glass-card">
             <CardHeader className="pb-3">
@@ -361,6 +397,79 @@ export default function TemperatureDashboard() {
             </CardContent>
           </Card>
         ))}
+
+        <Card className={`glass-card weather-card ${weatherMeta.theme}`}>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+                <WeatherIcon className="h-4 w-4 text-primary" />
+              </div>
+              Outside
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Outside Now</p>
+                <p className={`text-4xl font-bold ${getTemperatureColor(outsideNowEffective)}`}>
+                  {outsideNowEffective != null ? outsideNowEffective.toFixed(1) : "—"}°C
+                </p>
+                <p className="text-sm text-muted-foreground">{weatherMeta.label}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-muted-foreground">Wind</p>
+                <p className="text-lg font-semibold">
+                  {currentForecast?.wind_kmh != null ? `${currentForecast.wind_kmh.toFixed(0)} km/h` : "—"}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {forecastDays.map((d) => (
+                <ForecastChip
+                  key={d.date}
+                  day={new Date(d.date).toLocaleDateString(undefined, { weekday: "short" })}
+                  max={d.temp_max}
+                  min={d.temp_min}
+                  code={d.weather_code ?? null}
+                />
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-glass">
+              <div>
+                <p className="metric-label">Min</p>
+                <p className="font-semibold">{outsideMin != null ? `${outsideMin.toFixed(1)}°C` : "—"}</p>
+              </div>
+              <div>
+                <p className="metric-label">Max</p>
+                <p className="font-semibold">{outsideMax != null ? `${outsideMax.toFixed(1)}°C` : "—"}</p>
+              </div>
+            </div>
+
+            {weatherMeta.theme === "weather-sun" && <div className="sun-pulse" />}
+            {weatherMeta.theme === "weather-rain" && (
+              <div className="rain-drops">
+                <span />
+                <span />
+                <span />
+                <span />
+                <span />
+              </div>
+            )}
+            {weatherMeta.theme === "weather-snow" && (
+              <div className="snow-flakes">
+                <span />
+                <span />
+                <span />
+                <span />
+                <span />
+                <span />
+              </div>
+            )}
+            {weatherMeta.theme === "weather-storm" && <div className="storm-bolt" />}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Chart Card */}

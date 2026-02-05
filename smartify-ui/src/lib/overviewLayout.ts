@@ -12,6 +12,7 @@ export type OverviewLayoutConfig = {
   topOrder: OverviewModuleId[];
   bottomOrder: OverviewModuleId[];
   hidden: OverviewModuleId[];
+  columns?: 3 | 4;
 };
 
 export const OVERVIEW_MODULES: { id: OverviewModuleId; label: string; zone: "top" | "bottom" }[] = [
@@ -29,6 +30,7 @@ export const DEFAULT_OVERVIEW_LAYOUT: OverviewLayoutConfig = {
   topOrder: ["gps_card", "temp_card", "weather_card", "water_card", "battery", "header_relay"],
   bottomOrder: ["relay_rules", "gps_map"],
   hidden: [],
+  columns: 3,
 };
 
 const STORAGE_KEY = "smartify_overview_layout_v1";
@@ -53,7 +55,8 @@ const normalize = (config: OverviewLayoutConfig): OverviewLayoutConfig => {
   ensureAll(topOrder, "top");
   ensureAll(bottomOrder, "bottom");
 
-  return { topOrder, bottomOrder, hidden };
+  const columns = config.columns === 4 ? 4 : 3;
+  return { topOrder, bottomOrder, hidden, columns };
 };
 
 export const getOverviewLayout = (): OverviewLayoutConfig => {
