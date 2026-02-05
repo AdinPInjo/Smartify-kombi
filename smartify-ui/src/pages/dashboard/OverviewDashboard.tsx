@@ -297,7 +297,7 @@ function GpsTrackMap({ data, currentLat, currentLon }: { data: TrackPayload | nu
     map.fitBounds(bounds, { padding: [20, 20] });
   }, [data, currentLat, currentLon]);
 
-  return <div ref={elRef} className="h-[420px] w-full rounded-xl overflow-hidden border border-glass bg-secondary/30" />;
+  return <div ref={elRef} className="h-[230px] w-full rounded-xl overflow-hidden border border-glass bg-secondary/30" />;
 }
 
 function HeaderRelayCard() {
@@ -1298,7 +1298,7 @@ export default function OverviewDashboard() {
 
   return (
     <div className="space-y-6">
-      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 auto-rows-[1fr] items-stretch ${gridDensityClass}`}>
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 auto-rows-[minmax(0,300px)] items-stretch ${gridDensityClass}`}>
         {orderedIds.map((id) => (
           <div
             key={id}
