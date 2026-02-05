@@ -23,12 +23,12 @@ export const OVERVIEW_MODULES: { id: OverviewModuleId; label: string; zone: "top
   { id: "battery", label: "Battery", zone: "top" },
   { id: "header_relay", label: "Header Relay", zone: "top" },
   { id: "relay_rules", label: "Relay Rules", zone: "top" },
-  { id: "gps_map", label: "GPS Map & Track", zone: "bottom" },
+  { id: "gps_map", label: "GPS Map & Track", zone: "top" },
 ];
 
 export const DEFAULT_OVERVIEW_LAYOUT: OverviewLayoutConfig = {
-  topOrder: ["gps_card", "temp_card", "weather_card", "water_card", "battery", "header_relay", "relay_rules"],
-  bottomOrder: ["gps_map"],
+  topOrder: ["gps_card", "temp_card", "weather_card", "water_card", "battery", "header_relay", "relay_rules", "gps_map"],
+  bottomOrder: [],
   hidden: [],
   columns: 3,
 };
@@ -39,8 +39,9 @@ const normalize = (config: OverviewLayoutConfig): OverviewLayoutConfig => {
   const validIds = new Set(OVERVIEW_MODULES.map((m) => m.id));
   const uniq = (list: OverviewModuleId[]) => Array.from(new Set(list.filter((id) => validIds.has(id))));
 
-  const topOrder = uniq(config.topOrder);
-  const bottomOrder = uniq(config.bottomOrder);
+  const byId = new Map(OVERVIEW_MODULES.map((m) => [m.id, m]));
+  const topOrder = uniq(config.topOrder).filter((id) => byId.get(id)?.zone === "top");
+  const bottomOrder = uniq(config.bottomOrder).filter((id) => byId.get(id)?.zone === "bottom");
   const hidden = uniq(config.hidden);
 
   const ensureAll = (target: OverviewModuleId[], zone: "top" | "bottom") => {

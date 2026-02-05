@@ -71,6 +71,15 @@ function tempLabel(t: number | null) {
   return "Hot";
 }
 
+function formatTimeAgo(timestampSec: number | null) {
+  if (!timestampSec) return "Unknown";
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - timestampSec);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
 function weatherTheme(code: number | null | undefined) {
   if (code == null) return { theme: "weather-cloud", icon: CloudSun, label: "Mixed" };
   if (code === 0) return { theme: "weather-sun", icon: Sun, label: "Clear" };
@@ -762,6 +771,7 @@ function RelayRulesWidget() {
 export default function OverviewDashboard() {
   const [track, setTrack] = useState<TrackPayload | null>(null);
   const [layout, setLayout] = useState(getOverviewLayout());
+  const [lastAddress, setLastAddress] = useState<string | null>(null);
 
   useEffect(() => {
     const handler = () => setLayout(getOverviewLayout());
@@ -967,6 +977,10 @@ export default function OverviewDashboard() {
     retry: 1,
   });
 
+  useEffect(() => {
+    if (address) setLastAddress(address);
+  }, [address]);
+
   const modules: Record<OverviewModuleId, JSX.Element> = {
     gps_card: (
       <Card
@@ -974,12 +988,30 @@ export default function OverviewDashboard() {
         style={{ ["--gps-photo" as any]: `url(${gpsBg})` }}
       >
         <CardHeader className="pb-2 px-4 pt-4">
-          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-            <div className="p-2 rounded-lg bg-primary/20 border border-glass">
-              <MapPin className="h-4 w-4 text-primary icon-glow" />
-            </div>
-            GPS Status
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-secondary/40 border border-glass">
+                <MapPin className="h-4 w-4 text-primary icon-glow" />
+              </div>
+              GPS Status
+            </CardTitle>
+            {!gpsHasFix && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="text-xs text-muted-foreground px-2 py-1 rounded-full border border-glass bg-secondary/40">
+                      Last update
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs text-muted-foreground">
+                      Last GPS update {formatTimeAgo(gps?.ts ?? null)}
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="flex-1 flex flex-col gap-3 px-4 pb-6 pt-0">
           <div className="flex items-center justify-between">
@@ -1017,7 +1049,7 @@ export default function OverviewDashboard() {
               <p className="metric-label">Approx Location</p>
               <div className="flex items-start gap-2 text-sm font-semibold text-foreground">
                 <MapPin className="mt-0.5 h-3.5 w-3.5 text-primary" />
-                <span>{address ?? "—"}</span>
+                <span>{address ?? lastAddress ?? "—"}</span>
               </div>
             </div>
           </div>

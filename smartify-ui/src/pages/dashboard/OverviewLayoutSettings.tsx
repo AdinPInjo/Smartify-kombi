@@ -172,12 +172,7 @@ const OverviewLayoutSettings = () => {
         <CardContent>{renderList("top")}</CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Bottom Grid</CardTitle>
-        </CardHeader>
-        <CardContent>{renderList("bottom")}</CardContent>
-      </Card>
+      {/* Bottom grid removed: all modules are now in the top grid */}
     </div>
   );
 };

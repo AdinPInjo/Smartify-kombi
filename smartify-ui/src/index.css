@@ -343,6 +343,12 @@
   .gps-terrain-high > .card-header,
   .gps-terrain-high > .card-content {
     position: relative;
+    z-index: 2;
+  }
+
+  .gps-terrain-low .gps-illustration,
+  .gps-terrain-mid .gps-illustration,
+  .gps-terrain-high .gps-illustration {
     z-index: 1;
   }
 
