@@ -571,7 +571,7 @@ function WaterLevelCard() {
       : { card: "bg-red-500/10 border-red-400/30", text: "text-red-200", bar: "bg-destructive", label: "Low" };
 
   return (
-    <Card className={`glass-card p-0 h-full card-compact water-card ${waterStyle.card}`}>
+    <Card className={`glass-card p-0 h-full card-compact water-card ${waterStyle.card} flex flex-col`}>
       <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -580,27 +580,29 @@ function WaterLevelCard() {
           Water Level
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4 px-4 pb-4 pt-0">
-        <div className="flex items-end justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">Status</p>
-            <p className={`text-sm font-semibold ${waterStyle.text}`}>{waterStyle.label}</p>
+      <CardContent className="flex-1 flex flex-col px-4 pb-4 pt-0">
+        <div className="mt-auto space-y-4">
+          <div className="flex items-end justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Status</p>
+              <p className={`text-sm font-semibold ${waterStyle.text}`}>{waterStyle.label}</p>
+            </div>
+            <div className="text-right">
+              <span className={`text-3xl font-bold ${waterStyle.text}`}>
+                {levelPercent !== null ? `${levelPercent}%` : "—"}
+              </span>
+            </div>
           </div>
-          <div className="text-right">
-            <span className={`text-3xl font-bold ${waterStyle.text}`}>
-              {levelPercent !== null ? `${levelPercent}%` : "—"}
-            </span>
+          <div className="h-3 bg-secondary/50 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${waterStyle.bar}`}
+              style={{ width: `${levelPercent ?? 0}%` }}
+            />
           </div>
+          <p className="text-xs text-muted-foreground">
+            {waterData?.message ?? "—"}
+          </p>
         </div>
-        <div className="h-3 bg-secondary/50 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all duration-500 ${waterStyle.bar}`}
-            style={{ width: `${levelPercent ?? 0}%` }}
-          />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          {waterData?.message ?? "—"}
-        </p>
       </CardContent>
     </Card>
   );
@@ -1153,7 +1155,7 @@ export default function OverviewDashboard() {
             Weather Forecast
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4 px-4 pb-4 pt-0">
+        <CardContent className="space-y-4 px-4 pb-5 pt-0">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Outside Now</p>
@@ -1298,7 +1300,7 @@ export default function OverviewDashboard() {
 
   return (
     <div className="space-y-6">
-      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 auto-rows-[360px] items-stretch ${gridDensityClass}`}>
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 items-stretch ${gridDensityClass}`}>
         {orderedIds.map((id) => (
           <div
             key={id}
