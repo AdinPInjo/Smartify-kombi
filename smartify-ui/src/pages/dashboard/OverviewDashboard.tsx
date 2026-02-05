@@ -992,13 +992,6 @@ export default function OverviewDashboard() {
             </span>
           </div>
 
-          <div className="space-y-2">
-            <p className="metric-label">Approx Location</p>
-            <p className="text-sm font-semibold text-foreground">
-              {address ?? "—"}
-            </p>
-          </div>
-
           <div className="mt-auto space-y-3">
             <div className="flex items-center justify-between pt-2 border-t border-glass">
               <div className="flex items-center gap-2">
@@ -1019,13 +1012,21 @@ export default function OverviewDashboard() {
                 {altitudeM != null ? `${Math.round(altitudeM)} m` : "—"}
               </span>
             </div>
+
+            <div className="space-y-2">
+              <p className="metric-label">Approx Location</p>
+              <div className="flex items-start gap-2 text-sm font-semibold text-foreground">
+                <MapPin className="mt-0.5 h-3.5 w-3.5 text-primary" />
+                <span>{address ?? "—"}</span>
+              </div>
+            </div>
           </div>
           <div className="gps-illustration" />
         </CardContent>
       </Card>
     ),
     temp_card: (
-      <Card className={`glass-card p-0 h-full card-compact temp-card ${tempClass(kombiT)}`}>
+      <Card className={`glass-card p-0 h-full card-compact temp-card ${tempClass(kombiT)} flex flex-col`}>
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -1034,13 +1035,13 @@ export default function OverviewDashboard() {
             Temperature
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 px-4 pb-4 pt-0">
+        <CardContent className="flex-1 flex flex-col gap-3 px-4 pb-4 pt-0">
           {import.meta.env.DEV && (
             <div className="text-xs text-primary p-1.5 bg-secondary/40 rounded-lg border border-glass mb-1">
               <strong>Debug:</strong> temps = {temps ? JSON.stringify(temps, null, 2) : "null"}
             </div>
           )}
-          <div className="space-y-3">
+          <div className="mt-auto space-y-3">
             {(() => {
               const t = temps?.kombi?.temp_c ?? null;
               const style = tempStyle(t);

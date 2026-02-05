@@ -290,8 +290,7 @@
 
   .gps-terrain-low {
     background-image: linear-gradient(160deg, rgba(14, 116, 144, 0.35), rgba(2, 6, 23, 0.4)),
-      radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.25), transparent 55%),
-      var(--gps-photo);
+      radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.25), transparent 55%);
     background-size: cover;
     background-position: center;
     position: relative;
@@ -299,8 +298,7 @@
 
   .gps-terrain-mid {
     background-image: linear-gradient(160deg, rgba(22, 101, 52, 0.35), rgba(2, 6, 23, 0.4)),
-      radial-gradient(circle at 20% 20%, rgba(34, 197, 94, 0.2), transparent 55%),
-      var(--gps-photo);
+      radial-gradient(circle at 20% 20%, rgba(34, 197, 94, 0.2), transparent 55%);
     background-size: cover;
     background-position: center;
     position: relative;
@@ -308,8 +306,7 @@
 
   .gps-terrain-high {
     background-image: linear-gradient(160deg, rgba(71, 85, 105, 0.45), rgba(2, 6, 23, 0.5)),
-      radial-gradient(circle at 20% 20%, rgba(148, 163, 184, 0.25), transparent 55%),
-      var(--gps-photo);
+      radial-gradient(circle at 20% 20%, rgba(148, 163, 184, 0.25), transparent 55%);
     background-size: cover;
     background-position: center;
     position: relative;
@@ -321,8 +318,21 @@
     content: "";
     position: absolute;
     inset: 0;
-    background: rgba(2, 6, 23, 0.55);
-    backdrop-filter: blur(1.5px) saturate(0.9);
+    background-image: var(--gps-photo);
+    background-size: cover;
+    background-position: center;
+    filter: blur(6px) saturate(0.9) brightness(0.7);
+    transform: scale(1.05);
+    z-index: 0;
+  }
+
+  .gps-terrain-low::after,
+  .gps-terrain-mid::after,
+  .gps-terrain-high::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(2, 6, 23, 0.6);
     z-index: 0;
   }
 
