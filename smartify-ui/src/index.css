@@ -289,18 +289,27 @@
   }
 
   .gps-terrain-low {
-    background: radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.2), transparent 55%),
-      linear-gradient(160deg, rgba(14, 116, 144, 0.2), transparent 60%);
+    background-image: linear-gradient(160deg, rgba(14, 116, 144, 0.35), rgba(2, 6, 23, 0.4)),
+      radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.25), transparent 55%),
+      var(--gps-photo);
+    background-size: cover;
+    background-position: center;
   }
 
   .gps-terrain-mid {
-    background: radial-gradient(circle at 20% 20%, rgba(34, 197, 94, 0.18), transparent 55%),
-      linear-gradient(160deg, rgba(22, 101, 52, 0.2), transparent 60%);
+    background-image: linear-gradient(160deg, rgba(22, 101, 52, 0.35), rgba(2, 6, 23, 0.4)),
+      radial-gradient(circle at 20% 20%, rgba(34, 197, 94, 0.2), transparent 55%),
+      var(--gps-photo);
+    background-size: cover;
+    background-position: center;
   }
 
   .gps-terrain-high {
-    background: radial-gradient(circle at 20% 20%, rgba(148, 163, 184, 0.25), transparent 55%),
-      linear-gradient(160deg, rgba(71, 85, 105, 0.25), transparent 60%);
+    background-image: linear-gradient(160deg, rgba(71, 85, 105, 0.45), rgba(2, 6, 23, 0.5)),
+      radial-gradient(circle at 20% 20%, rgba(148, 163, 184, 0.25), transparent 55%),
+      var(--gps-photo);
+    background-size: cover;
+    background-position: center;
   }
 
   .gps-illustration {
@@ -329,6 +338,33 @@
     background: radial-gradient(circle at 10% 90%, rgba(148, 163, 184, 0.5), transparent 60%),
       radial-gradient(circle at 55% 120%, rgba(71, 85, 105, 0.6), transparent 70%),
       linear-gradient(0deg, rgba(15, 23, 42, 0.45), transparent 60%);
+  }
+
+  .temp-card {
+    background: radial-gradient(circle at 15% 15%, rgba(14, 165, 233, 0.08), transparent 55%);
+  }
+
+  .water-card {
+    background: radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.12), transparent 60%);
+  }
+
+  .battery-card {
+    background: radial-gradient(circle at 20% 20%, rgba(16, 185, 129, 0.14), transparent 60%),
+      linear-gradient(140deg, rgba(6, 95, 70, 0.18), transparent 65%);
+  }
+
+  .relay-card {
+    background: radial-gradient(circle at 20% 20%, rgba(245, 158, 11, 0.18), transparent 60%),
+      linear-gradient(140deg, rgba(120, 53, 15, 0.16), transparent 65%);
+  }
+
+  .rules-card {
+    background: radial-gradient(circle at 20% 20%, rgba(168, 85, 247, 0.18), transparent 60%),
+      linear-gradient(140deg, rgba(88, 28, 135, 0.2), transparent 65%);
+  }
+
+  .gps-map-card {
+    background: radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.12), transparent 60%);
   }
 
   .sun-pulse {

@@ -11,6 +11,9 @@ import { getOverviewLayout, OverviewModuleId } from "@/lib/overviewLayout";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import gpsSea from "@/assets/gps/sea.jpg";
+import gpsHills from "@/assets/gps/hills.jpg";
+import gpsMountain from "@/assets/gps/mountain.jpg";
 
 type TempPayload = {
   ts: number | null;
@@ -420,7 +423,7 @@ function HeaderRelayCard() {
   };
 
   return (
-    <Card className="glass-card p-0 h-full card-compact">
+    <Card className="glass-card p-0 h-full card-compact relay-card">
       <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -559,7 +562,7 @@ function WaterLevelCard() {
       : { card: "bg-red-500/10 border-red-400/30", text: "text-red-200", bar: "bg-destructive", label: "Low" };
 
   return (
-    <Card className={`glass-card p-0 h-full card-compact ${waterStyle.card}`}>
+    <Card className={`glass-card p-0 h-full card-compact water-card ${waterStyle.card}`}>
       <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -701,7 +704,7 @@ function RelayRulesWidget() {
   };
 
   return (
-    <Card className="glass-card p-0 h-full card-compact">
+    <Card className="glass-card p-0 h-full card-compact rules-card">
       <CardHeader className="pb-3 px-4 pt-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -916,6 +919,14 @@ export default function OverviewDashboard() {
       : altitudeM >= 1000
       ? "gps-terrain-high"
       : "gps-terrain-mid";
+  const gpsBg =
+    altitudeM == null
+      ? gpsHills
+      : altitudeM < 200
+      ? gpsSea
+      : altitudeM >= 1000
+      ? gpsMountain
+      : gpsHills;
 
   const gpsStatus = gps?.ok === false ? "Disconnected" : gpsHasFix ? "Fix" : "No fix";
 
@@ -958,7 +969,10 @@ export default function OverviewDashboard() {
 
   const modules: Record<OverviewModuleId, JSX.Element> = {
     gps_card: (
-      <Card className={`glass-card p-0 h-full card-compact ${terrainClass} relative overflow-hidden`}>
+      <Card
+        className={`glass-card p-0 h-full card-compact ${terrainClass} relative overflow-hidden flex flex-col`}
+        style={{ ["--gps-photo" as any]: `url(${gpsBg})` }}
+      >
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -967,7 +981,7 @@ export default function OverviewDashboard() {
             GPS Status
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4 px-4 pb-4 pt-0">
+        <CardContent className="flex-1 flex flex-col gap-3 px-4 pb-6 pt-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className={gpsHasFix ? "status-dot-online" : "status-dot-warning"} />
@@ -985,31 +999,33 @@ export default function OverviewDashboard() {
             </p>
           </div>
 
-          <div className="flex items-center justify-between pt-2 border-t border-glass">
-            <div className="flex items-center gap-2">
-              <Gauge className="w-4 h-4 text-primary" />
-              <span className="text-sm text-muted-foreground">Speed</span>
+          <div className="mt-auto space-y-3">
+            <div className="flex items-center justify-between pt-2 border-t border-glass">
+              <div className="flex items-center gap-2">
+                <Gauge className="w-4 h-4 text-primary" />
+                <span className="text-sm text-muted-foreground">Speed</span>
+              </div>
+              <span className="text-lg font-bold text-primary">
+                {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
+              </span>
             </div>
-            <span className="text-lg font-bold text-primary">
-              {speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}
-            </span>
-          </div>
 
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-primary" />
-              <span className="text-sm text-muted-foreground">Altitude</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Activity className="w-4 h-4 text-primary" />
+                <span className="text-sm text-muted-foreground">Altitude</span>
+              </div>
+              <span className="text-lg font-bold text-foreground">
+                {altitudeM != null ? `${Math.round(altitudeM)} m` : "—"}
+              </span>
             </div>
-            <span className="text-lg font-bold text-foreground">
-              {altitudeM != null ? `${Math.round(altitudeM)} m` : "—"}
-            </span>
           </div>
           <div className="gps-illustration" />
         </CardContent>
       </Card>
     ),
     temp_card: (
-      <Card className={`glass-card p-0 h-full card-compact ${tempClass(kombiT)}`}>
+      <Card className={`glass-card p-0 h-full card-compact temp-card ${tempClass(kombiT)}`}>
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -1168,7 +1184,7 @@ export default function OverviewDashboard() {
     ),
     water_card: <WaterLevelCard />,
     battery: (
-      <Card className="glass-card p-0 h-full card-compact">
+      <Card className="glass-card p-0 h-full card-compact battery-card">
         <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -1201,7 +1217,7 @@ export default function OverviewDashboard() {
     header_relay: <HeaderRelayCard />,
     relay_rules: <RelayRulesWidget />,
     gps_map: (
-      <Card className="glass-card p-0 h-full card-compact">
+      <Card className="glass-card p-0 h-full card-compact gps-map-card">
         <CardHeader className="pb-3 px-4 pt-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
