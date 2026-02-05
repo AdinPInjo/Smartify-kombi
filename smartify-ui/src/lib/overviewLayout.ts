@@ -12,7 +12,7 @@ export type OverviewLayoutConfig = {
   topOrder: OverviewModuleId[];
   bottomOrder: OverviewModuleId[];
   hidden: OverviewModuleId[];
-  columns?: 3 | 4;
+  columns?: 3 | 4 | 5;
 };
 
 export const OVERVIEW_MODULES: { id: OverviewModuleId; label: string; zone: "top" | "bottom" }[] = [
@@ -55,7 +55,7 @@ const normalize = (config: OverviewLayoutConfig): OverviewLayoutConfig => {
   ensureAll(topOrder, "top");
   ensureAll(bottomOrder, "bottom");
 
-  const columns = config.columns === 4 ? 4 : 3;
+  const columns = config.columns === 5 ? 5 : config.columns === 4 ? 4 : 3;
   return { topOrder, bottomOrder, hidden, columns };
 };
 

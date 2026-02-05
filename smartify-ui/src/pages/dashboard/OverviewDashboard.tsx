@@ -1146,7 +1146,7 @@ export default function OverviewDashboard() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 forecast-grid">
             {forecastDays.map((d) => (
               <ForecastChip
                 key={d.date}
@@ -1261,11 +1261,17 @@ export default function OverviewDashboard() {
   const bottomIds = layout.bottomOrder.filter((id) => !hidden.has(id));
 
   const orderedIds = [...topIds, ...bottomIds];
-  const gridColsClass = layout.columns === 4 ? "lg:grid-cols-4" : "lg:grid-cols-3";
+  const gridColsClass =
+    layout.columns === 5
+      ? "lg:grid-cols-4 xl:grid-cols-5"
+      : layout.columns === 4
+      ? "lg:grid-cols-4"
+      : "lg:grid-cols-3";
+  const gridDensityClass = layout.columns === 5 ? "overview-cols-5" : "";
 
   return (
     <div className="space-y-6">
-      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 auto-rows-[1fr]`}>
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 auto-rows-[1fr] ${gridDensityClass}`}>
         {orderedIds.map((id) => (
           <div
             key={id}

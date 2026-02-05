@@ -39,7 +39,7 @@ const OverviewLayoutSettings = () => {
     updateLayout({ ...layout, hidden: Array.from(hidden) as OverviewModuleId[] });
   };
 
-  const setColumns = (cols: 3 | 4) => {
+  const setColumns = (cols: 3 | 4 | 5) => {
     updateLayout({ ...layout, columns: cols });
   };
 
@@ -152,8 +152,14 @@ const OverviewLayoutSettings = () => {
             >
               4 Columns
             </Button>
+            <Button
+              variant={layout.columns === 5 ? "default" : "outline"}
+              onClick={() => setColumns(5)}
+            >
+              5 Columns
+            </Button>
             <p className="text-xs text-muted-foreground">
-              Smaller cards look better on large screens with 4 columns.
+              Smaller cards look better on large screens with 4–5 columns.
             </p>
           </div>
         </CardContent>
