@@ -713,7 +713,7 @@ function RelayRulesWidget() {
   };
 
   return (
-    <Card className="glass-card p-0 h-full card-compact rules-card">
+    <Card className="glass-card p-0 h-full card-compact rules-card flex flex-col">
       <CardHeader className="pb-3 px-4 pt-4">
         <div className="flex items-center gap-2">
           <div className="p-2 rounded-lg bg-primary/20 border border-glass">
@@ -1045,7 +1045,6 @@ export default function OverviewDashboard() {
               </div>
             </div>
           </div>
-          <div className="gps-illustration" />
         </CardContent>
       </Card>
     ),
