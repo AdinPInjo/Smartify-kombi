@@ -97,11 +97,13 @@ def read_individual_temperatures() -> Dict[str, Optional[float]]:
             data = response.json()
             sensors = data.get("sensors", [])
             
-            result = {"t1": None, "t2": None, "avg": None}
+            result = {"t1": None, "t2": None, "avg": None, "h1": None, "h2": None, "avg_h": None}
             temps = []
+            hums = []
             
             for sensor in sensors:
                 temp_c = sensor.get("temperature_c")
+                humidity = sensor.get("humidity")
                 sensor_idx = sensor.get("sensor_index", 0)
                 
                 if temp_c is not None:
@@ -110,9 +112,17 @@ def read_individual_temperatures() -> Dict[str, Optional[float]]:
                         result["t1"] = float(temp_c)
                     elif sensor_idx == 1:
                         result["t2"] = float(temp_c)
+                if humidity is not None:
+                    hums.append(float(humidity))
+                    if sensor_idx == 0:
+                        result["h1"] = float(humidity)
+                    elif sensor_idx == 1:
+                        result["h2"] = float(humidity)
             
             if temps:
                 result["avg"] = sum(temps) / len(temps)
+            if hums:
+                result["avg_h"] = sum(hums) / len(hums)
             
             logger.debug(f"Individual temps: t1={result['t1']}, t2={result['t2']}, avg={result['avg']}")
             return result
@@ -120,7 +130,7 @@ def read_individual_temperatures() -> Dict[str, Optional[float]]:
     except Exception as e:
         logger.warning(f"Error reading individual temperatures: {e}")
     
-    return {"t1": None, "t2": None, "avg": None}
+    return {"t1": None, "t2": None, "avg": None, "h1": None, "h2": None, "avg_h": None}
 
 
 def read_water_level() -> Optional[float]:

@@ -240,6 +240,90 @@
       opacity: 0;
     }
   }
+
+  .weather-card {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .weather-sun {
+    background: radial-gradient(circle at 20% 20%, rgba(251, 191, 36, 0.35), transparent 55%),
+      linear-gradient(135deg, rgba(251, 191, 36, 0.15), transparent 60%);
+  }
+
+  .weather-cloud {
+    background: radial-gradient(circle at 20% 20%, rgba(148, 163, 184, 0.25), transparent 60%),
+      linear-gradient(135deg, rgba(148, 163, 184, 0.1), transparent 60%);
+  }
+
+  .weather-rain {
+    background: radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.25), transparent 60%),
+      linear-gradient(135deg, rgba(59, 130, 246, 0.12), transparent 60%);
+  }
+
+  .weather-storm {
+    background: radial-gradient(circle at 20% 20%, rgba(168, 85, 247, 0.25), transparent 60%),
+      linear-gradient(135deg, rgba(88, 28, 135, 0.2), transparent 60%);
+  }
+
+  .weather-snow {
+    background: radial-gradient(circle at 20% 20%, rgba(226, 232, 240, 0.35), transparent 60%),
+      linear-gradient(135deg, rgba(226, 232, 240, 0.12), transparent 60%);
+  }
+
+  .sun-pulse {
+    animation: sun-pulse 4s ease-in-out infinite;
+  }
+
+  .rain-drop {
+    position: absolute;
+    width: 2px;
+    height: 14px;
+    background: rgba(148, 197, 255, 0.8);
+    animation: rain-fall 1.4s linear infinite;
+    border-radius: 9999px;
+  }
+
+  .snow-flake {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: rgba(226, 232, 240, 0.8);
+    animation: snow-fall 3.5s linear infinite;
+  }
+
+  .storm-bolt {
+    position: absolute;
+    width: 8px;
+    height: 24px;
+    background: rgba(250, 204, 21, 0.9);
+    clip-path: polygon(50% 0, 100% 40%, 70% 40%, 100% 100%, 35% 55%, 60% 55%);
+    animation: storm-flash 2.8s ease-in-out infinite;
+  }
+
+  @keyframes sun-pulse {
+    0%, 100% { transform: scale(1); opacity: 0.8; }
+    50% { transform: scale(1.08); opacity: 1; }
+  }
+
+  @keyframes rain-fall {
+    0% { transform: translateY(-20px); opacity: 0; }
+    20% { opacity: 0.6; }
+    100% { transform: translateY(120px); opacity: 0; }
+  }
+
+  @keyframes snow-fall {
+    0% { transform: translateY(-20px); opacity: 0; }
+    30% { opacity: 0.7; }
+    100% { transform: translateY(100px); opacity: 0; }
+  }
+
+  @keyframes storm-flash {
+    0%, 60%, 100% { opacity: 0; transform: translateY(-10px); }
+    70% { opacity: 1; transform: translateY(0); }
+    80% { opacity: 0.3; transform: translateY(-5px); }
+  }
 }
 
 /* Leaflet map styling for dark theme */

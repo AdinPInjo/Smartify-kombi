@@ -75,6 +75,11 @@ serve(async (req) => {
     const payload = await req.json()
     const {
       temperature_c,
+      temp_kombi_c,
+      temp_garaza_c,
+      temp_outside_c,
+      humidity_kombi,
+      humidity_garaza,
       water_percent,
       delta_km,
       gps_lat,
@@ -88,7 +93,12 @@ serve(async (req) => {
       .from('telemetry')
       .insert({
         device_id,
-        temperature_c: temperature_c ?? null,
+        temperature_c: temperature_c ?? temp_kombi_c ?? null,
+        temp_kombi_c: temp_kombi_c ?? null,
+        temp_garaza_c: temp_garaza_c ?? null,
+        temp_outside_c: temp_outside_c ?? null,
+        humidity_kombi: humidity_kombi ?? null,
+        humidity_garaza: humidity_garaza ?? null,
         water_percent: water_percent ?? null,
         delta_km: delta_km ?? null,
         gps_lat: gps_lat ?? null,
@@ -119,6 +129,21 @@ serve(async (req) => {
     // Add other telemetry data to current_state
     if (temperature_c !== undefined && temperature_c !== null) {
       currentState.temperature_c = temperature_c
+    }
+    if (temp_kombi_c !== undefined && temp_kombi_c !== null) {
+      currentState.temp_kombi_c = temp_kombi_c
+    }
+    if (temp_garaza_c !== undefined && temp_garaza_c !== null) {
+      currentState.temp_garaza_c = temp_garaza_c
+    }
+    if (temp_outside_c !== undefined && temp_outside_c !== null) {
+      currentState.temp_outside_c = temp_outside_c
+    }
+    if (humidity_kombi !== undefined && humidity_kombi !== null) {
+      currentState.humidity_kombi = humidity_kombi
+    }
+    if (humidity_garaza !== undefined && humidity_garaza !== null) {
+      currentState.humidity_garaza = humidity_garaza
     }
     if (water_percent !== undefined && water_percent !== null) {
       currentState.water_percent = water_percent
@@ -159,4 +184,3 @@ serve(async (req) => {
     )
   }
 })
-

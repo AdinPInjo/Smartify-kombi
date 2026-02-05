@@ -17,6 +17,8 @@ from smartify.db import db_insert_weather_sample, db_query_weather_since
 
 router = APIRouter(tags=["weather"])
 
+_forecast_cache = {"ts": 0, "lat": None, "lon": None, "payload": None}
+
 
 def _fetch_open_meteo(lat: float, lon: float) -> dict:
     url = (
@@ -24,6 +26,20 @@ def _fetch_open_meteo(lat: float, lon: float) -> dict:
         f"?latitude={lat:.6f}&longitude={lon:.6f}"
         "&current=temperature_2m,weather_code,wind_speed_10m"
         "&temperature_unit=celsius&wind_speed_unit=kmh"
+    )
+    with urlopen(url, timeout=5) as resp:
+        raw = resp.read().decode("utf-8")
+        return json.loads(raw)
+
+
+def _fetch_open_meteo_forecast(lat: float, lon: float) -> dict:
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat:.6f}&longitude={lon:.6f}"
+        "&current=temperature_2m,weather_code,wind_speed_10m"
+        "&daily=temperature_2m_max,temperature_2m_min,weather_code"
+        "&forecast_days=5&temperature_unit=celsius&wind_speed_unit=kmh"
+        "&timezone=auto"
     )
     with urlopen(url, timeout=5) as resp:
         raw = resp.read().decode("utf-8")
@@ -115,3 +131,70 @@ def api_weather_history(
 
     rows = db_query_weather_since(since, limit=20000)
     return JSONResponse({"since": since, "now": now, "rows": rows})
+
+
+@router.get("/api/weather/forecast")
+def api_weather_forecast(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    err = require_auth(request, x_api_key)
+    if err:
+        return err
+
+    lat = state._gps_latest.get("lat")
+    lon = state._gps_latest.get("lon")
+    if lat is None or lon is None:
+        return JSONResponse({"ok": False, "error": "no_gps_fix", "daily": []})
+
+    now = int(time.time())
+    cached_ts = _forecast_cache.get("ts") or 0
+    cached_lat = _forecast_cache.get("lat")
+    cached_lon = _forecast_cache.get("lon")
+
+    if (
+        cached_ts
+        and (now - int(cached_ts)) < 600
+        and cached_lat is not None
+        and cached_lon is not None
+        and round(cached_lat, 2) == round(lat, 2)
+        and round(cached_lon, 2) == round(lon, 2)
+        and _forecast_cache.get("payload") is not None
+    ):
+        return JSONResponse(_forecast_cache["payload"])
+
+    try:
+        data = _fetch_open_meteo_forecast(lat, lon)
+        current = data.get("current") or {}
+        daily = data.get("daily") or {}
+        times = daily.get("time") or []
+        tmax = daily.get("temperature_2m_max") or []
+        tmin = daily.get("temperature_2m_min") or []
+        codes = daily.get("weather_code") or []
+
+        days = []
+        for idx in range(min(len(times), len(tmax), len(tmin), len(codes))):
+            days.append({
+                "date": times[idx],
+                "temp_max": tmax[idx],
+                "temp_min": tmin[idx],
+                "weather_code": codes[idx],
+            })
+
+        payload = {
+            "ok": True,
+            "current": {
+                "temp_c": current.get("temperature_2m"),
+                "wind_kmh": current.get("wind_speed_10m"),
+                "weather_code": current.get("weather_code"),
+            },
+            "daily": days[:5],
+        }
+
+        _forecast_cache.update({
+            "ts": now,
+            "lat": lat,
+            "lon": lon,
+            "payload": payload,
+        })
+
+        return JSONResponse(payload)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"fetch_error: {e}", "daily": []})

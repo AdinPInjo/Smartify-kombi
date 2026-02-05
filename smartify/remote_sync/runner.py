@@ -314,6 +314,18 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
             if now - last_run >= interval:
                 # Read sensors
                 temperature_c = read_temperature()
+                temps = read_individual_temperatures()
+                temp_kombi_c = temps.get("t1") if isinstance(temps, dict) else None
+                temp_garaza_c = temps.get("t2") if isinstance(temps, dict) else None
+                humidity_kombi = temps.get("h1") if isinstance(temps, dict) else None
+                humidity_garaza = temps.get("h2") if isinstance(temps, dict) else None
+                temp_outside_c = None
+                try:
+                    from smartify import state as smartify_state
+                    if smartify_state._weather_latest.get("ok"):
+                        temp_outside_c = smartify_state._weather_latest.get("temp_c")
+                except Exception:
+                    temp_outside_c = None
                 water_percent = read_water_level()
                 gps_location = read_gps_location()
                 
@@ -399,12 +411,17 @@ def telemetry_loop(client: RemoteClient, state_manager: StateManager, interval: 
                 # Post telemetry (TASK 1)
                 # Include GPS coordinates in telemetry table when available
                 # Include relay states for bi-directional sync
-                logger.info("Posting telemetry: temp=%s, water=%s, delta_km=%s, gps_lat=%s, gps_lon=%s, gps_fix=%s, relays=%s",
-                           temperature_c, water_percent, delta_km, gps_lat, gps_lon, 
+                logger.info("Posting telemetry: temp=%s, t_kombi=%s, t_garaza=%s, t_outside=%s, h_kombi=%s, h_garaza=%s, water=%s, delta_km=%s, gps_lat=%s, gps_lon=%s, gps_fix=%s, relays=%s",
+                           temperature_c, temp_kombi_c, temp_garaza_c, temp_outside_c, humidity_kombi, humidity_garaza, water_percent, delta_km, gps_lat, gps_lon, 
                            'yes' if gps_has_fix else 'no', relays)
                 
                 success = client.post_telemetry(
                     temperature_c=temperature_c,
+                    temp_kombi_c=temp_kombi_c,
+                    temp_garaza_c=temp_garaza_c,
+                    temp_outside_c=temp_outside_c,
+                    humidity_kombi=humidity_kombi,
+                    humidity_garaza=humidity_garaza,
                     water_percent=water_percent,
                     delta_km=delta_km,
                     gps_lat=gps_lat,  # Send GPS coords to telemetry table
@@ -598,4 +615,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

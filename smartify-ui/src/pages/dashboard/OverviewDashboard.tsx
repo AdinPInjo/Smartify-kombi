@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { MapPin, Home, Warehouse, Thermometer, Battery, Power, Droplets, Activity, Gauge, Plus, Settings2, ListChecks } from "lucide-react";
+import { MapPin, Home, Warehouse, Thermometer, Battery, Power, Droplets, Activity, Gauge, Plus, Settings2, ListChecks, Sun, CloudRain, CloudSun, CloudSnow, CloudLightning } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -32,6 +32,11 @@ type GpsPayload = {
 
 type TrackPoint = { ts: string; lat: number; lon: number; speed_m_s?: number | null; mode?: number | null };
 type TrackPayload = { hours: number; count: number; points: TrackPoint[] };
+type WeatherForecastPayload = {
+  ok: boolean;
+  current?: { temp_c: number | null; weather_code: number | null; wind_kmh: number | null };
+  daily: Array<{ date: string; temp_max: number | null; temp_min: number | null; weather_code: number | null }>;
+};
 
 function formatTemp(t: number | null) {
   return t == null ? "—" : `${t.toFixed(1)}°C`;
@@ -45,6 +50,32 @@ function tempClass(t: number | null) {
   if (t < 16) return "ring-1 ring-emerald-400/40";
   if (t < 24) return "ring-1 ring-amber-400/40";
   return "ring-1 ring-red-400/40";
+}
+
+function weatherTheme(code: number | null | undefined) {
+  if (code == null) return { theme: "weather-cloud", icon: CloudSun, label: "Mixed" };
+  if (code === 0) return { theme: "weather-sun", icon: Sun, label: "Clear" };
+  if (code >= 1 && code <= 3) return { theme: "weather-cloud", icon: CloudSun, label: "Partly Cloudy" };
+  if (code >= 45 && code <= 48) return { theme: "weather-cloud", icon: CloudSun, label: "Fog" };
+  if (code >= 51 && code <= 67) return { theme: "weather-rain", icon: CloudRain, label: "Rain" };
+  if (code >= 71 && code <= 77) return { theme: "weather-snow", icon: CloudSnow, label: "Snow" };
+  if (code >= 80 && code <= 82) return { theme: "weather-rain", icon: CloudRain, label: "Showers" };
+  if (code >= 95) return { theme: "weather-storm", icon: CloudLightning, label: "Storm" };
+  return { theme: "weather-cloud", icon: CloudSun, label: "Mixed" };
+}
+
+function ForecastChip({ day, max, min, code }: { day: string; max: number | null; min: number | null; code: number | null }) {
+  const { icon: Icon, label } = weatherTheme(code);
+  return (
+    <div className="flex flex-col items-center gap-1 rounded-xl bg-secondary/30 border border-glass px-3 py-2 text-center">
+      <div className="text-xs text-muted-foreground">{day}</div>
+      <Icon className="h-5 w-5 text-primary" />
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-sm font-semibold text-foreground">
+        {max != null ? max.toFixed(0) : "—"}° / {min != null ? min.toFixed(0) : "—"}°
+      </div>
+    </div>
+  );
 }
 
 
@@ -798,6 +829,17 @@ export default function OverviewDashboard() {
     retry: 1,
   });
 
+  const { data: weatherForecast } = useQuery({
+    queryKey: ["weather", "forecast"],
+    queryFn: async () => {
+      const r = await apiFetch("/api/weather/forecast", { cache: "no-store" });
+      if (!r.ok) throw new Error(`Weather forecast API returned ${r.status}`);
+      return (await r.json()) as WeatherForecastPayload;
+    },
+    refetchInterval: 600000,
+    retry: 1,
+  });
+
 
 
   // GPS track (24h)
@@ -844,6 +886,12 @@ export default function OverviewDashboard() {
 
   const kombiT = temps?.kombi?.temp_c ?? null;
   const outsideT = weatherCurrent?.ok ? weatherCurrent.temp_c ?? null : null;
+  const forecastDays = (weatherForecast?.daily || []).slice(1, 5);
+  const currentForecast = weatherForecast?.current ?? null;
+  const currentWeatherCode = currentForecast?.weather_code ?? null;
+  const weatherMeta = weatherTheme(currentWeatherCode);
+  const WeatherIcon = weatherMeta.icon;
+  const currentOutsideTemp = currentForecast?.temp_c ?? outsideT;
 
   const gpsStatus = gps?.ok === false ? "Disconnected" : gpsHasFix ? "Fix" : "No fix";
 
@@ -974,19 +1022,70 @@ export default function OverviewDashboard() {
                 <span className="text-sm text-muted-foreground">°C</span>
               </div>
             </div>
-            <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-glass">
-              <div className="flex items-center gap-3">
-                <Thermometer className="w-5 h-5 text-muted-foreground" />
-                <span className="font-medium">Outside</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-2xl font-bold text-success">
-                  {outsideT != null ? outsideT.toFixed(1) : "—"}
-                </span>
-                <span className="text-sm text-muted-foreground">°C</span>
-              </div>
+          </div>
+        </CardContent>
+      </Card>
+    ),
+    weather_card: (
+      <Card className={`glass-card p-0 h-full weather-card ${weatherMeta.theme}`}>
+        <CardHeader className="pb-2 px-4 pt-4">
+          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+            <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+              <WeatherIcon className="h-4 w-4 text-primary" />
+            </div>
+            Weather Forecast
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 px-4 pb-4 pt-0">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Outside Now</p>
+              <p className="text-3xl font-bold text-foreground">
+                {currentOutsideTemp != null ? currentOutsideTemp.toFixed(1) : "—"}°C
+              </p>
+              <p className="text-sm text-muted-foreground">{weatherMeta.label}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">Wind</p>
+              <p className="text-lg font-semibold">
+                {currentForecast?.wind_kmh != null ? `${currentForecast.wind_kmh.toFixed(0)} km/h` : "—"}
+              </p>
             </div>
           </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {forecastDays.map((d) => (
+              <ForecastChip
+                key={d.date}
+                day={new Date(d.date).toLocaleDateString(undefined, { weekday: "short" })}
+                max={d.temp_max}
+                min={d.temp_min}
+                code={d.weather_code ?? null}
+              />
+            ))}
+          </div>
+
+          {weatherMeta.theme === "weather-sun" && <div className="sun-pulse" />}
+          {weatherMeta.theme === "weather-rain" && (
+            <div className="rain-drops">
+              <span />
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
+          )}
+          {weatherMeta.theme === "weather-snow" && (
+            <div className="snow-flakes">
+              <span />
+              <span />
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
+          )}
+          {weatherMeta.theme === "weather-storm" && <div className="storm-bolt" />}
         </CardContent>
       </Card>
     ),

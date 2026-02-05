@@ -127,6 +127,11 @@ class RemoteClient:
     def post_telemetry(
         self,
         temperature_c: Optional[float] = None,
+        temp_kombi_c: Optional[float] = None,
+        temp_garaza_c: Optional[float] = None,
+        temp_outside_c: Optional[float] = None,
+        humidity_kombi: Optional[float] = None,
+        humidity_garaza: Optional[float] = None,
         water_percent: Optional[float] = None,
         delta_km: Optional[float] = None,
         gps_lat: Optional[float] = None,
@@ -154,17 +159,44 @@ class RemoteClient:
         """
         if self.mode == "local":
             return self._post_telemetry_local(
-                temperature_c, water_percent, delta_km, gps_lat, gps_lon, relays, ts
+                temperature_c,
+                temp_kombi_c,
+                temp_garaza_c,
+                temp_outside_c,
+                humidity_kombi,
+                humidity_garaza,
+                water_percent,
+                delta_km,
+                gps_lat,
+                gps_lon,
+                relays,
+                ts,
             )
         elif self.mode == "http":
             return self._post_telemetry_http(
-                temperature_c, water_percent, delta_km, gps_lat, gps_lon, relays, ts
+                temperature_c,
+                temp_kombi_c,
+                temp_garaza_c,
+                temp_outside_c,
+                humidity_kombi,
+                humidity_garaza,
+                water_percent,
+                delta_km,
+                gps_lat,
+                gps_lon,
+                relays,
+                ts,
             )
         return False
 
     def _post_telemetry_local(
         self,
         temperature_c: Optional[float],
+        temp_kombi_c: Optional[float],
+        temp_garaza_c: Optional[float],
+        temp_outside_c: Optional[float],
+        humidity_kombi: Optional[float],
+        humidity_garaza: Optional[float],
         water_percent: Optional[float],
         delta_km: Optional[float],
         gps_lat: Optional[float],
@@ -177,6 +209,11 @@ class RemoteClient:
             payload = {
                 "ts": ts or datetime.now().isoformat(),
                 "temperature_c": temperature_c,
+                "temp_kombi_c": temp_kombi_c,
+                "temp_garaza_c": temp_garaza_c,
+                "temp_outside_c": temp_outside_c,
+                "humidity_kombi": humidity_kombi,
+                "humidity_garaza": humidity_garaza,
                 "water_percent": water_percent,
                 "delta_km": delta_km,
                 "gps_lat": gps_lat,
@@ -201,6 +238,11 @@ class RemoteClient:
     def _post_telemetry_http(
         self,
         temperature_c: Optional[float],
+        temp_kombi_c: Optional[float],
+        temp_garaza_c: Optional[float],
+        temp_outside_c: Optional[float],
+        humidity_kombi: Optional[float],
+        humidity_garaza: Optional[float],
         water_percent: Optional[float],
         delta_km: Optional[float],
         gps_lat: Optional[float],
@@ -211,6 +253,11 @@ class RemoteClient:
         """Post telemetry in HTTP mode (to Supabase Edge Function)"""
         payload = {
             "temperature_c": temperature_c,
+            "temp_kombi_c": temp_kombi_c,
+            "temp_garaza_c": temp_garaza_c,
+            "temp_outside_c": temp_outside_c,
+            "humidity_kombi": humidity_kombi,
+            "humidity_garaza": humidity_garaza,
             "water_percent": water_percent,
             "delta_km": delta_km,
             "gps_lat": gps_lat,
@@ -437,4 +484,3 @@ class RemoteClient:
         
         logger.error(f"Failed to acknowledge state after {self.http_retries} attempts")
         return False
-

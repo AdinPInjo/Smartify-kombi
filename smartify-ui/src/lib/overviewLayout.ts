@@ -1,6 +1,7 @@
 export type OverviewModuleId =
   | "gps_card"
   | "temp_card"
+  | "weather_card"
   | "water_card"
   | "battery"
   | "header_relay"
@@ -16,6 +17,7 @@ export type OverviewLayoutConfig = {
 export const OVERVIEW_MODULES: { id: OverviewModuleId; label: string; zone: "top" | "bottom" }[] = [
   { id: "gps_card", label: "GPS Location (Mini)", zone: "top" },
   { id: "temp_card", label: "Temperature", zone: "top" },
+  { id: "weather_card", label: "Weather Forecast", zone: "top" },
   { id: "water_card", label: "Water Level", zone: "top" },
   { id: "battery", label: "Battery", zone: "top" },
   { id: "header_relay", label: "Header Relay", zone: "top" },
@@ -24,7 +26,7 @@ export const OVERVIEW_MODULES: { id: OverviewModuleId; label: string; zone: "top
 ];
 
 export const DEFAULT_OVERVIEW_LAYOUT: OverviewLayoutConfig = {
-  topOrder: ["gps_card", "temp_card", "water_card", "battery", "header_relay"],
+  topOrder: ["gps_card", "temp_card", "weather_card", "water_card", "battery", "header_relay"],
   bottomOrder: ["relay_rules", "gps_map"],
   hidden: [],
 };
