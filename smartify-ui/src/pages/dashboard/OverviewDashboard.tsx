@@ -715,54 +715,46 @@ function RelayRulesWidget() {
   return (
     <Card className="glass-card p-0 h-full card-compact rules-card">
       <CardHeader className="pb-3 px-4 pt-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-lg bg-primary/20 border border-glass">
-              <ListChecks className="h-4 w-4 text-primary" />
-            </div>
-            <div>
-              <CardTitle className="text-lg font-semibold text-foreground">Active Rules</CardTitle>
-              <p className="text-sm text-muted-foreground mt-1">
-                {enabledRules.length} active rule{enabledRules.length !== 1 ? "s" : ""}
-              </p>
-            </div>
+        <div className="flex items-center gap-2">
+          <div className="p-2 rounded-lg bg-primary/20 border border-glass">
+            <ListChecks className="h-4 w-4 text-primary" />
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => navigate("/dashboard/relays")}
-          >
-            <Plus className="h-4 w-4 mr-1.5" />
-            Manage
-          </Button>
+          <div>
+            <CardTitle className="text-lg font-semibold text-foreground">Active Rules</CardTitle>
+            <p className="text-sm text-muted-foreground mt-1">
+              {enabledRules.length} active rule{enabledRules.length !== 1 ? "s" : ""}
+            </p>
+          </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3 px-4 pb-4 pt-0">
-        {isLoading ? (
-          <div className="text-sm text-muted-foreground text-center py-4">Loading rules...</div>
-        ) : rules.length === 0 ? (
-          <div className="rounded-lg border-2 border-dashed border-glass p-6 text-center">
-            <Settings2 className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">No rules configured</p>
-            <p className="text-xs text-muted-foreground mt-1">Click "Manage" to create automation rules</p>
-          </div>
-        ) : (
-          rules.slice(0, 3).map((rule: any) => (
-            <div
-              key={rule.id}
-              className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-glass"
-            >
-              <div className="flex items-center gap-3">
-                <Thermometer className="w-4 h-4 text-muted-foreground" />
-                <div>
-                  <p className="font-medium text-sm text-foreground">{rule.name}</p>
-                  <p className="text-xs text-muted-foreground">{formatRuleDescription(rule)}</p>
-                </div>
-              </div>
-              <span className={rule.is_enabled ? "status-dot-online" : "status-dot-offline"} />
+      <CardContent className="flex-1 flex flex-col px-4 pb-4 pt-0">
+        <div className="mt-auto space-y-3">
+          {isLoading ? (
+            <div className="text-sm text-muted-foreground text-center py-4">Loading rules...</div>
+          ) : rules.length === 0 ? (
+            <div className="rounded-lg border-2 border-dashed border-glass p-6 text-center">
+              <Settings2 className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No rules configured</p>
+              <p className="text-xs text-muted-foreground mt-1">Create rules in Relay Settings</p>
             </div>
-          ))
-        )}
+          ) : (
+            rules.slice(0, 3).map((rule: any) => (
+              <div
+                key={rule.id}
+                className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-glass"
+              >
+                <div className="flex items-center gap-3">
+                  <Thermometer className="w-4 h-4 text-muted-foreground" />
+                  <div>
+                    <p className="font-medium text-sm text-foreground">{rule.name}</p>
+                    <p className="text-xs text-muted-foreground">{formatRuleDescription(rule)}</p>
+                  </div>
+                </div>
+                <span className={rule.is_enabled ? "status-dot-online" : "status-dot-offline"} />
+              </div>
+            ))
+          )}
+        </div>
       </CardContent>
     </Card>
   );

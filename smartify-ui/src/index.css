@@ -323,7 +323,7 @@
     background-position: center;
     filter: blur(6px) saturate(0.9) brightness(0.7);
     transform: scale(1.05);
-    z-index: 0;
+    z-index: -2;
   }
 
   .gps-terrain-low::after,
@@ -333,7 +333,7 @@
     position: absolute;
     inset: 0;
     background: rgba(2, 6, 23, 0.6);
-    z-index: 0;
+    z-index: -1;
   }
 
   .gps-terrain-low > .card-header,
