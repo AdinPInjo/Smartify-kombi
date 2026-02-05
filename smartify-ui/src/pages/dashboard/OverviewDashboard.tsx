@@ -1241,7 +1241,7 @@ export default function OverviewDashboard() {
     header_relay: <HeaderRelayCard />,
     relay_rules: <RelayRulesWidget />,
     gps_map: (
-      <Card className="glass-card p-0 h-full card-compact gps-map-card">
+      <Card className="glass-card p-0 h-full card-compact gps-map-card flex flex-col">
         <CardHeader className="pb-3 px-4 pt-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1258,21 +1258,24 @@ export default function OverviewDashboard() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4 px-4 pb-4 pt-0">
-          <GpsTrackMap data={track} currentLat={gps?.lat ?? null} currentLon={gps?.lon ?? null} />
-
-          <div className="grid gap-4 md:grid-cols-3">
-            <div className="text-center p-3 rounded-xl bg-secondary/30 border border-glass">
-              <p className="metric-label">Track Points</p>
-              <p className="text-xl font-bold text-primary">{track?.count ?? 0}</p>
+        <CardContent className="flex-1 flex flex-col px-4 pb-4 pt-0">
+          <div className="flex-1 flex flex-col lg:flex-row gap-4">
+            <div className="flex-1 min-w-0">
+              <GpsTrackMap data={track} currentLat={gps?.lat ?? null} currentLon={gps?.lon ?? null} />
             </div>
-            <div className="text-center p-3 rounded-xl bg-secondary/30 border border-glass">
-              <p className="metric-label">Current Speed</p>
-              <p className="text-xl font-bold">{speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}</p>
-            </div>
-            <div className="text-center p-3 rounded-xl bg-secondary/30 border border-glass">
-              <p className="metric-label">GPS Status</p>
-              <p className={`text-xl font-bold ${gpsHasFix ? "text-success" : "text-warning"}`}>{gpsStatus}</p>
+            <div className="w-full lg:w-56 flex flex-col gap-3">
+              <div className="p-3 rounded-xl bg-secondary/30 border border-glass">
+                <p className="metric-label">Track Points</p>
+                <p className="text-xl font-bold text-primary">{track?.count ?? 0}</p>
+              </div>
+              <div className="p-3 rounded-xl bg-secondary/30 border border-glass">
+                <p className="metric-label">Current Speed</p>
+                <p className="text-xl font-bold">{speedKmh == null ? "—" : `${speedKmh.toFixed(1)} km/h`}</p>
+              </div>
+              <div className="p-3 rounded-xl bg-secondary/30 border border-glass">
+                <p className="metric-label">GPS Status</p>
+                <p className={`text-xl font-bold ${gpsHasFix ? "text-success" : "text-warning"}`}>{gpsStatus}</p>
+              </div>
             </div>
           </div>
         </CardContent>
@@ -1295,11 +1298,11 @@ export default function OverviewDashboard() {
 
   return (
     <div className="space-y-6">
-      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 auto-rows-[1fr] ${gridDensityClass}`}>
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${gridColsClass} gap-4 lg:gap-6 auto-rows-[1fr] items-stretch ${gridDensityClass}`}>
         {orderedIds.map((id) => (
           <div
             key={id}
-            className={`min-w-0 h-full ${id === "gps_map" ? "lg:col-span-2" : ""}`}
+            className={`min-w-0 h-full ${id === "gps_map" ? "lg:col-span-3" : ""}`}
           >
             {modules[id]}
           </div>
