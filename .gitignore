@@ -1,26 +1,26 @@
 # Node
-smartify-ui/node_modules
-smartify-ui/dist
-smartify-ui/.vite
+node_modules/
+dist/
+.vite/
 
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
 .venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local configuration and data
 .env
+data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.log
 
 # OS / editors
 .DS_Store
 .vscode/
 .idea/
-
-# Local data
-*.db
-*.log
-*.db-wal
-*.db-shm
-*.db-journal
-smartify/data/db_integrity_status.json
-
-# Ignore .DS_Store everywhere
-**/.DS_Store
