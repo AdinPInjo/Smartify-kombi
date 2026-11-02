@@ -7,9 +7,11 @@ from dataclasses import asdict
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from smartify.api.deps import Ctx, User
+from smartify.services.gps_archive import archive_dir, is_archive_name, list_archives
 
 router = APIRouter(tags=["sensors"])
 
@@ -98,6 +100,19 @@ def gps(ctx: Ctx, _: User) -> dict:
 @router.get("/gps/track")
 def gps_track(ctx: Ctx, _: User, hours: int = Hours) -> dict:
     return {"points": ctx.gps.track(_since(hours))}
+
+
+@router.get("/gps/archive")
+def gps_archive_list(ctx: Ctx, _: User) -> dict:
+    return {"files": list_archives(ctx.settings.data_dir)}
+
+
+@router.get("/gps/archive/{name}")
+def gps_archive_download(name: str, ctx: Ctx, _: User) -> FileResponse:
+    path = archive_dir(ctx.settings.data_dir) / name
+    if not is_archive_name(name) or not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "archive not found")
+    return FileResponse(path, media_type="application/gpx+xml", filename=f"kombi-{name}")
 
 
 @router.get("/gps/distance")

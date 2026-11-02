@@ -341,3 +341,39 @@ def test_failsafe_command(tmp_path, monkeypatch):
         assert failsafe.main() == 0
     finally:
         get_settings.cache_clear()
+
+
+def test_old_gps_points_are_archived_to_gpx_before_pruning(db, client):
+    from smartify.services.gps_archive import archive_dir, list_archives
+
+    now = time.time()
+    old = int(now - 100 * 86400)
+    with transaction(db) as conn:
+        conn.execute(
+            "INSERT INTO sensor_samples (sensor, ok, created_at) VALUES ('s', 1, ?)", (int(now),)
+        )
+        for i in range(3):
+            conn.execute(
+                "INSERT INTO gps_fixes (lat, lon, altitude_m, created_at) VALUES (?, ?, ?, ?)",
+                (44.0 + i * 0.001, 17.0, 500.0, old + i * 10),
+            )
+    prune_history(db, retention_days=90, now=now)
+    prune_history(db, retention_days=90, now=now)  # idempotent
+
+    files = list_archives(db.parent)
+    assert len(files) == 1
+    content = (archive_dir(db.parent) / files[0]["name"]).read_text()
+    assert content.count("<trkpt") == 3 and "<ele>500.0</ele>" in content
+    with transaction(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM gps_fixes").fetchone()[0] == 0
+
+
+def test_gps_archive_api(client, ctx):
+    from smartify.services.gps_archive import archive_points
+
+    archive_points(ctx.settings.data_dir, [(44.0, 17.0, None, 1_700_000_000)])
+    files = client.get("/api/gps/archive").json()["files"]
+    assert len(files) == 1
+    response = client.get(f"/api/gps/archive/{files[0]['name']}")
+    assert response.status_code == 200 and b"<trkpt" in response.content
+    assert client.get("/api/gps/archive/..%2Fsmartify.db").status_code == 404

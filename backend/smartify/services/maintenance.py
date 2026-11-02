@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from smartify.db import connect, transaction
+from smartify.services.gps_archive import archive_points
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +26,8 @@ BACKUPS_KEPT = 3
 def prune_history(db_path: Path, retention_days: int, now: float | None = None) -> int:
     """Delete history older than ``retention_days``. Returns the number of rows deleted.
 
+    GPS points are first written to the monthly GPX archive (see gps_archive).
+
     The Pi has no real-time clock. If the clock is far ahead of the newest stored
     data (wrong time after boot), nothing is deleted rather than everything.
     """
@@ -37,6 +40,15 @@ def prune_history(db_path: Path, retention_days: int, now: float | None = None) 
             return 0
         cutoff = int(now - retention)
         deleted = 0
+        old_points = conn.execute(
+            "SELECT lat, lon, altitude_m, created_at FROM gps_fixes WHERE created_at < ? "
+            "ORDER BY created_at",
+            (cutoff,),
+        ).fetchall()
+        if old_points:
+            # Archive first; if that fails the exception aborts the whole prune,
+            # so no GPS point is deleted without being in the archive.
+            archive_points(db_path.parent, [tuple(row) for row in old_points])
         for table in _HISTORY_TABLES:
             deleted += conn.execute(f"DELETE FROM {table} WHERE created_at < ?", (cutoff,)).rowcount
         # gps_distance_daily is kept forever: one tiny row per day, and it holds
