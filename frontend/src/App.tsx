@@ -1,0 +1,49 @@
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { RequireLogin } from "./auth";
+import { AppShell } from "./components/AppShell";
+import { Climate } from "./pages/Climate";
+import { Energy } from "./pages/Energy";
+import { Login } from "./pages/Login";
+import { MapPage } from "./pages/MapPage";
+import { Overview } from "./pages/Overview";
+import { Panel } from "./pages/Panel";
+import { Settings } from "./pages/Settings";
+import { SwitchDetail } from "./pages/SwitchDetail";
+import { Switches } from "./pages/Switches";
+import { System } from "./pages/System";
+
+export function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        {/* Full-screen instrument panel for a tablet in the van: no navigation. */}
+        <Route
+          path="/panel"
+          element={
+            <RequireLogin>
+              <Panel />
+            </RequireLogin>
+          }
+        />
+        <Route
+          element={
+            <RequireLogin>
+              <AppShell />
+            </RequireLogin>
+          }
+        >
+          <Route index element={<Overview />} />
+          <Route path="energy" element={<Energy />} />
+          <Route path="climate" element={<Climate />} />
+          <Route path="switches" element={<Switches />} />
+          <Route path="switches/:id" element={<SwitchDetail />} />
+          <Route path="map" element={<MapPage />} />
+          <Route path="settings" element={<Settings />} />
+          <Route path="system" element={<System />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}

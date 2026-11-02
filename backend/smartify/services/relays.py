@@ -99,9 +99,17 @@ class Relay:
     """Last hardware error while switching this relay, if the last attempt failed."""
     pending: str | None = None
     """Why the relay is not (yet) in the state the rules want, e.g. min on time."""
+    explanation: str | None = None
+    """Why the relay should be in its state right now (from the latest evaluation)."""
 
     @classmethod
-    def from_row(cls, row, last_error: str | None = None, pending: str | None = None) -> Relay:
+    def from_row(
+        cls,
+        row,
+        last_error: str | None = None,
+        pending: str | None = None,
+        explanation: str | None = None,
+    ) -> Relay:
         return cls(
             id=row["id"],
             name=row["name"],
@@ -125,6 +133,7 @@ class Relay:
             revision=row["revision"],
             last_error=last_error,
             pending=pending,
+            explanation=explanation,
         )
 
 
@@ -158,13 +167,21 @@ class RelayService:
         self._pending: dict[str, str] = {}
         # Level last successfully commanded per relay. Missing = unknown.
         self._levels: dict[str, State] = {}
+        # Latest decision reason per relay, shown in the dashboard.
+        self._explain: dict[str, str] = {}
         # Relays whose temperature cutoff has tripped (cleared with hysteresis).
         self._tripped: set[str] = set()
 
     # --- queries ---------------------------------------------------------
 
     def _from_row(self, row) -> Relay:
-        return Relay.from_row(row, self._errors.get(row["id"]), self._pending.get(row["id"]))
+        relay_id = row["id"]
+        return Relay.from_row(
+            row,
+            self._errors.get(relay_id),
+            self._pending.get(relay_id),
+            self._explain.get(relay_id),
+        )
 
     def list(self) -> list[Relay]:
         with transaction(self._db_path) as conn:
@@ -273,7 +290,7 @@ class RelayService:
             self._drive_or_raise(relay.gpio_pin, relay.active_low, on=False)
             with transaction(self._db_path) as conn:
                 conn.execute("DELETE FROM relays WHERE id = ?", (relay_id,))
-            for store in (self._errors, self._pending, self._levels):
+            for store in (self._errors, self._pending, self._levels, self._explain):
                 store.pop(relay_id, None)
             self._tripped.discard(relay_id)
             return relay
@@ -426,6 +443,7 @@ class RelayService:
                     rule_id = decision.rule.id
                     change_source = source or "rule"
 
+            self._explain[relay_id] = reason
             level = self._levels.get(relay_id)
             if desired is None:
                 if level is not None:
