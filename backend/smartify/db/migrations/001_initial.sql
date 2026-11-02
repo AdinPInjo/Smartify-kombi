@@ -92,11 +92,15 @@ CREATE INDEX idx_sensor_samples_sensor_time ON sensor_samples (sensor, created_a
 -- Water level
 -- ---------------------------------------------------------------------------
 -- Single row (id = 1). Two calibration methods:
---   'voltage': level from the signal voltage between empty_voltage and full_voltage
---   'ratio':   level from signal / supply ratio, compensates a drifting supply
+--   'ratio':   level from signal / supply ratio (default). The sensor is powered
+--              from the van battery, whose voltage varies (roughly 12-14.4 V),
+--              and the sensor output moves with it. The supply is measured on a
+--              second ADC channel through a divider, which cancels that drift.
+--   'voltage': level from the raw signal voltage between empty_voltage and
+--              full_voltage. Only accurate with a regulated sensor supply.
 CREATE TABLE water_level_settings (
     id                  INTEGER PRIMARY KEY CHECK (id = 1),
-    method              TEXT NOT NULL DEFAULT 'voltage' CHECK (method IN ('voltage', 'ratio')),
+    method              TEXT NOT NULL DEFAULT 'ratio' CHECK (method IN ('voltage', 'ratio')),
     signal_channel      INTEGER NOT NULL DEFAULT 0 CHECK (signal_channel BETWEEN 0 AND 3),
     supply_channel      INTEGER NOT NULL DEFAULT 1 CHECK (supply_channel BETWEEN 0 AND 3),
     divider_r_top       REAL NOT NULL DEFAULT 47000,

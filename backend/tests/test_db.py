@@ -40,7 +40,7 @@ def test_water_level_settings_has_single_default_row(tmp_path):
         rows = conn.execute(
             "SELECT method, signal_channel, supply_channel FROM water_level_settings"
         ).fetchall()
-        assert [tuple(r) for r in rows] == [("voltage", 0, 1)]
+        assert [tuple(r) for r in rows] == [("ratio", 0, 1)]
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("INSERT INTO water_level_settings (id, updated_at) VALUES (2, 0)")
 
