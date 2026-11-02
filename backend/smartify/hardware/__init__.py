@@ -31,10 +31,6 @@ __all__ = [
 ]
 
 
-def sensor_name(index: int) -> str:
-    return f"dht22_{index}"
-
-
 def build_hardware(settings: Settings) -> Hardware:
     if settings.hardware == "mock":
         return _build_mock(settings)
@@ -48,8 +44,9 @@ def _build_mock(settings: Settings) -> Hardware:
     pins = {seed.name: seed.gpio_pin for seed in settings.default_relays}
     cabin = mock.MockCabin(relays, heater_pin=pins.get("heater"), fan_pin=pins.get("fan"))
     sensors = [
-        mock.MockClimateSensor(sensor_name(i), cabin, offset=i * 0.6)
-        for i in range(len(settings.dht22_pins))
+        # Every sensor after the first reads a bit colder, like an outside sensor would.
+        mock.MockClimateSensor(sensor.name, cabin, offset=-6.0 * min(i, 1))
+        for i, sensor in enumerate(settings.dht22_sensors)
     ]
     gps = mock.MockGpsReceiver() if settings.gps_enabled else None
     log.info("Using simulated hardware (%d climate sensors)", len(sensors))
@@ -63,12 +60,12 @@ def _build_pi(settings: Settings) -> Hardware:
     from smartify.hardware.pi.relays import PinctrlRelayDriver
 
     sensors: list[ClimateSensor] = []
-    for index, pin in enumerate(settings.dht22_pins):
+    for sensor in settings.dht22_sensors:
         try:
-            sensors.append(Dht22Sensor(sensor_name(index), pin))
+            sensors.append(Dht22Sensor(sensor.name, sensor.gpio_pin))
         except HardwareError:
             # A missing sensor must not stop the relays from working.
-            log.exception("DHT22 on GPIO %d unavailable", pin)
+            log.exception("DHT22 %r on GPIO %d unavailable", sensor.name, sensor.gpio_pin)
 
     gps = None
     if settings.gps_enabled:

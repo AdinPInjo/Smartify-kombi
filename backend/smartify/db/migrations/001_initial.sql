@@ -36,7 +36,11 @@ CREATE TABLE relays (
 CREATE TABLE relay_state (
     relay_id        TEXT PRIMARY KEY REFERENCES relays (id) ON DELETE CASCADE,
     actual_state    TEXT NOT NULL DEFAULT 'off' CHECK (actual_state IN ('on', 'off')),
-    changed_at      INTEGER NOT NULL
+    changed_at      INTEGER NOT NULL,
+    -- What caused the current state: 'boot', 'manual', 'rule', 'auto', 'remote'
+    source          TEXT NOT NULL DEFAULT 'boot',
+    rule_id         TEXT,
+    reason          TEXT
 );
 
 CREATE TABLE relay_events (
@@ -60,11 +64,15 @@ CREATE TABLE rules (
     relay_id          TEXT NOT NULL REFERENCES relays (id) ON DELETE CASCADE,
     name              TEXT NOT NULL,
     enabled           INTEGER NOT NULL DEFAULT 1,
-    -- Lower number wins when several rules match.
+    -- Higher number wins when several rules match.
     priority          INTEGER NOT NULL DEFAULT 100,
-    -- JSON, validated by the rules service. Example:
-    -- {"type": "band", "metric": "temperature", "sensor": "average", "on_below": 8, "off_above": 12}
+    -- JSON condition tree, validated by smartify.services.conditions. Example:
+    -- {"type": "threshold", "metric": "temperature", "sensor": "inside", "op": "<", "value": 8}
     condition_json    TEXT NOT NULL,
+    -- State the relay takes while the condition matches.
+    action            TEXT NOT NULL CHECK (action IN ('on', 'off')),
+    -- After this rule switches the relay, automatic control keeps that state
+    -- for at least this long (prevents flapping around a threshold).
     cooldown_seconds  INTEGER NOT NULL DEFAULT 60 CHECK (cooldown_seconds >= 0),
     last_triggered_at INTEGER,
     created_at        INTEGER NOT NULL,
@@ -78,7 +86,8 @@ CREATE INDEX idx_rules_relay ON rules (relay_id);
 -- ---------------------------------------------------------------------------
 CREATE TABLE sensor_samples (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    -- Stable sensor key, e.g. 'dht22_0'
+    -- One row per sensor per minute: the average of that minute's readings.
+    -- Sensor name as configured, e.g. 'inside'
     sensor          TEXT NOT NULL,
     temperature_c   REAL,
     humidity        REAL,
@@ -107,18 +116,22 @@ CREATE TABLE water_level_settings (
     divider_r_bottom    REAL NOT NULL DEFAULT 10000,
     empty_voltage       REAL NOT NULL DEFAULT 2.2,
     full_voltage        REAL NOT NULL DEFAULT 0.5,
-    empty_ratio         REAL,
-    full_ratio          REAL,
+    -- Defaults match a typical resistive tank sender on a 13.5 V supply
+    -- (about 0.5 V full and 2.2 V empty). Calibrate from the dashboard.
+    empty_ratio         REAL NOT NULL DEFAULT 0.163,
+    full_ratio          REAL NOT NULL DEFAULT 0.037,
     updated_at          INTEGER NOT NULL,
     revision            INTEGER NOT NULL DEFAULT 1,
     CHECK (signal_channel <> supply_channel)
 );
 INSERT INTO water_level_settings (id, updated_at) VALUES (1, CAST(strftime('%s', 'now') AS INTEGER));
 
+-- One row per minute (averaged). battery_voltage is the sensor supply
+-- reconstructed from the divider, i.e. the van battery voltage.
 CREATE TABLE water_level_samples (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     signal_voltage  REAL,
-    supply_voltage  REAL,
+    battery_voltage REAL,
     ratio           REAL,
     level_percent   INTEGER,
     ok              INTEGER NOT NULL,

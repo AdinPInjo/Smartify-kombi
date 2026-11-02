@@ -100,7 +100,7 @@ def test_mock_relay_can_simulate_failure():
 
 def test_mock_hardware_produces_plausible_readings(settings):
     hardware = build_hardware(settings)
-    assert len(hardware.climate_sensors) == len(settings.dht22_pins)
+    assert len(hardware.climate_sensors) == len(settings.dht22_sensors)
 
     readings = [hardware.climate_sensors[0].read() for _ in range(50)]
     good = [r for r in readings if r.ok]
@@ -108,8 +108,9 @@ def test_mock_hardware_produces_plausible_readings(settings):
     assert all(-20 < r.temperature_c < 50 and 0 <= r.humidity <= 100 for r in good)
 
     signal, supply = hardware.analog.read_voltages((0, 1))
-    assert 0.4 < signal < 2.3
-    assert supply == pytest.approx(5.0 * 10 / 57, abs=0.01)
+    battery = supply * 57 / 10
+    assert 12.0 < battery < 14.0
+    assert 0.03 < signal / battery < 0.17
 
     fix = hardware.gps.read_fix(timeout_seconds=1)
     assert fix is not None and -90 <= fix.lat <= 90

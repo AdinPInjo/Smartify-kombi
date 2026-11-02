@@ -74,21 +74,25 @@ class MockClimateSensor:
 
 
 class MockAnalogReader:
-    """Water tank that slowly empties and refills.
+    """Water tank that slowly empties and refills, on a battery that charges and drains.
 
-    Channel 0 = sensor signal, channel 1 = supply through a 47k/10k divider.
-    Signal voltage rises as the tank empties (0.5 V full, 2.2 V empty).
+    Channel 0 = sender signal, channel 1 = battery through a 47k/10k divider.
+    The sender output follows the battery voltage, like a real resistive sender:
+    signal = battery * ratio, with ratio 0.037 (full) to 0.163 (empty).
     """
 
-    full_voltage = 0.5
-    empty_voltage = 2.2
-    supply_voltage = 5.0
+    full_ratio = 0.037
+    empty_ratio = 0.163
+    divider = 10_000 / 57_000
+
+    def battery_voltage(self) -> float:
+        return 12.9 + 0.6 * math.sin(time.time() / 5400.0)
 
     def read_voltages(self, channels: tuple[int, ...]) -> tuple[float, ...]:
         level = 0.5 + 0.5 * math.cos(time.time() / 7200.0)  # 1.0 = full
-        signal = self.empty_voltage - level * (self.empty_voltage - self.full_voltage)
-        supply_divided = self.supply_voltage * 10_000 / 57_000
-        values = {0: signal, 1: supply_divided, 2: 0.0, 3: 0.0}
+        battery = self.battery_voltage()
+        ratio = self.empty_ratio - level * (self.empty_ratio - self.full_ratio)
+        values = {0: battery * ratio, 1: battery * self.divider, 2: 0.0, 3: 0.0}
         return tuple(round(values[ch] + random.uniform(-0.002, 0.002), 4) for ch in channels)
 
 

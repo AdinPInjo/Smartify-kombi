@@ -18,8 +18,28 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 class RelaySeed(BaseModel):
     """A relay created on first start when the relay table is empty."""
 
-    name: str
+    name: str = Field(pattern=r"^[a-z0-9_-]{1,32}$")
     gpio_pin: int = Field(ge=0, le=27)
+
+
+class SensorPin(BaseModel):
+    """A DHT22 sensor: the name used in the dashboard and in rules, and its GPIO."""
+
+    name: str = Field(pattern=r"^[a-z0-9_-]{1,32}$")
+    gpio_pin: int = Field(ge=0, le=27)
+
+
+def _parse_name_pin_pairs(value: object) -> object:
+    parts = _split_csv(value)
+    if isinstance(parts, list) and all(isinstance(p, str) for p in parts):
+        pairs = []
+        for part in parts:
+            name, _, pin = part.partition(":")
+            if not name.strip() or not pin.strip():
+                raise ValueError(f"Entry {part!r} must look like name:pin")
+            pairs.append({"name": name.strip(), "gpio_pin": int(pin)})
+        return pairs
+    return parts
 
 
 def _split_csv(value: object) -> object:
@@ -56,10 +76,27 @@ class Settings(BaseSettings):
     secret_key: str = "change-this-secret"
 
     # --- Sensors -----------------------------------------------------------
-    dht22_pins: Annotated[list[int], NoDecode] = Field(default_factory=lambda: [4, 17])
-    """BCM pin numbers of DHT22 sensors, comma separated in the env var."""
+    dht22_sensors: Annotated[list[SensorPin], NoDecode] = Field(
+        default_factory=lambda: [
+            SensorPin(name="inside", gpio_pin=4),
+            SensorPin(name="outside", gpio_pin=17),
+        ]
+    )
+    """DHT22 sensors as ``name:BCM pin`` pairs, comma separated."""
 
-    sensor_interval_seconds: float = Field(default=5.0, gt=0)
+    sensor_interval_seconds: float = Field(default=5.0, ge=2.5)
+    """How often each DHT22 is read. The DHT22 itself needs at least 2 s."""
+
+    sensor_window_seconds: int = Field(default=60, ge=10)
+    """Readings are averaged over this window before rules use them."""
+
+    sensor_min_samples: int = Field(default=3, ge=1)
+    """Good readings needed in the window before a sensor counts as ready."""
+
+    sensor_stale_seconds: int = Field(default=600, ge=30)
+    """Without a good reading for this long, rules using the sensor switch their relay off."""
+
+    water_interval_seconds: float = Field(default=10.0, ge=1)
 
     ads1115_bus: int = 1
     ads1115_address: int = 0x48
@@ -73,32 +110,29 @@ class Settings(BaseSettings):
     )
     """``name:pin`` pairs, comma separated. Only used when no relays exist yet."""
 
+    rule_interval_seconds: float = Field(default=5.0, ge=1)
+    """How often automatic relays are re-evaluated against their rules."""
+
     # --- GPS ---------------------------------------------------------------
     gps_enabled: bool = True
     gps_device: str = "/dev/serial0"
     gps_baud: int = 9600
 
-    @field_validator("dht22_pins", mode="before")
-    @classmethod
-    def _parse_pins(cls, value: object) -> object:
-        parts = _split_csv(value)
-        if isinstance(parts, list):
-            return [int(p) for p in parts]
-        return parts
+    # --- Weather (Open-Meteo, free, no API key) ------------------------------
+    weather_enabled: bool = True
+    weather_interval_seconds: int = Field(default=1800, ge=300)
 
-    @field_validator("default_relays", mode="before")
+    # --- WiFi (NetworkManager / nmcli) ---------------------------------------
+    wifi_interface: str = "wlan0"
+
+    # --- Storage -----------------------------------------------------------
+    retention_days: int = Field(default=90, ge=1)
+    """Sensor, water, GPS and weather history older than this is deleted daily."""
+
+    @field_validator("dht22_sensors", "default_relays", mode="before")
     @classmethod
-    def _parse_relays(cls, value: object) -> object:
-        parts = _split_csv(value)
-        if isinstance(parts, list) and parts and isinstance(parts[0], str):
-            seeds = []
-            for part in parts:
-                name, _, pin = part.partition(":")
-                if not name or not pin:
-                    raise ValueError(f"Relay entry {part!r} must look like name:pin")
-                seeds.append({"name": name.strip(), "gpio_pin": int(pin)})
-            return seeds
-        return parts
+    def _parse_pairs(cls, value: object) -> object:
+        return _parse_name_pin_pairs(value)
 
     @property
     def db_path(self) -> Path:

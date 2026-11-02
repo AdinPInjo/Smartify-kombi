@@ -1,8 +1,8 @@
 from smartify.db.migrations import load_migrations
 
 
-def test_health(client):
-    response = client.get("/api/health")
+def test_health_is_public(anon):
+    response = anon.get("/api/health")
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
