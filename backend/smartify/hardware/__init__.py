@@ -14,6 +14,8 @@ from smartify.hardware.base import (
     Hardware,
     HardwareError,
     RelayDriver,
+    VictronListener,
+    VictronReading,
 )
 
 log = logging.getLogger(__name__)
@@ -27,6 +29,8 @@ __all__ = [
     "Hardware",
     "HardwareError",
     "RelayDriver",
+    "VictronListener",
+    "VictronReading",
     "build_hardware",
     "build_relay_driver",
 ]
@@ -62,7 +66,13 @@ def _build_mock(settings: Settings) -> Hardware:
     ]
     gps = mock.MockGpsReceiver() if settings.gps_enabled else None
     log.info("Using simulated hardware (%d climate sensors)", len(sensors))
-    return Hardware(relays=relays, climate_sensors=sensors, analog=mock.MockAnalogReader(), gps=gps)
+    return Hardware(
+        relays=relays,
+        climate_sensors=sensors,
+        analog=mock.MockAnalogReader(),
+        gps=gps,
+        victron=mock.MockVictronListener(),
+    )
 
 
 def _build_pi(settings: Settings) -> Hardware:
@@ -82,10 +92,19 @@ def _build_pi(settings: Settings) -> Hardware:
     gps = None
     if settings.gps_enabled:
         gps = SerialGpsReceiver(settings.gps_device, settings.gps_baud)
+    victron = None
+    if settings.victron_devices:
+        try:
+            from smartify.hardware.pi.victron import BleVictronListener
+
+            victron = BleVictronListener(settings.victron_devices)
+        except HardwareError:
+            log.exception("Victron devices configured, but Bluetooth support is missing")
     log.info("Using Raspberry Pi hardware (%d climate sensors)", len(sensors))
     return Hardware(
         relays=PinctrlRelayDriver(),
         climate_sensors=sensors,
         analog=Ads1115Reader(settings.ads1115_bus, settings.ads1115_address),
         gps=gps,
+        victron=victron,
     )

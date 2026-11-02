@@ -42,7 +42,14 @@ def env(tmp_path):
     clock = FakeClock()
     sensors = FakeSensors()
     driver = MockRelayDriver()
-    rules = RuleService(settings.db_path, sensors, lambda: ["inside", "outside"], clock)
+    rules = RuleService(
+        settings.db_path,
+        sensors,
+        lambda metric: (
+            ["inside", "outside"] if metric in ("temperature", "humidity") else ["shunt"]
+        ),
+        clock,
+    )
     relays = RelayService(settings, driver, rules, settings.db_path, clock)
     relays.startup()
     heater = next(r for r in relays.list() if r.name == "heater")
@@ -411,7 +418,7 @@ def test_all_off_on_shutdown(env):
 def test_rule_with_unknown_sensor_is_rejected(env):
     bad = heat_below(8)
     bad["condition"]["sensor"] = "kitchen"
-    with pytest.raises(InvalidInput, match="unknown sensor kitchen"):
+    with pytest.raises(InvalidInput, match="unknown sensor kitchen for temperature"):
         env.rules.create(env.heater.id, **bad)
 
 

@@ -27,7 +27,17 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_valid
 
 from smartify.errors import InvalidInput
 
-Metric = Literal["temperature", "humidity"]
+Metric = Literal[
+    # DHT22 sensors (sensor = sensor name)
+    "temperature",
+    "humidity",
+    # Victron devices (sensor = device name)
+    "battery_soc",
+    "battery_voltage",
+    "battery_current",
+    "solar_power",
+]
+CLIMATE_METRICS = ("temperature", "humidity")
 
 _OPERATORS: dict[str, Callable[[float, float], bool]] = {
     "<": operator.lt,
@@ -39,6 +49,10 @@ _OPERATORS: dict[str, Callable[[float, float], bool]] = {
 _METRIC_LIMITS: dict[str, tuple[float, float]] = {
     "temperature": (-40.0, 80.0),  # DHT22 range
     "humidity": (0.0, 100.0),
+    "battery_soc": (0.0, 100.0),
+    "battery_voltage": (0.0, 70.0),
+    "battery_current": (-1000.0, 1000.0),
+    "solar_power": (0.0, 10000.0),
 }
 
 MAX_DEPTH = 4
@@ -127,13 +141,14 @@ def dump_condition(condition: Condition) -> dict[str, Any]:
     return _ADAPTER.dump_python(condition, mode="json")
 
 
-def sensors_used(condition: Condition) -> set[str]:
+def leaves(condition: Condition) -> set[tuple[str, str]]:
+    """Every ``(sensor, metric)`` the condition reads."""
     if isinstance(condition, Threshold | Range):
-        return {condition.sensor}
+        return {(condition.sensor, condition.metric)}
     if isinstance(condition, All | Any_):
-        return set().union(*(sensors_used(c) for c in condition.conditions))
+        return set().union(*(leaves(c) for c in condition.conditions))
     if isinstance(condition, Not):
-        return sensors_used(condition.condition)
+        return leaves(condition.condition)
     return set()
 
 

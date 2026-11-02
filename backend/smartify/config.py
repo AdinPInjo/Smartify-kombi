@@ -33,6 +33,28 @@ class SensorPin(BaseModel):
     gpio_pin: int = Field(ge=0, le=27)
 
 
+class VictronDevice(BaseModel):
+    """A Victron device read over Bluetooth (Instant Readout)."""
+
+    name: str = Field(pattern=r"^[a-z0-9_-]{1,32}$")
+    mac: str = Field(pattern=r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+    key: str = Field(pattern=r"^[0-9A-Fa-f]{32}$", repr=False)
+    """Encryption key from VictronConnect: Product info > Instant readout details."""
+
+
+def _parse_victron(value: object) -> object:
+    parts = _split_csv(value)
+    if isinstance(parts, list) and all(isinstance(p, str) for p in parts):
+        devices = []
+        for part in parts:
+            fields = [f.strip() for f in part.split("|")]
+            if len(fields) != 3:
+                raise ValueError(f"Victron entry {part!r} must look like name|MAC|key")
+            devices.append({"name": fields[0], "mac": fields[1], "key": fields[2]})
+        return devices
+    return parts
+
+
 def _parse_name_pin_pairs(value: object) -> object:
     parts = _split_csv(value)
     if isinstance(parts, list) and all(isinstance(p, str) for p in parts):
@@ -128,12 +150,24 @@ class Settings(BaseSettings):
     weather_enabled: bool = True
     weather_interval_seconds: int = Field(default=1800, ge=300)
 
+    # --- Victron (Bluetooth Instant Readout) ---------------------------------
+    victron_devices: Annotated[list[VictronDevice], NoDecode] = Field(default_factory=list)
+    """``name|MAC|key`` entries, comma separated. In mock mode, an empty list
+    simulates a SmartShunt, SmartSolar MPPT, Orion and MultiPlus."""
+
+    victron_stale_seconds: int = Field(default=120, ge=10)
+
     # --- WiFi (NetworkManager / nmcli) ---------------------------------------
     wifi_interface: str = "wlan0"
 
     # --- Storage -----------------------------------------------------------
     retention_days: int = Field(default=90, ge=1)
     """Sensor, water, GPS and weather history older than this is deleted daily."""
+
+    @field_validator("victron_devices", mode="before")
+    @classmethod
+    def _parse_victron_devices(cls, value: object) -> object:
+        return _parse_victron(value)
 
     @field_validator("dht22_sensors", "default_relays", mode="before")
     @classmethod

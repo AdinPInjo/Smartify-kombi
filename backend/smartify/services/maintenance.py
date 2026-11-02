@@ -16,6 +16,7 @@ _HISTORY_TABLES = (
     "water_level_samples",
     "gps_fixes",
     "weather_samples",
+    "energy_samples",
     "relay_events",
 )
 BACKUPS_KEPT = 3

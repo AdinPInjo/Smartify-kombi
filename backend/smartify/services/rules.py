@@ -28,8 +28,8 @@ from smartify.services.conditions import (
     SensorIssue,
     dump_condition,
     evaluate,
+    leaves,
     parse_condition,
-    sensors_used,
 )
 
 log = logging.getLogger(__name__)
@@ -102,28 +102,29 @@ class RuleService:
         self,
         db_path: Path,
         metric_source: MetricSource,
-        sensor_names: Callable[[], list[str]] = list,
+        sensors_for: Callable[[str], list[str]] = lambda metric: [],
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._db_path = db_path
         self._metric_source = metric_source
-        self._sensor_names = sensor_names
+        self._sensors_for = sensors_for
         self._clock = clock
 
     @property
     def metric_source(self) -> MetricSource:
         return self._metric_source
 
-    @property
-    def sensor_names(self) -> list[str]:
-        return list(self._sensor_names())
+    def sensors_for(self, metric: str) -> list[str]:
+        """Sensor or device names that provide ``metric``."""
+        return list(self._sensors_for(metric))
 
     def _validated_condition_json(self, condition: Any) -> str:
         parsed = parse_condition(condition)
-        unknown = sensors_used(parsed) - set(self._sensor_names())
-        if unknown:
-            known = ", ".join(self._sensor_names()) or "none configured"
-            raise InvalidInput(f"unknown sensor {', '.join(sorted(unknown))} (available: {known})")
+        for sensor, metric in sorted(leaves(parsed)):
+            available = self.sensors_for(metric)
+            if sensor not in available:
+                known = ", ".join(available) or "none available"
+                raise InvalidInput(f"unknown sensor {sensor} for {metric} (available: {known})")
         return json.dumps(dump_condition(parsed))
 
     # --- storage ---------------------------------------------------------

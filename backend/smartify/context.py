@@ -11,6 +11,8 @@ from smartify.config import Settings
 from smartify.hardware import Hardware
 from smartify.logbuffer import LogBuffer
 from smartify.services.climate import ClimateService
+from smartify.services.conditions import CLIMATE_METRICS, MetricValue
+from smartify.services.energy import EnergyService
 from smartify.services.gps import GpsService
 from smartify.services.maintenance import backup, check_integrity, prune_history
 from smartify.services.relays import RelayService
@@ -29,6 +31,7 @@ class AppContext:
     hardware: Hardware
     logs: LogBuffer
     climate: ClimateService
+    energy: EnergyService
     rules: RuleService
     relays: RelayService
     water: WaterService
@@ -42,13 +45,28 @@ class AppContext:
     def build(cls, settings: Settings, hardware: Hardware, logs: LogBuffer) -> AppContext:
         db = settings.db_path
         climate = ClimateService(settings, hardware.climate_sensors, db)
-        rules = RuleService(db, climate.metric, lambda: climate.sensor_names)
+        energy = EnergyService(db, settings.victron_stale_seconds)
+
+        def metric(sensor: str, name: str) -> MetricValue:
+            if name in CLIMATE_METRICS:
+                return climate.metric(sensor, name)
+            return energy.metric(sensor, name)
+
+        def sensors_for(name: str) -> list[str]:
+            if name in CLIMATE_METRICS:
+                return climate.sensor_names
+            # Configured devices count even before their first advertisement.
+            configured = [d.name for d in settings.victron_devices]
+            return sorted(set(configured) | set(energy.devices_for(name)))
+
+        rules = RuleService(db, metric, sensors_for)
         gps = GpsService(hardware.gps, db)
         return cls(
             settings=settings,
             hardware=hardware,
             logs=logs,
             climate=climate,
+            energy=energy,
             rules=rules,
             relays=RelayService(settings, hardware.relays, rules, db),
             water=WaterService(
@@ -62,6 +80,8 @@ class AppContext:
     def start(self) -> None:
         check_integrity(self.settings.db_path)
         self.relays.startup()
+        if self.hardware.victron is not None:
+            self.hardware.victron.start(self.energy.on_reading)
         s = self.settings
         self.workers = [
             Worker("climate", s.sensor_interval_seconds, self.climate.sample),
@@ -83,6 +103,8 @@ class AppContext:
     def stop(self) -> None:
         for worker in self.workers:
             worker.stop()
+        if self.hardware.victron is not None:
+            self.hardware.victron.stop()
         # Nothing controls the relays once we exit, so leave them off.
         self.relays.all_off("shutdown", "service stopped")
         if self.hardware.gps is not None:
@@ -91,6 +113,7 @@ class AppContext:
     def _flush_history(self) -> None:
         self.climate.flush_minute()
         self.water.flush_minute()
+        self.energy.flush_minute()
 
     def _maintenance(self) -> None:
         prune_history(self.settings.db_path, self.settings.retention_days)

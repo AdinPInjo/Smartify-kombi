@@ -120,3 +120,115 @@ class MockGpsReceiver:
 
     def close(self) -> None:
         pass
+
+
+class MockVictronListener:
+    """Simulated SmartShunt, SmartSolar MPPT, Orion DC-DC and MultiPlus (VE.Bus).
+
+    Solar follows the time of day; the battery charges in daylight and drains
+    at night. Field names match what ``victron-ble`` produces on real devices.
+    """
+
+    def __init__(self, interval: float = 3.0) -> None:
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self, on_reading) -> None:
+        def loop() -> None:
+            while not self._stop.is_set():
+                for reading in self.readings():
+                    on_reading(reading)
+                self._stop.wait(self._interval)
+
+        self._thread = threading.Thread(target=loop, name="mock-victron", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+
+    @staticmethod
+    def readings(now: float | None = None) -> list:
+        from smartify.hardware.base import VictronReading
+
+        now = time.time() if now is None else now
+        hour = time.localtime(now).tm_hour + time.localtime(now).tm_min / 60
+        sun = max(0.0, math.sin((hour - 6) / 14 * math.pi)) if 6 <= hour <= 20 else 0.0
+        solar_power = round(380 * sun * (0.8 + 0.2 * random.random()))
+        load_amps = 3.5 + 1.5 * random.random()
+        battery_current = round(solar_power / 13.4 - load_amps, 2)
+        soc = round(55 + 30 * math.sin(now / 21600), 1)
+        voltage = round(12.8 + 0.6 * sun + (soc - 50) / 200, 2)
+        charge_state = "off" if solar_power < 5 else ("bulk" if soc < 80 else "float")
+        driving = int(now // 600) % 3 == 0
+        ac_out = round(60 + 40 * random.random())
+        return [
+            VictronReading(
+                "shunt",
+                "battery_monitor",
+                "SmartShunt 500A/50mV",
+                {
+                    "voltage": voltage,
+                    "current": battery_current,
+                    "soc": soc,
+                    "consumed_ah": round(-(100 - soc) * 6, 1),
+                    "remaining_mins": None
+                    if battery_current >= 0
+                    else int(soc * 6 / -battery_current * 60),
+                    "alarm": "no_alarm",
+                    "aux_mode": "starter_voltage",
+                    "starter_voltage": 12.6 if not driving else 14.1,
+                },
+                rssi=-62,
+            ),
+            VictronReading(
+                "solar",
+                "solar_charger",
+                "SmartSolar MPPT 100|30",
+                {
+                    "charge_state": charge_state,
+                    "charger_error": "no_error",
+                    "battery_voltage": voltage,
+                    "battery_charging_current": round(solar_power / max(voltage, 1), 1),
+                    "solar_power": solar_power,
+                    "yield_today": round(380 * min(max(0.0, hour - 6), 14) / 14 * 6 * 0.6),  # Wh
+                    "external_device_load": 0.0,
+                },
+                rssi=-70,
+            ),
+            VictronReading(
+                "orion",
+                "dcdc_converter",
+                "Orion XS 12|12-50A",
+                {
+                    "charge_state": "bulk" if driving else "off",
+                    "charger_error": "no_error",
+                    "input_voltage": 14.1 if driving else 12.6,
+                    "output_voltage": 14.2 if driving else voltage,
+                    "input_current": 32.0 if driving else 0.0,
+                    "output_current": 30.5 if driving else 0.0,
+                    "off_reason": "no_reason" if driving else "engine_shutdown",
+                },
+                rssi=-75,
+            ),
+            VictronReading(
+                "multiplus",
+                "inverter_charger",
+                "MultiPlus 12|800|35",
+                {
+                    "device_state": "inverting",
+                    "error": 0,
+                    "alarm": None,
+                    "ac_in_state": "not_connected",
+                    "ac_in_power": 0,
+                    "ac_out_power": ac_out,
+                    "battery_voltage": voltage,
+                    "battery_current": round(-ac_out / 12, 1),
+                    "battery_temperature": 18,
+                    "soc": soc,
+                },
+                rssi=-68,
+            ),
+        ]

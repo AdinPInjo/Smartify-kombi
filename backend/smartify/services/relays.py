@@ -316,8 +316,9 @@ class RelayService:
     def _check_cutoff(self, sensor: str | None, max_c: float | None) -> None:
         if (sensor is None) != (max_c is None):
             raise InvalidInput("set both cutoff_sensor and cutoff_max_c, or neither")
-        if sensor is not None and sensor not in self._rules.sensor_names:
-            known = ", ".join(self._rules.sensor_names) or "none configured"
+        names = self._rules.sensors_for("temperature")
+        if sensor is not None and sensor not in names:
+            known = ", ".join(names) or "none configured"
             raise InvalidInput(f"unknown sensor {sensor} (available: {known})")
 
     def _cutoff_reason(self, relay: Relay) -> str | None:

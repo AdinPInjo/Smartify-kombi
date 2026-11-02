@@ -105,6 +105,22 @@ def gps_distance(ctx: Ctx, _: User, days: int = Query(30, ge=1, le=365)) -> dict
     return {"total_km": ctx.gps.total_distance_km(), "days": ctx.gps.distance_by_day(days)}
 
 
+# --- energy (Victron) ------------------------------------------------------------
+
+
+@router.get("/energy")
+def energy(ctx: Ctx, _: User) -> dict:
+    return {
+        **ctx.energy.summary(),
+        "devices": [asdict(d) for d in ctx.energy.devices()],
+    }
+
+
+@router.get("/energy/history")
+def energy_history(ctx: Ctx, _: User, hours: int = Hours) -> dict:
+    return {"points": ctx.energy.history(_since(hours))}
+
+
 # --- weather -------------------------------------------------------------------
 
 

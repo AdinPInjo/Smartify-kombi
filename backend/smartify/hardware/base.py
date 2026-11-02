@@ -7,6 +7,7 @@ run and be tested on a laptop.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -62,6 +63,26 @@ class GpsReceiver(Protocol):
     def close(self) -> None: ...
 
 
+@dataclass(frozen=True)
+class VictronReading:
+    """Decoded Instant Readout data from one Victron device."""
+
+    device: str
+    """Name from the configuration, e.g. 'shunt'."""
+    kind: str
+    """battery_monitor, solar_charger, dcdc_converter, inverter_charger, ..."""
+    model: str | None
+    values: dict[str, float | int | str | None]
+    rssi: int | None = None
+
+
+class VictronListener(Protocol):
+    def start(self, on_reading: Callable[[VictronReading], None]) -> None:
+        """Start listening in the background; call ``on_reading`` for every advertisement."""
+
+    def stop(self) -> None: ...
+
+
 class HardwareError(RuntimeError):
     """A device could not be reached or returned invalid data."""
 
@@ -74,3 +95,4 @@ class Hardware:
     climate_sensors: list[ClimateSensor]
     analog: AnalogReader
     gps: GpsReceiver | None
+    victron: VictronListener | None = None
