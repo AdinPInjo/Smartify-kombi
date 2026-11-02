@@ -124,8 +124,31 @@ class NmcliWifi:
             values.setdefault(key.split("[")[0], value)
         connected = values.get("GENERAL.STATE", "").startswith("100")
         ip = values.get("IP4.ADDRESS", "").split("/")[0] or None
-        ssid = values.get("GENERAL.CONNECTION") or None
-        return WifiStatus(True, connected, ssid if connected else None, ip)
+        ssid = self._active_ssid() if connected else None
+        return WifiStatus(True, connected, ssid, ip)
+
+    def _active_ssid(self) -> str | None:
+        # GENERAL.CONNECTION is the profile name (e.g. "preconfigured"), not the SSID.
+        try:
+            output = self._run(
+                "-t",
+                "-f",
+                "ACTIVE,SSID",
+                "device",
+                "wifi",
+                "list",
+                "ifname",
+                self.interface,
+                "--rescan",
+                "no",
+            )
+        except WifiError:
+            return None
+        for line in output.splitlines():
+            parts = split_terse(line)
+            if len(parts) >= 2 and parts[0] == "yes":
+                return parts[1] or None
+        return None
 
     def scan(self) -> list[WifiNetwork]:
         output = self._run(

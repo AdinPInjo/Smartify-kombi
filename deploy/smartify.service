@@ -1,0 +1,38 @@
+# Smartify Kombi backend.
+#
+# Installed by deploy/install.sh, which replaces __USER__ and __DIR__.
+# Manual install:
+#   sudo cp deploy/smartify.service /etc/systemd/system/
+#   (edit __USER__ and __DIR__), then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now smartify
+
+[Unit]
+Description=Smartify Kombi
+After=network.target bluetooth.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=notify
+User=__USER__
+WorkingDirectory=__DIR__/backend
+EnvironmentFile=__DIR__/backend/.env
+ExecStart=__DIR__/backend/.venv/bin/python -m smartify
+
+# Safety net: whenever the service stops, crashes or is killed, switch every
+# relay off. pinctrl keeps pins at their last level after the process exits,
+# so without this a heater could keep running with nothing in control.
+ExecStopPost=__DIR__/backend/.venv/bin/python -m smartify.failsafe
+
+# The service sends a heartbeat only while rule evaluation keeps running.
+# No heartbeat for 60 s: systemd kills it (relays go off, see above) and restarts it.
+WatchdogSec=60
+Restart=always
+RestartSec=5
+
+# The service user needs GPIO, I2C and serial access (groups gpio, i2c, dialout).
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

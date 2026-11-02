@@ -23,7 +23,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
+
+from smartify.errors import InvalidInput
 
 Metric = Literal["temperature", "humidity"]
 
@@ -101,11 +103,23 @@ for _model in (All, Any_, Not):
 _ADAPTER: TypeAdapter[Condition] = TypeAdapter(Condition)
 
 
+def _readable(error: ValidationError) -> str:
+    parts = []
+    for item in error.errors():
+        location = ".".join(str(p) for p in item["loc"] if not isinstance(p, int))
+        message = item["msg"].removeprefix("Value error, ")
+        parts.append(f"{location}: {message}" if location else message)
+    return "invalid condition: " + "; ".join(parts)
+
+
 def parse_condition(data: Any) -> Condition:
-    """Validate a condition. Raises ``ValueError`` with a readable message."""
-    condition = _ADAPTER.validate_python(data)
+    """Validate a condition. Raises ``InvalidInput`` with a readable message."""
+    try:
+        condition = _ADAPTER.validate_python(data)
+    except ValidationError as exc:
+        raise InvalidInput(_readable(exc)) from None
     if _depth(condition) > MAX_DEPTH:
-        raise ValueError(f"conditions can be nested at most {MAX_DEPTH} levels deep")
+        raise InvalidInput(f"conditions can be nested at most {MAX_DEPTH} levels deep")
     return condition
 
 

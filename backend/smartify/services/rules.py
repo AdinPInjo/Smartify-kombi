@@ -12,6 +12,7 @@ Decision for a relay in ``auto`` mode, rules checked from highest priority down:
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from smartify.db import transaction
+from smartify.errors import InvalidInput, NotFound
 from smartify.services.conditions import (
     Evaluation,
     MetricSource,
@@ -27,13 +29,12 @@ from smartify.services.conditions import (
     dump_condition,
     evaluate,
     parse_condition,
+    sensors_used,
 )
 
+log = logging.getLogger(__name__)
+
 State = Literal["on", "off"]
-
-
-class NotFound(LookupError):
-    pass
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,9 @@ class Decision:
     rule: Rule | None = None
     """The matching rule, if a rule decided."""
     statuses: tuple[RuleStatus, ...] = ()
+    fail_safe: bool = False
+    """The relay must go off now for safety (sensor dead, invalid rule, error).
+    Switching protection (min on time, cooldown) does not delay it."""
 
 
 _EDITABLE = {"name", "enabled", "priority", "condition", "action", "cooldown_seconds"}
@@ -98,11 +102,21 @@ class RuleService:
         self,
         db_path: Path,
         metric_source: MetricSource,
+        sensor_names: Callable[[], list[str]] = list,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._db_path = db_path
         self._metric_source = metric_source
+        self._sensor_names = sensor_names
         self._clock = clock
+
+    def _validated_condition_json(self, condition: Any) -> str:
+        parsed = parse_condition(condition)
+        unknown = sensors_used(parsed) - set(self._sensor_names())
+        if unknown:
+            known = ", ".join(self._sensor_names()) or "none configured"
+            raise InvalidInput(f"unknown sensor {', '.join(sorted(unknown))} (available: {known})")
+        return json.dumps(dump_condition(parsed))
 
     # --- storage ---------------------------------------------------------
 
@@ -134,7 +148,7 @@ class RuleService:
         cooldown_seconds: int = 60,
         enabled: bool = True,
     ) -> Rule:
-        condition_json = json.dumps(dump_condition(parse_condition(condition)))
+        condition_json = self._validated_condition_json(condition)
         now = int(self._clock())
         rule_id = str(uuid.uuid4())
         with transaction(self._db_path) as conn:
@@ -161,11 +175,11 @@ class RuleService:
     def update(self, rule_id: str, changes: dict[str, Any]) -> Rule:
         unknown = set(changes) - _EDITABLE
         if unknown:
-            raise ValueError(f"cannot change {', '.join(sorted(unknown))}")
+            raise InvalidInput(f"cannot change {', '.join(sorted(unknown))}")
         columns: dict[str, Any] = {}
         for key, value in changes.items():
             if key == "condition":
-                columns["condition_json"] = json.dumps(dump_condition(parse_condition(value)))
+                columns["condition_json"] = self._validated_condition_json(value)
             elif key == "enabled":
                 columns["enabled"] = int(value)
             else:
@@ -200,6 +214,14 @@ class RuleService:
     # --- decision --------------------------------------------------------
 
     def decide(self, relay_id: str) -> Decision:
+        """Never raises: any error becomes a fail-safe "off"."""
+        try:
+            return self._decide(relay_id)
+        except Exception as exc:
+            log.exception("Rule evaluation for relay %s failed", relay_id)
+            return Decision("off", f"rule evaluation failed: {exc}", fail_safe=True)
+
+    def _decide(self, relay_id: str) -> Decision:
         rules = [rule for rule in self.list(relay_id) if rule.enabled]
         if not rules:
             return Decision("off", "no enabled rules")
@@ -207,14 +229,24 @@ class RuleService:
         evaluations: list[tuple[Rule, Evaluation]] = []
         decision: Decision | None = None
         for rule in rules:
-            result = evaluate(parse_condition(rule.condition), self._metric_source)
+            try:
+                result = evaluate(parse_condition(rule.condition), self._metric_source)
+            except InvalidInput as exc:
+                # A stored rule that no longer validates (manual DB edit, sync).
+                result = Evaluation(False, SensorIssue.MISSING)
+                if decision is None:
+                    decision = Decision(
+                        "off", f"rule '{rule.name}' is invalid: {exc}", fail_safe=True
+                    )
             evaluations.append((rule, result))
             if decision is not None:
                 continue  # keep evaluating so every rule gets a status
             if result.issue is SensorIssue.WARMING_UP:
                 decision = Decision(None, f"waiting for sensor data ({rule.name})")
             elif result.issue is not None:
-                decision = Decision("off", f"sensor {result.issue.value} ({rule.name})")
+                decision = Decision(
+                    "off", f"sensor {result.issue.value} ({rule.name})", fail_safe=True
+                )
             elif result.matched:
                 decision = Decision(rule.action, f"rule '{rule.name}'", rule)
 
@@ -225,4 +257,6 @@ class RuleService:
             RuleStatus(rule.id, result.matched, result.issue, result.values, rule.id == winner_id)
             for rule, result in evaluations
         )
-        return Decision(decision.state, decision.reason, decision.rule, statuses)
+        return Decision(
+            decision.state, decision.reason, decision.rule, statuses, decision.fail_safe
+        )

@@ -13,13 +13,13 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from smartify import __version__
 from smartify.api import auth, relays, sensors, system, wifi
+from smartify.api.deps import password_fingerprint
 from smartify.config import Settings, get_settings
 from smartify.context import AppContext
 from smartify.db import migrate
+from smartify.errors import Conflict, DeviceUnavailable, InvalidInput, NotFound
 from smartify.hardware import Hardware, build_hardware
 from smartify.logbuffer import LogBuffer
-from smartify.services.relays import Conflict
-from smartify.services.rules import NotFound
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +33,12 @@ def create_app(
 ) -> FastAPI:
     """Build the app. Tests pass their own settings, mock hardware, and no workers."""
     settings = settings or get_settings()
+    if settings.hardware == "pi" and settings.uses_default_credentials:
+        raise SystemExit(
+            "Refusing to start: SMARTIFY_PASSWORD is still the default 'changeme'. "
+            "Anyone on the same WiFi could switch your relays. Set a password in .env."
+        )
+    secret_key = settings.resolved_secret_key()
     logs = LogBuffer()
     logging.getLogger().addHandler(logs)
     logging.getLogger("smartify").setLevel(settings.log_level)
@@ -40,10 +46,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if settings.uses_default_credentials:
-            log.warning(
-                "Default password or secret key in use. "
-                "Set SMARTIFY_PASSWORD and SMARTIFY_SECRET_KEY before exposing the dashboard."
-            )
+            log.warning("Default password in use. Fine for development, never on the van.")
         version = migrate(settings.db_path)
         log.info("Database %s at schema version %d", settings.db_path, version)
         ctx = AppContext.build(settings, hardware or build_hardware(settings), logs)
@@ -59,9 +62,10 @@ def create_app(
             logging.getLogger().removeHandler(logs)
 
     app = FastAPI(title="Smartify Kombi", version=__version__, lifespan=lifespan)
+    app.state.session_fingerprint = password_fingerprint(secret_key, settings.password)
     app.add_middleware(
         SessionMiddleware,
-        secret_key=settings.secret_key,
+        secret_key=secret_key,
         session_cookie="smartify_session",
         max_age=SESSION_MAX_AGE,
         same_site="lax",
@@ -75,9 +79,13 @@ def create_app(
     async def _conflict(_: Request, exc: Conflict) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=409)
 
-    @app.exception_handler(ValueError)
-    async def _invalid(_: Request, exc: ValueError) -> JSONResponse:
+    @app.exception_handler(InvalidInput)
+    async def _invalid(_: Request, exc: InvalidInput) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    @app.exception_handler(DeviceUnavailable)
+    async def _device(_: Request, exc: DeviceUnavailable) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=503)
 
     for router in (system.router, auth.router, relays.router, sensors.router, wifi.router):
         app.include_router(router, prefix="/api")

@@ -3,11 +3,12 @@ from __future__ import annotations
 import pytest
 
 from smartify.config import Settings
-from smartify.db import migrate
+from smartify.db import migrate, transaction
+from smartify.errors import Conflict, DeviceUnavailable, InvalidInput, NotFound
 from smartify.hardware.mock import MockRelayDriver
 from smartify.services.conditions import MetricValue, SensorIssue, parse_condition
-from smartify.services.relays import Conflict, RelayService
-from smartify.services.rules import NotFound, RuleService
+from smartify.services.relays import RelayService
+from smartify.services.rules import RuleService
 
 
 class FakeClock:
@@ -41,7 +42,7 @@ def env(tmp_path):
     clock = FakeClock()
     sensors = FakeSensors()
     driver = MockRelayDriver()
-    rules = RuleService(settings.db_path, sensors, clock)
+    rules = RuleService(settings.db_path, sensors, lambda: ["inside", "outside"], clock)
     relays = RelayService(settings, driver, rules, settings.db_path, clock)
     relays.startup()
     heater = next(r for r in relays.list() if r.name == "heater")
@@ -281,3 +282,143 @@ def test_deleting_relay_removes_its_rules(env):
     env.relays.delete(env.heater.id)
     with pytest.raises(NotFound):
         env.rules.get(rule.id)
+
+
+# --- regression tests from the safety review --------------------------------------
+
+
+def heater_on_by_rule(env, **rule_kwargs):
+    env.rules.create(env.heater.id, **heat_below(8, **rule_kwargs))
+    env.sensors.set("inside", "temperature", 5.0)
+    env.relays.reconcile(env.heater.id)
+    assert env.driver.is_on(25)
+
+
+@pytest.mark.parametrize("protection", [{"cooldown_seconds": 3600}, {"min_on": 3600}])
+def test_dead_sensor_switches_off_despite_protection(env, protection):
+    if "min_on" in protection:
+        env.relays.update(env.heater.id, {"min_on_seconds": 3600})
+        heater_on_by_rule(env, cooldown_seconds=0)
+    else:
+        heater_on_by_rule(env, **protection)
+    env.clock.advance(10)
+    env.sensors.set("inside", "temperature", None, SensorIssue.STALE)
+    env.relays.reconcile(env.heater.id)
+    assert not env.driver.is_on(25)
+
+
+def test_failed_db_write_does_not_strand_pin_on(env, monkeypatch):
+    heater_on_by_rule(env, cooldown_seconds=0)
+    env.relays.set_manual(env.heater.id, "on")
+    original = env.relays._record
+    calls = []
+
+    def failing_record(*args, **kwargs):
+        calls.append(1)
+        raise RuntimeError("database is locked")
+
+    # Manual OFF: pin switches, then the DB write fails.
+    monkeypatch.setattr(env.relays, "_record", failing_record)
+    with pytest.raises(RuntimeError):
+        env.relays.set_manual(env.heater.id, "off")
+    assert not env.driver.is_on(25)
+    monkeypatch.setattr(env.relays, "_record", original)
+
+    # DB still says on; the next reconcile repairs the record without turning the pin on.
+    env.relays.reconcile(env.heater.id)
+    assert env.relays.get(env.heater.id).state == "off"
+    assert not env.driver.is_on(25)
+
+
+def test_pin_left_on_in_db_is_driven_again(env):
+    """DB says off but the pin is on (e.g. DB write lost): reconcile must drive it off."""
+    env.relays.set_manual(env.heater.id, "on")
+    with transaction(env.settings.db_path) as conn:
+        conn.execute("UPDATE relay_state SET actual_state = 'off'")
+    env.relays._levels[env.heater.id] = "on"
+    env.relays.set_manual(env.heater.id, "off")
+    assert not env.driver.is_on(25)
+
+
+def test_failed_switch_off_at_boot_is_retried(env):
+    env.relays.set_manual(env.heater.id, "on")
+    env.relays.set_auto(env.heater.id)  # no rules -> wants off
+    env.driver.pin_levels[25] = True  # pin still on from before a restart
+    env.relays._levels.clear()
+    env.driver.fail_pins.add(25)
+    env.relays.startup()
+    assert env.relays.get(env.heater.id).last_error
+
+    env.driver.fail_pins.clear()
+    env.relays.reconcile_all()
+    assert not env.driver.is_on(25)
+    assert env.relays.get(env.heater.id).last_error is None
+
+
+def test_delete_aborts_if_pin_cannot_be_switched_off(env):
+    env.relays.set_manual(env.heater.id, "on")
+    env.driver.fail_pins.add(25)
+    with pytest.raises(DeviceUnavailable):
+        env.relays.delete(env.heater.id)
+    assert env.relays.get(env.heater.id)
+
+
+def test_pin_change_aborts_if_old_pin_cannot_be_released(env):
+    env.relays.set_manual(env.heater.id, "on")
+    env.driver.fail_pins.add(25)
+    with pytest.raises(DeviceUnavailable):
+        env.relays.update(env.heater.id, {"gpio_pin": 22})
+    assert env.relays.get(env.heater.id).gpio_pin == 25
+    assert 22 not in env.driver.pin_levels
+
+
+def test_invalid_stored_rule_fails_safe(env):
+    heater_on_by_rule(env, cooldown_seconds=3600)
+    with transaction(env.settings.db_path) as conn:
+        conn.execute('UPDATE rules SET condition_json = \'{"type": "threshold", "op": "=="}\'')
+    env.relays.reconcile(env.heater.id)
+    relay = env.relays.get(env.heater.id)
+    assert relay.state == "off" and "invalid" in relay.reason
+
+
+def test_clock_jump_backwards_does_not_hold(env):
+    env.relays.update(env.heater.id, {"min_on_seconds": 600})
+    heater_on_by_rule(env, cooldown_seconds=0)
+    env.clock.advance(-7200)
+    env.sensors.set("inside", "temperature", 20.0)
+    env.relays.reconcile(env.heater.id)
+    assert not env.driver.is_on(25)
+
+
+def test_pending_reason_is_reported(env):
+    env.relays.update(env.heater.id, {"min_on_seconds": 600})
+    heater_on_by_rule(env, cooldown_seconds=0)
+    env.clock.advance(60)
+    env.sensors.set("inside", "temperature", 20.0)
+    env.relays.reconcile(env.heater.id)
+    relay = env.relays.get(env.heater.id)
+    assert relay.state == "on"
+    assert relay.pending.startswith("minimum on time, 9 min")
+
+
+def test_all_off_on_shutdown(env):
+    env.relays.set_manual(env.heater.id, "on")
+    env.relays.all_off("shutdown", "service stopped")
+    assert not env.driver.is_on(25)
+    assert env.relays.get(env.heater.id).state == "off"
+
+
+def test_rule_with_unknown_sensor_is_rejected(env):
+    bad = heat_below(8)
+    bad["condition"]["sensor"] = "kitchen"
+    with pytest.raises(InvalidInput, match="unknown sensor kitchen"):
+        env.rules.create(env.heater.id, **bad)
+
+
+def test_label_change_respects_switching_protection(env):
+    env.relays.update(env.heater.id, {"min_on_seconds": 600})
+    heater_on_by_rule(env, cooldown_seconds=0)
+    env.clock.advance(60)
+    env.sensors.set("inside", "temperature", 20.0)
+    env.relays.update(env.heater.id, {"label": "Diesel heater"})
+    assert env.driver.is_on(25)  # still within min on time

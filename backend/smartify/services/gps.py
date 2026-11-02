@@ -10,6 +10,7 @@ To keep the track clean and SD card writes low:
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
@@ -21,8 +22,11 @@ from typing import Literal
 from smartify.db import transaction
 from smartify.hardware import GpsFix, GpsReceiver, HardwareError
 
+log = logging.getLogger(__name__)
+
 _MOVING_SPEED_KMH = 3.0
 _MIN_MOVE_METERS = 15.0
+_MAX_PLAUSIBLE_KMH = 250.0
 _MOVING_INTERVAL = 10
 _PARKED_INTERVAL = 600
 _FIX_TIMEOUT = 5.0
@@ -64,7 +68,7 @@ class GpsService:
         self._error: str | None = None
         self._connected = False
         self._last_stored: tuple[int, float, float] | None = None
-        self._last_moving_point: tuple[float, float] | None = None
+        self._last_moving_point: tuple[float, float, int] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -91,26 +95,38 @@ class GpsService:
 
     def process(self, fix: GpsFix) -> None:
         now = int(self._clock())
+        add_km = 0.0
+        store = False
         with self._lock:
             self._fix, self._fix_at = fix, now
             moving = (fix.speed_kmh or 0.0) >= _MOVING_SPEED_KMH
+            previous = self._last_moving_point
 
-            if moving:
-                if self._last_moving_point is not None:
-                    meters = distance_m(*self._last_moving_point, fix.lat, fix.lon)
-                    if meters >= _MIN_MOVE_METERS:
-                        self._add_distance(meters / 1000.0, now)
-                        self._last_moving_point = (fix.lat, fix.lon)
-                else:
-                    self._last_moving_point = (fix.lat, fix.lon)
-            else:
-                self._last_moving_point = None
+            if previous is not None:
+                meters = distance_m(previous[0], previous[1], fix.lat, fix.lon)
+                seconds = max(now - previous[2], 1)
+                if meters / seconds * 3.6 > _MAX_PLAUSIBLE_KMH:
+                    # A bogus fix (multipath, cold start). Restart the segment here.
+                    log.info("Ignoring GPS jump of %.0f m in %d s", meters, seconds)
+                    self._last_moving_point = (fix.lat, fix.lon, now) if moving else None
+                elif meters >= _MIN_MOVE_METERS or not moving:
+                    # Count the step; when the van stops, also count the last bit.
+                    add_km = meters / 1000.0 if meters >= _MIN_MOVE_METERS else 0.0
+                    self._last_moving_point = (fix.lat, fix.lon, now) if moving else None
+            elif moving:
+                self._last_moving_point = (fix.lat, fix.lon, now)
 
             last = self._last_stored
             interval = _MOVING_INTERVAL if moving else _PARKED_INTERVAL
             if last is None or now - last[0] >= interval:
-                self._store(fix, now)
+                store = True
                 self._last_stored = (now, fix.lat, fix.lon)
+
+        # Database writes happen outside the lock so /api/gps never waits on them.
+        if add_km:
+            self._add_distance(add_km, now)
+        if store:
+            self._store(fix, now)
 
     def _store(self, fix: GpsFix, now: int) -> None:
         with transaction(self._db_path) as conn:

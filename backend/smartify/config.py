@@ -7,12 +7,16 @@ file in the working directory. See ``.env.example`` in the repository root.
 
 from __future__ import annotations
 
+import os
+import secrets
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+DEFAULT_PASSWORD = "changeme"
 
 
 class RelaySeed(BaseModel):
@@ -73,7 +77,9 @@ class Settings(BaseSettings):
     # --- Authentication ----------------------------------------------------
     username: str = "admin"
     password: str = "changeme"
-    secret_key: str = "change-this-secret"
+    """Must be changed before Smartify runs with real hardware (it refuses to start)."""
+    secret_key: str = ""
+    """Signs login cookies. Leave empty to generate one and keep it in the data directory."""
 
     # --- Sensors -----------------------------------------------------------
     dht22_sensors: Annotated[list[SensorPin], NoDecode] = Field(
@@ -140,7 +146,23 @@ class Settings(BaseSettings):
 
     @property
     def uses_default_credentials(self) -> bool:
-        return self.password == "changeme" or self.secret_key == "change-this-secret"
+        return self.password == DEFAULT_PASSWORD
+
+    def resolved_secret_key(self) -> str:
+        """The configured secret, or a random one generated once and stored in data_dir."""
+        if self.secret_key:
+            return self.secret_key
+        path = self.data_dir / "secret_key"
+        try:
+            return path.read_text().strip()
+        except FileNotFoundError:
+            pass
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        key = secrets.token_urlsafe(48)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(key)
+        return key
 
 
 @lru_cache

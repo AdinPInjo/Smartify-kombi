@@ -23,11 +23,14 @@ from statistics import fmean
 from typing import Any, Literal
 
 from smartify.db import transaction
+from smartify.errors import InvalidInput
 from smartify.hardware import AnalogReader, HardwareError
 
 Method = Literal["voltage", "ratio"]
 
 _SMOOTHING_SAMPLES = 6
+# Below this the divider is probably disconnected; the ratio would be meaningless.
+_MIN_BATTERY_VOLTAGE = 8.0
 
 
 @dataclass(frozen=True)
@@ -46,15 +49,15 @@ class WaterSettings:
 
     def validate(self) -> None:
         if self.signal_channel == self.supply_channel:
-            raise ValueError("signal and supply must use different ADC channels")
+            raise InvalidInput("signal and supply must use different ADC channels")
         if not {self.signal_channel, self.supply_channel} <= {0, 1, 2, 3}:
-            raise ValueError("ADC channels are 0-3")
+            raise InvalidInput("ADC channels are 0-3")
         if self.divider_r_top <= 0 or self.divider_r_bottom <= 0:
-            raise ValueError("divider resistors must be positive")
+            raise InvalidInput("divider resistors must be positive")
         if abs(self.empty_voltage - self.full_voltage) < 0.01:
-            raise ValueError("empty and full voltage must differ")
+            raise InvalidInput("empty and full voltage must differ")
         if abs(self.empty_ratio - self.full_ratio) < 0.001:
-            raise ValueError("empty and full ratio must differ")
+            raise InvalidInput("empty and full ratio must differ")
 
     @property
     def divider_factor(self) -> float:
@@ -102,8 +105,10 @@ class WaterService:
         analog: AnalogReader,
         db_path: Path,
         clock: Callable[[], float] = time.time,
+        stale_seconds: float = 120,
     ) -> None:
         self._analog = analog
+        self._stale_seconds = stale_seconds
         self._db_path = db_path
         self._clock = clock
         self._lock = threading.Lock()
@@ -125,7 +130,7 @@ class WaterService:
     def update_settings(self, changes: dict[str, Any]) -> WaterSettings:
         unknown = set(changes) - _EDITABLE
         if unknown:
-            raise ValueError(f"cannot change {', '.join(sorted(unknown))}")
+            raise InvalidInput(f"cannot change {', '.join(sorted(unknown))}")
         current = self.settings()
         merged = {**current.__dict__, **changes}
         WaterSettings(**merged).validate()
@@ -146,11 +151,11 @@ class WaterService:
         """Store the current (smoothed) reading as the empty or full point."""
         with self._lock:
             if not self._recent:
-                raise ValueError("no sensor reading yet, cannot calibrate")
+                raise InvalidInput("no sensor reading yet, cannot calibrate")
             signal = fmean(r[0] for r in self._recent)
             battery = fmean(r[1] for r in self._recent)
-        if battery <= 0:
-            raise ValueError("battery voltage reads 0 V, check the supply divider wiring")
+        if battery < _MIN_BATTERY_VOLTAGE:
+            raise InvalidInput(f"supply reads {battery:.1f} V, check the divider wiring")
         return self.update_settings(
             {f"{point}_voltage": round(signal, 4), f"{point}_ratio": round(signal / battery, 5)}
         )
@@ -183,6 +188,9 @@ class WaterService:
             signal = fmean(r[0] for r in self._recent)
             battery = fmean(r[1] for r in self._recent)
             error, updated_at = self._last_error, self._updated_at
+        if updated_at is not None and self._clock() - updated_at > self._stale_seconds:
+            message = error or "no reading from the ADC for too long"
+            return WaterReading(False, None, None, None, None, message, updated_at)
         return self._reading(settings, signal, battery, error, updated_at)
 
     def _reading(
@@ -193,7 +201,7 @@ class WaterService:
         error: str | None,
         updated_at: int | None,
     ) -> WaterReading:
-        ratio = signal / battery if battery > 0.5 else None
+        ratio = signal / battery if battery >= _MIN_BATTERY_VOLTAGE else None
         if settings.method == "ratio":
             if ratio is None:
                 return WaterReading(
@@ -202,7 +210,7 @@ class WaterService:
                     round(battery, 2),
                     round(signal, 4),
                     None,
-                    "battery voltage too low to compute the ratio",
+                    f"supply reads {battery:.1f} V, check the divider wiring",
                     updated_at,
                 )
             level = level_percent(ratio, settings.empty_ratio, settings.full_ratio)

@@ -24,7 +24,9 @@ async def login(body: LoginRequest, request: Request, ctx: Ctx) -> dict:
     if not (valid_user and valid_pass):
         await asyncio.sleep(1)  # slows down password guessing
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "wrong username or password")
+    request.session.clear()
     request.session["user"] = settings.username
+    request.session["pw"] = request.app.state.session_fingerprint
     return {"user": settings.username}
 
 

@@ -28,7 +28,19 @@ __all__ = [
     "HardwareError",
     "RelayDriver",
     "build_hardware",
+    "build_relay_driver",
 ]
+
+
+def build_relay_driver(settings: Settings) -> RelayDriver:
+    """Only the relay driver (used by the failsafe command)."""
+    if settings.hardware == "mock":
+        from smartify.hardware.mock import MockRelayDriver
+
+        return MockRelayDriver()
+    from smartify.hardware.pi.relays import PinctrlRelayDriver
+
+    return PinctrlRelayDriver()
 
 
 def build_hardware(settings: Settings) -> Hardware:

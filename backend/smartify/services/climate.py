@@ -31,6 +31,19 @@ from smartify.services.conditions import MetricValue, SensorIssue
 
 Status = Literal["ready", "warming_up", "stale"]
 
+# DHT22 specification limits. Anything outside is a corrupted read.
+_TEMPERATURE_RANGE = (-40.0, 80.0)
+_HUMIDITY_RANGE = (0.0, 100.0)
+
+
+def _plausible(temperature: float | None, humidity: float | None) -> bool:
+    if temperature is None or humidity is None:
+        return False
+    return (
+        _TEMPERATURE_RANGE[0] <= temperature <= _TEMPERATURE_RANGE[1]
+        and _HUMIDITY_RANGE[0] <= humidity <= _HUMIDITY_RANGE[1]
+    )
+
 
 @dataclass(frozen=True)
 class ClimateSnapshot:
@@ -84,7 +97,7 @@ class ClimateService:
             now = self._clock()
             with self._lock:
                 state = self._state[sensor.name]
-                if reading.ok and reading.humidity is not None:
+                if reading.ok and _plausible(reading.temperature_c, reading.humidity):
                     state.window.append((now, reading.temperature_c, reading.humidity))
                     state.minute.append((reading.temperature_c, reading.humidity))
                     state.last_good_at = now
@@ -92,9 +105,13 @@ class ClimateService:
                     state.last_error = None
                 else:
                     state.minute_failures += 1
-                    state.last_error = reading.error
+                    state.last_error = reading.error or (
+                        f"implausible reading {reading.temperature_c} °C / {reading.humidity} %"
+                    )
                 self._prune(state, now)
-                if state.window:
+                # Only replace the average once the window holds enough readings;
+                # after a dropout one fresh reading must not decide on its own.
+                if len(state.window) >= self._settings.sensor_min_samples:
                     state.temperature = round(fmean(r[1] for r in state.window), 2)
                     state.humidity = round(fmean(r[2] for r in state.window), 2)
 
@@ -153,7 +170,7 @@ class ClimateService:
         if state.last_good_at is not None:
             if now - state.last_good_at > stale_after:
                 return "stale"
-            if state.good_total < self._settings.sensor_min_samples:
+            if state.temperature is None:  # never had a full window yet
                 return "warming_up"
             return "ready"
         # Never had a good reading: give the sensor time before calling it stale.

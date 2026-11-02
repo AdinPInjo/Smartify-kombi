@@ -288,3 +288,56 @@ def test_worker_survives_exceptions():
     assert len(calls) >= 3
     assert "boom" in status.last_error
     assert status.running is False
+
+
+def test_gps_counts_the_stop_segment_and_rejects_jumps(db):
+    clock = Clock()
+    gps = GpsService(receiver=None, db_path=db, clock=clock)
+    gps.process(GpsFix(44.0, 17.0, speed_kmh=30))
+    clock.now += 10
+    gps.process(GpsFix(44.001, 17.0, speed_kmh=30))  # ~111 m
+    clock.now += 10
+    gps.process(GpsFix(45.0, 17.0, speed_kmh=30))  # 111 km in 10 s: bogus
+    clock.now += 10
+    gps.process(GpsFix(45.0005, 17.0, speed_kmh=30))  # segment restarts at the jump: ~55 m
+    clock.now += 10
+    gps.process(GpsFix(45.001, 17.0, speed_kmh=0))  # stopping: last ~55 m counts
+    assert gps.total_distance_km() == pytest.approx(0.111 + 2 * 0.0556, abs=0.005)
+
+
+def test_prune_skips_when_clock_jumped_forward(db):
+    now = time.time()
+    with transaction(db) as conn:
+        conn.execute(
+            "INSERT INTO sensor_samples (sensor, ok, created_at) VALUES ('s', 1, ?)", (int(now),)
+        )
+    assert prune_history(db, retention_days=90, now=now + 200 * 86400) == 0
+
+
+def test_backup_once_per_day_keeps_three(db):
+    from smartify.services.maintenance import backup, check_integrity
+
+    assert check_integrity(db)
+    day = 86400
+    for i in range(5):
+        assert backup(db, now=1_700_000_000 + i * day) is not None
+    assert backup(db, now=1_700_000_000 + 4 * day) is None  # already done today
+    assert len(list((db.parent / "backups").glob("*.db"))) == 3
+
+
+def test_failsafe_command(tmp_path, monkeypatch):
+    from smartify import failsafe
+    from smartify.config import get_settings
+
+    monkeypatch.setenv("SMARTIFY_DATA_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    migrate(tmp_path / "smartify.db")
+    with transaction(tmp_path / "smartify.db") as conn:
+        conn.execute(
+            "INSERT INTO relays (id, name, gpio_pin, created_at, updated_at) "
+            "VALUES ('r', 'heater', 25, 0, 0)"
+        )
+    try:
+        assert failsafe.main() == 0
+    finally:
+        get_settings.cache_clear()

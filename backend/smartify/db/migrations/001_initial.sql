@@ -156,7 +156,7 @@ CREATE TABLE gps_fixes (
 CREATE INDEX idx_gps_fixes_time ON gps_fixes (created_at);
 
 CREATE TABLE gps_distance_daily (
-    day             TEXT PRIMARY KEY,   -- YYYY-MM-DD (UTC)
+    day             TEXT PRIMARY KEY,   -- YYYY-MM-DD in the Pi's local time zone
     distance_km     REAL NOT NULL DEFAULT 0,
     updated_at      INTEGER NOT NULL
 );
