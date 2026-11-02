@@ -23,6 +23,8 @@ class RelayCreate(BaseModel):
     enabled: bool = True
     min_on_seconds: int = Field(0, ge=0, le=86400)
     min_off_seconds: int = Field(0, ge=0, le=86400)
+    cutoff_sensor: str | None = None
+    cutoff_max_c: float | None = Field(None, ge=-40, le=80)
 
 
 class RelayUpdate(BaseModel):
@@ -32,6 +34,9 @@ class RelayUpdate(BaseModel):
     enabled: bool | None = None
     min_on_seconds: int | None = Field(None, ge=0, le=86400)
     min_off_seconds: int | None = Field(None, ge=0, le=86400)
+    cutoff_sensor: str | None = None
+    cutoff_max_c: float | None = Field(None, ge=-40, le=80)
+    """Set both to enable the safety cutoff, both to null to remove it."""
 
 
 class ManualRequest(BaseModel):
@@ -103,11 +108,12 @@ def get_relay(relay_id: str, ctx: Ctx, _: User) -> dict:
 
 @router.patch("/relays/{relay_id}")
 def update_relay(relay_id: str, body: RelayUpdate, ctx: Ctx, _: User) -> dict:
-    # label may be cleared with null; every other field ignores null.
+    # These may be cleared with null; every other field ignores null.
+    nullable = {"label", "cutoff_sensor", "cutoff_max_c"}
     changes = {
         k: v
         for k, v in body.model_dump(exclude_unset=True).items()
-        if v is not None or k == "label"
+        if v is not None or k in nullable
     }
     return relay_out(ctx.relays.update(relay_id, changes))
 

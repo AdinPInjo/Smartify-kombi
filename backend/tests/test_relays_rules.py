@@ -422,3 +422,48 @@ def test_label_change_respects_switching_protection(env):
     env.sensors.set("inside", "temperature", 20.0)
     env.relays.update(env.heater.id, {"label": "Diesel heater"})
     assert env.driver.is_on(25)  # still within min on time
+
+
+# --- safety temperature cutoff ---------------------------------------------------
+
+
+def test_cutoff_forces_off_even_in_manual_with_hysteresis(env):
+    env.relays.update(env.heater.id, {"cutoff_sensor": "inside", "cutoff_max_c": 30})
+    env.sensors.set("inside", "temperature", 25.0)
+    env.relays.set_manual(env.heater.id, "on")
+    assert env.driver.is_on(25)
+
+    env.sensors.set("inside", "temperature", 30.5)
+    env.relays.reconcile(env.heater.id)
+    relay = env.relays.get(env.heater.id)
+    assert not env.driver.is_on(25)
+    assert relay.mode == "manual" and "safety cutoff" in relay.reason
+
+    env.sensors.set("inside", "temperature", 29.5)  # within hysteresis: stays off
+    env.relays.reconcile(env.heater.id)
+    assert not env.driver.is_on(25)
+
+    env.sensors.set("inside", "temperature", 28.9)  # cooled down: manual on resumes
+    env.relays.reconcile(env.heater.id)
+    assert env.driver.is_on(25)
+
+
+def test_cutoff_overrides_rules_and_protection(env):
+    env.relays.update(
+        env.heater.id,
+        {"cutoff_sensor": "inside", "cutoff_max_c": 30, "min_on_seconds": 3600},
+    )
+    heater_on_by_rule(env, cooldown_seconds=3600)
+    env.sensors.set("inside", "temperature", 31.0)
+    env.relays.reconcile(env.heater.id)
+    assert not env.driver.is_on(25)
+
+
+def test_cutoff_validation(env):
+    with pytest.raises(InvalidInput):
+        env.relays.update(env.heater.id, {"cutoff_sensor": "inside"})
+    with pytest.raises(InvalidInput):
+        env.relays.update(env.heater.id, {"cutoff_sensor": "kitchen", "cutoff_max_c": 30})
+    relay = env.relays.update(env.heater.id, {"cutoff_sensor": "inside", "cutoff_max_c": 30})
+    relay = env.relays.update(relay.id, {"cutoff_sensor": None, "cutoff_max_c": None})
+    assert relay.cutoff_sensor is None

@@ -110,6 +110,14 @@ class RuleService:
         self._sensor_names = sensor_names
         self._clock = clock
 
+    @property
+    def metric_source(self) -> MetricSource:
+        return self._metric_source
+
+    @property
+    def sensor_names(self) -> list[str]:
+        return list(self._sensor_names())
+
     def _validated_condition_json(self, condition: Any) -> str:
         parsed = parse_condition(condition)
         unknown = sensors_used(parsed) - set(self._sensor_names())

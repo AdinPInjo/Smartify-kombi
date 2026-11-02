@@ -20,6 +20,9 @@ Safety rules:
   boot) the next reconcile drives the pin again, so a relay cannot stay on
   while the database says off.
 * Every relay is switched off at startup and at shutdown.
+* Optional safety cutoff: above ``cutoff_max_c`` on ``cutoff_sensor`` the relay
+  is forced off in every mode, manual included, until the temperature has
+  dropped ``CUTOFF_HYSTERESIS_C`` below the limit.
 """
 
 from __future__ import annotations
@@ -55,8 +58,19 @@ RESERVED_PINS = {
     15: "UART RX (GPS)",
 }
 
-_EDITABLE = {"label", "gpio_pin", "active_low", "enabled", "min_on_seconds", "min_off_seconds"}
-_FORCE_ON_CHANGE = {"gpio_pin", "active_low", "enabled"}
+_EDITABLE = {
+    "label",
+    "gpio_pin",
+    "active_low",
+    "enabled",
+    "min_on_seconds",
+    "min_off_seconds",
+    "cutoff_sensor",
+    "cutoff_max_c",
+}
+_FORCE_ON_CHANGE = {"gpio_pin", "active_low", "enabled", "cutoff_sensor", "cutoff_max_c"}
+
+CUTOFF_HYSTERESIS_C = 1.0
 
 
 @dataclass(frozen=True)
@@ -72,6 +86,8 @@ class Relay:
     manual_until: int | None
     min_on_seconds: int
     min_off_seconds: int
+    cutoff_sensor: str | None
+    cutoff_max_c: float | None
     state: State
     changed_at: int
     source: str
@@ -98,6 +114,8 @@ class Relay:
             manual_until=row["manual_until"],
             min_on_seconds=row["min_on_seconds"],
             min_off_seconds=row["min_off_seconds"],
+            cutoff_sensor=row["cutoff_sensor"],
+            cutoff_max_c=row["cutoff_max_c"],
             state=row["actual_state"],
             changed_at=row["changed_at"],
             source=row["source"],
@@ -140,6 +158,8 @@ class RelayService:
         self._pending: dict[str, str] = {}
         # Level last successfully commanded per relay. Missing = unknown.
         self._levels: dict[str, State] = {}
+        # Relays whose temperature cutoff has tripped (cleared with hysteresis).
+        self._tripped: set[str] = set()
 
     # --- queries ---------------------------------------------------------
 
@@ -179,17 +199,20 @@ class RelayService:
         enabled: bool = True,
         min_on_seconds: int = 0,
         min_off_seconds: int = 0,
+        cutoff_sensor: str | None = None,
+        cutoff_max_c: float | None = None,
     ) -> Relay:
         with self._lock:
             self._check_pin(gpio_pin)
+            self._check_cutoff(cutoff_sensor, cutoff_max_c)
             now = int(self._clock())
             relay_id = str(uuid.uuid4())
             try:
                 with transaction(self._db_path) as conn:
                     conn.execute(
                         "INSERT INTO relays (id, name, label, gpio_pin, active_low, enabled, "
-                        "min_on_seconds, min_off_seconds, created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "min_on_seconds, min_off_seconds, cutoff_sensor, cutoff_max_c, "
+                        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             relay_id,
                             name,
@@ -199,6 +222,8 @@ class RelayService:
                             int(enabled),
                             min_on_seconds,
                             min_off_seconds,
+                            cutoff_sensor,
+                            cutoff_max_c,
                             now,
                             now,
                         ),
@@ -225,6 +250,12 @@ class RelayService:
             )
             if "gpio_pin" in changes and changes["gpio_pin"] != before.gpio_pin:
                 self._check_pin(changes["gpio_pin"], ignore_relay=relay_id)
+            if changes.keys() & {"cutoff_sensor", "cutoff_max_c"}:
+                self._check_cutoff(
+                    changes.get("cutoff_sensor", before.cutoff_sensor),
+                    changes.get("cutoff_max_c", before.cutoff_max_c),
+                )
+                self._tripped.discard(relay_id)
             if rewired:
                 # Release the old wiring first; if that fails, change nothing.
                 self._drive_or_raise(before.gpio_pin, before.active_low, on=False)
@@ -244,6 +275,7 @@ class RelayService:
                 conn.execute("DELETE FROM relays WHERE id = ?", (relay_id,))
             for store in (self._errors, self._pending, self._levels):
                 store.pop(relay_id, None)
+            self._tripped.discard(relay_id)
             return relay
 
     def set_manual(
@@ -280,6 +312,30 @@ class RelayService:
                 "WHERE id = ?",
                 (*values.values(), int(self._clock()), relay_id),
             )
+
+    def _check_cutoff(self, sensor: str | None, max_c: float | None) -> None:
+        if (sensor is None) != (max_c is None):
+            raise InvalidInput("set both cutoff_sensor and cutoff_max_c, or neither")
+        if sensor is not None and sensor not in self._rules.sensor_names:
+            known = ", ".join(self._rules.sensor_names) or "none configured"
+            raise InvalidInput(f"unknown sensor {sensor} (available: {known})")
+
+    def _cutoff_reason(self, relay: Relay) -> str | None:
+        """The safety cutoff's verdict: a reason to force the relay off, or None."""
+        if relay.cutoff_sensor is None or relay.cutoff_max_c is None:
+            self._tripped.discard(relay.id)
+            return None
+        reading = self._rules.metric_source(relay.cutoff_sensor, "temperature")
+        limit = relay.cutoff_max_c
+        if reading.value is not None:
+            if reading.value > limit:
+                self._tripped.add(relay.id)
+            elif reading.value <= limit - CUTOFF_HYSTERESIS_C:
+                self._tripped.discard(relay.id)
+        # No reading: keep the last verdict (the rules handle dead sensors in auto).
+        if relay.id in self._tripped:
+            return f"safety cutoff: {relay.cutoff_sensor} above {limit:g} °C"
+        return None
 
     def _check_pin(self, gpio_pin: int, ignore_relay: str | None = None) -> None:
         if gpio_pin in RESERVED_PINS:
@@ -350,9 +406,13 @@ class RelayService:
 
             rule_id: str | None = None
             fail_safe = False
+            cutoff = self._cutoff_reason(relay)
             if not relay.enabled:
                 desired: State | None = "off"
                 reason, change_source = "relay disabled", source or "auto"
+                fail_safe = True
+            elif cutoff is not None:
+                desired, reason, change_source = "off", cutoff, source or "auto"
                 fail_safe = True
             elif relay.mode == "manual":
                 desired = relay.manual_state or "off"
