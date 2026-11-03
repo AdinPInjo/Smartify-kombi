@@ -13,13 +13,13 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from smartify import __version__
 from smartify.api import auth, notifications, relays, sensors, system, victron, wifi
-from smartify.api.deps import password_fingerprint
 from smartify.config import Settings, get_settings
 from smartify.context import AppContext
 from smartify.db import migrate
 from smartify.errors import Conflict, DeviceUnavailable, InvalidInput, NotFound
 from smartify.hardware import Hardware, build_hardware
 from smartify.logbuffer import LogBuffer
+from smartify.services.accounts import AccountService
 
 log = logging.getLogger(__name__)
 
@@ -33,11 +33,6 @@ def create_app(
 ) -> FastAPI:
     """Build the app. Tests pass their own settings, mock hardware, and no workers."""
     settings = settings or get_settings()
-    if settings.hardware == "pi" and settings.uses_default_credentials:
-        raise SystemExit(
-            "Refusing to start: SMARTIFY_PASSWORD is still the default 'changeme'. "
-            "Anyone on the same WiFi could switch your relays. Set a password in .env."
-        )
     secret_key = settings.resolved_secret_key()
     logs = LogBuffer()
     logging.getLogger().addHandler(logs)
@@ -45,11 +40,14 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if settings.uses_default_credentials:
-            log.warning("Default password in use. Fine for development, never on the van.")
         version = migrate(settings.db_path)
         log.info("Database %s at schema version %d", settings.db_path, version)
+        if accounts.setup_required:
+            log.warning("No dashboard login yet: open the dashboard to finish the setup")
+        elif accounts.uses_default_password:
+            log.warning("Default password in use. Fine for development, never on the van.")
         ctx = AppContext.build(settings, hardware or build_hardware(settings), logs)
+        ctx.accounts = accounts
         app.state.ctx = ctx
         if start_workers:
             ctx.start()
@@ -62,7 +60,8 @@ def create_app(
             logging.getLogger().removeHandler(logs)
 
     app = FastAPI(title="Smartify Kombi", version=__version__, lifespan=lifespan)
-    app.state.session_fingerprint = password_fingerprint(secret_key, settings.password)
+    accounts = AccountService(settings, settings.db_path, secret_key)
+    app.state.accounts = accounts
     app.add_middleware(
         SessionMiddleware,
         secret_key=secret_key,
@@ -89,7 +88,6 @@ def create_app(
 
     for router in (
         system.router,
-        auth.router,
         relays.router,
         sensors.router,
         wifi.router,
@@ -97,6 +95,7 @@ def create_app(
         victron.router,
     ):
         app.include_router(router, prefix="/api")
+    app.include_router(auth.router, prefix="/api")
 
     _mount_frontend(app, settings)
     return app

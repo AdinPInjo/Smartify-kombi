@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from smartify import systemd
 from smartify.config import Settings
@@ -55,6 +56,8 @@ class AppContext:
     victron: VictronDevices
     alerts: AlertService = field(init=False)
     cloud: CloudSync | None = None
+    accounts: Any = None
+    """The dashboard login (``AccountService``), set by the app factory."""
     started_at: float = field(default_factory=time.time)
     workers: list[Worker] = field(default_factory=list)
 

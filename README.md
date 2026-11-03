@@ -53,7 +53,7 @@ pip install -e ".[dev]" && python -m smartify      # API on :8000, simulated van
 cd frontend && npm install && npm run dev            # dashboard on :5173
 ```
 
-Sign in with `admin` / `changeme` (only allowed with simulated hardware).
+Sign in with `admin` / `changeme` (only allowed with simulated hardware). On a real van the dashboard asks you to create a login the first time you open it.
 
 ## How it's built
 

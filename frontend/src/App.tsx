@@ -9,6 +9,7 @@ import { Notifications } from "./pages/Notifications";
 import { Overview } from "./pages/Overview";
 import { Panel } from "./pages/Panel";
 import { Settings } from "./pages/Settings";
+import { Setup } from "./pages/Setup";
 import { SwitchDetail } from "./pages/SwitchDetail";
 import { Switches } from "./pages/Switches";
 import { System } from "./pages/System";
@@ -19,6 +20,7 @@ export function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/setup" element={<Setup />} />
         {/* Full-screen instrument panel for a tablet in the van: no navigation. */}
         <Route
           path="/panel"

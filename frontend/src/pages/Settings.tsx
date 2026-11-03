@@ -27,7 +27,7 @@ export function Settings() {
     <main className="page">
       <PageHeader kicker="Settings" title="Settings" />
       {me.data?.default_credentials && (
-        <div className="notice">You are using the default password. Change SMARTIFY_PASSWORD in .env before using Smartify in the van.</div>
+        <div className="notice">You are using the default development password. Set your own under Account below.</div>
       )}
       <div className="grid">
         <div className="stack" style={{ gap: "var(--gap)" }}>
@@ -35,6 +35,7 @@ export function Settings() {
           <OverviewCardSettings />
         </div>
         <div className="stack" style={{ gap: "var(--gap)" }}>
+          <AccountCard />
           <WaterCalibration />
           <Card label="More">
             <div className="list">
@@ -60,6 +61,103 @@ export function Settings() {
         </div>
       </div>
     </main>
+  );
+}
+
+// --- account ---------------------------------------------------------------------------------
+
+function AccountCard() {
+  const { cloud } = useMode();
+  const me = useMe();
+  const client = useQueryClient();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [repeat, setRepeat] = useState("");
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (cloud) {
+    return (
+      <Card label="Account">
+        <OnlyOnVan what="Changing the van's login" />
+      </Card>
+    );
+  }
+  const reset = () => {
+    setOpen(false);
+    setCurrent("");
+    setPassword("");
+    setRepeat("");
+    setError(null);
+  };
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (password !== repeat) return setError(new Error("The new passwords are not the same."));
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post("/auth/password", {
+        current_password: current,
+        new_password: password,
+        username: username.trim() || undefined,
+      });
+      await client.invalidateQueries({ queryKey: ["me"] });
+      toast("Login changed. Other devices need to sign in again.");
+      reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card label="Account">
+      <div className="row-between">
+        <span>
+          Signed in as <strong>{me.data?.user ?? "…"}</strong>
+        </span>
+        {!open && (
+          <button type="button" className="btn small" onClick={() => { setUsername(me.data?.user ?? ""); setOpen(true); }}>
+            Change login
+          </button>
+        )}
+      </div>
+      {me.data?.login_source === "env" && !open && (
+        <span className="tiny faint">Your password is still in backend/.env. Changing it here moves it to the dashboard, stored safely hashed.</span>
+      )}
+      {open && (
+        <form className="stack" style={{ gap: 12 }} onSubmit={submit}>
+          <Field label="Current password">
+            <input className="input" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" required autoFocus />
+          </Field>
+          <Field label="Username">
+            <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoCapitalize="off" required />
+          </Field>
+          <div className="grid-2">
+            <Field label="New password" hint="At least 8 characters.">
+              <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" minLength={8} required />
+            </Field>
+            <Field label="Repeat new password">
+              <input className="input" type="password" value={repeat} onChange={(e) => setRepeat(e.target.value)} autoComplete="new-password" minLength={8} required />
+            </Field>
+          </div>
+          <ErrorNote error={error} />
+          <div className="row" style={{ gap: 8 }}>
+            <button type="submit" className="btn primary small" disabled={busy}>
+              {busy ? "Saving…" : "Save new login"}
+            </button>
+            <button type="button" className="btn ghost small" onClick={reset}>
+              Cancel
+            </button>
+          </div>
+          <span className="tiny faint">Your other phones and tablets will need to sign in again.</span>
+        </form>
+      )}
+    </Card>
   );
 }
 

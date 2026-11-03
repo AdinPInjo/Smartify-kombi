@@ -8,6 +8,8 @@ export interface Health {
   hardware: "pi" | "mock";
   schema_version: number;
   server_time: number;
+  /** First start: no login yet, show the setup screen. */
+  setup_required?: boolean;
   /** Absent on the Pi; "cloud" on the remote dashboard. */
   mode?: "device" | "cloud";
   device?: { last_seen: number | null; online: boolean; version: string | null };
@@ -16,6 +18,8 @@ export interface Health {
 export interface Me {
   user: string;
   default_credentials: boolean;
+  /** Where the login lives: set in the dashboard, in .env (older installs), or not yet. */
+  login_source?: "dashboard" | "env" | "setup";
 }
 
 export interface Relay {

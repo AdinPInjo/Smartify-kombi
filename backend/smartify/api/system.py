@@ -5,7 +5,7 @@ import shutil
 import time
 from dataclasses import asdict
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 from smartify import __version__
 from smartify.api.deps import Ctx, User
@@ -15,7 +15,7 @@ router = APIRouter(tags=["system"])
 
 
 @router.get("/health")
-def health(ctx: Ctx) -> dict:
+def health(ctx: Ctx, request: Request) -> dict:
     """Public liveness check (no login), for monitoring and the install script."""
     conn = connect(ctx.settings.db_path)
     try:
@@ -28,6 +28,7 @@ def health(ctx: Ctx) -> dict:
         "hardware": ctx.settings.hardware,
         "schema_version": schema_version,
         "server_time": int(time.time()),
+        "setup_required": request.app.state.accounts.setup_required,
     }
 
 
@@ -55,7 +56,7 @@ def system_status(ctx: Ctx, _: User) -> dict:
         "disk_free_bytes": disk.free,
         "disk_total_bytes": disk.total,
         "database_bytes": db_size,
-        "default_credentials": ctx.settings.uses_default_credentials,
+        "default_credentials": ctx.accounts.uses_default_password if ctx.accounts else False,
         "workers": [asdict(w.status()) for w in ctx.workers],
         "cloud": asdict(ctx.cloud.status) if ctx.cloud else None,
     }

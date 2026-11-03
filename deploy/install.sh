@@ -6,8 +6,9 @@
 #
 # Safe to run again: it updates what is there and keeps your backend/.env.
 # Options:
-#   --yes            accept defaults, ask only for the password (or use --password)
-#   --password PASS  dashboard password (skips the question)
+#   --yes            accept all defaults, ask nothing
+#   --password PASS  set the dashboard password now (otherwise the dashboard asks
+#                    for it the first time you open it)
 #   --port N         dashboard port (default 80: http://<hostname>.local)
 #   --no-dashboard   skip installing the web dashboard (API only)
 
@@ -120,15 +121,7 @@ step "Settings (backend/.env)"
 if [[ -f $ENV_FILE ]]; then
   ok "keeping your existing backend/.env"
 else
-  if [[ -z $PASSWORD ]]; then
-    if [[ $YES == 1 ]]; then die "--yes needs --password for a new install"; fi
-    while true; do
-      read -r -s -p "  Dashboard password (at least 8 characters): " PASSWORD </dev/tty; echo
-      read -r -s -p "  Repeat password: " PASSWORD2 </dev/tty; echo
-      [[ ${#PASSWORD} -ge 8 && $PASSWORD == "$PASSWORD2" ]] && break
-      warn "Passwords differ or are too short, try again."
-    done
-  fi
+  if [[ -n $PASSWORD && ${#PASSWORD} -lt 8 ]]; then die "--password needs at least 8 characters"; fi
   SENSORS=$(ask "DHT22 sensors as name:GPIO (comma separated)" "inside:4,outside:17")
   RELAYS=$(ask "Relays as name:GPIO (comma separated)" "heater:25,fan:26")
   GPS=$(ask "GPS module connected? (true/false)" "true")
@@ -140,6 +133,8 @@ SMARTIFY_HARDWARE=pi
 SMARTIFY_PORT=$PORT
 SMARTIFY_FRONTEND_DIR=$REPO/frontend/dist
 
+# The dashboard login is created in the browser on first start (stored hashed).
+# Only set these to skip that, e.g. for scripted installs.
 SMARTIFY_USERNAME=admin
 SMARTIFY_PASSWORD=$PASSWORD
 
@@ -157,7 +152,7 @@ EOF
   umask 022
   chown "$SERVICE_USER": "$ENV_FILE"
   chmod 600 "$ENV_FILE"
-  ok "written (only $SERVICE_USER can read it: it holds your password)"
+  ok "written (only $SERVICE_USER can read it)"
 fi
 
 # --- 5. dashboard -----------------------------------------------------------------------------------
@@ -203,7 +198,8 @@ echo "${BOLD}${GREEN}Installed.${RESET}"
 echo
 echo "  1. Reboot so I2C, the serial port and the group changes take effect:"
 echo "       ${BOLD}sudo reboot${RESET}"
-echo "  2. Then open the dashboard: ${BOLD}$URL${RESET}  (user: admin)"
+echo "  2. Then open the dashboard: ${BOLD}$URL${RESET}"
+echo "     The first time, it asks you to create your login."
 echo "  3. First checks: docs/install.md, section \"After the first boot\"."
 echo
 echo "  Logs:     journalctl -u smartify -f"

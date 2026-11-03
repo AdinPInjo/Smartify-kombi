@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
+import { useHealth } from "@/api/hooks";
 import { Topo } from "@/components/instruments";
 import { ErrorNote, Field } from "@/components/ui";
 
@@ -13,6 +14,7 @@ export function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const health = useHealth();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -30,13 +32,18 @@ export function Login() {
     }
   };
 
+  if (health.data?.setup_required) return <Navigate to="/setup" replace />;
+
   return (
     <div className="shell" style={{ display: "grid", placeItems: "center", padding: 16 }}>
       <Topo />
       <form className="card" onSubmit={submit} style={{ width: "100%", maxWidth: 380, position: "relative", gap: 16 }}>
-        <div className="stack" style={{ gap: 4 }}>
-          <div className="label">Smartify · Kombi</div>
-          <h1 className="page-title">Sign in</h1>
+        <div className="row" style={{ gap: 14 }}>
+          <img src="/logo.svg" alt="" width={56} height={56} />
+          <div className="stack" style={{ gap: 4 }}>
+            <div className="label">Smartify · Kombi</div>
+            <h1 className="page-title">Sign in</h1>
+          </div>
         </div>
         <Field label="Username">
           <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />

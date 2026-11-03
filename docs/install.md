@@ -49,7 +49,6 @@ sudo ./deploy/install.sh
 
 It asks for:
 
-* **Dashboard password**: protects the dashboard. Smartify refuses to run with the default.
 * **DHT22 sensors** as `name:GPIO`: default `inside:4,outside:17`. The names show
   in the dashboard and are used in rules.
 * **Relays** as `name:GPIO`: default `heater:25,fan:26`. Only used the first
@@ -64,7 +63,18 @@ sudo reboot
 
 ## 4. After the first boot
 
-Open **<http://kombi.local>** on your phone (same WiFi) and sign in as `admin`.
+Open **<http://kombi.local>** on your phone (same WiFi). The first time, the
+dashboard welcomes you and asks you to **create your login** (username and
+password). Do this right after installing: until then, whoever opens the
+dashboard first can create it.
+
+Then the setup screen points you to the next steps: alerts on your phone,
+Victron devices, switches and rules, WiFi. All of them are done in the dashboard.
+
+**Forgot the password?** On the Pi run
+`cd ~/smartify-kombi/backend && .venv/bin/python -m smartify reset-login`,
+then open the dashboard to create a new login. You can change the login any
+time under **Settings → Account**.
 
 Check, in this order:
 
@@ -127,7 +137,8 @@ scp -r <user>@kombi.local:smartify-kombi/backend/data ./kombi-backup
 | Problem | Try |
 |---|---|
 | `kombi.local` not found | Use the Pi's IP address (shown in your router or hotspot). Some Android phones don't support `.local`. |
-| Service not running | `journalctl -u smartify -n 50` shows why. "Refusing to start: … changeme" means no password was set in `backend/.env`. |
+| Service not running | `journalctl -u smartify -n 50` shows why. |
+| Dashboard asks to create a login again | The login was reset (`reset-login`) or the database was replaced. Create a new one. |
 | DHT22 always "warming up" | Wrong GPIO in `SMARTIFY_DHT22_SENSORS`, missing pull-up resistor, or a cable longer than ~10 m. |
 | Water level "not responding" | `i2cdetect -y 1` must show `48`. If empty: SDA/SCL swapped or ADS1115 not powered. |
 | GPS "no device" | `ls -l /dev/serial0` must exist (reboot after installing). TX of the GPS goes to GPIO 15 (RX). |

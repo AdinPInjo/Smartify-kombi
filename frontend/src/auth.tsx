@@ -2,12 +2,13 @@ import { useEffect, type ReactNode } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { setUnauthorizedHandler } from "@/api/client";
-import { useMe } from "@/api/hooks";
+import { useHealth, useMe } from "@/api/hooks";
 import { Skeleton } from "@/components/ui";
 
 /** Wraps every page that needs a login; sends the user to /login on any 401. */
 export function RequireLogin({ children }: { children: ReactNode }) {
   const me = useMe();
+  const health = useHealth();
   const location = useLocation();
   const navigate = useNavigate();
   const client = useQueryClient();
@@ -19,6 +20,7 @@ export function RequireLogin({ children }: { children: ReactNode }) {
     });
   }, [client, navigate, location.pathname]);
 
+  if (health.data?.setup_required) return <Navigate to="/setup" replace />;
   if (me.isPending) {
     return (
       <div className="page">
