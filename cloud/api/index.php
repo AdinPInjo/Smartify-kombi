@@ -228,7 +228,7 @@ function cleanup_if_due(): void
 function route(string $method, string $path): mixed
 {
     $seg = array_values(array_filter(explode('/', $path), 'strlen'));
-    $route = $method . ' /' . implode('/', array_map(fn($s, $i) => preg_match('/^[a-z-]+$/', $s) && !($i > 0 && in_array($seg[$i - 1], ['relays', 'rules', 'climate', 'archive', 'devices'], true)) ? $s : '*', $seg, array_keys($seg)));
+    $route = $method . ' /' . implode('/', array_map(fn($s, $i) => preg_match('/^[a-z-]+$/', $s) && !($i > 0 && in_array($seg[$i - 1], ['relays', 'rules', 'climate', 'archive', 'devices', 'scenes'], true)) ? $s : '*', $seg, array_keys($seg)));
     $state = fn(string $key, mixed $default = null) => state()[$key] ?? $default;
 
     switch ($route) {
@@ -325,6 +325,17 @@ function route(string $method, string $path): mixed
             queue('rule_delete', $rule['id'], [], (int)$rule['revision']);
             return array_merge($rule, ['pending' => true]);
 
+        case 'GET /scenes':
+            return $state('scenes', ['scenes' => [], 'icons' => []]);
+        case 'POST /scenes/*/run':
+            $scene = null;
+            foreach ($state('scenes', ['scenes' => []])['scenes'] as $candidate) {
+                if ((string)$candidate['id'] === $seg[1]) $scene = $candidate;
+            }
+            if ($scene === null) throw new HttpError(404, 'scene not found');
+            queue('scene_run', (string)$scene['id'], [], null, (int)(config()['command_ttl_seconds'] ?? 900));
+            return ['scene' => $scene, 'applied' => [], 'skipped' => [], 'queued' => true];
+
         case 'GET /climate':
             return $state('climate', ['sensors' => []]);
         case 'GET /climate/*/history':
@@ -405,6 +416,9 @@ function route(string $method, string $path): mixed
 
         case 'POST /relays':
         case 'DELETE /relays/*':
+        case 'POST /scenes':
+        case 'PATCH /scenes/*':
+        case 'DELETE /scenes/*':
         case 'POST /water/calibrate':
         case 'GET /logs':
         case 'GET /wifi':

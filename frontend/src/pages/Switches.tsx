@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useCreateRelay, useMode, useRelays } from "@/api/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { RelayControl } from "@/components/RelayControl";
+import { ScenesCard } from "@/components/Scenes";
 import { Dialog, ErrorNote, Field, Skeleton, useToast } from "@/components/ui";
 
 export function Switches() {
@@ -26,6 +27,7 @@ export function Switches() {
       <div className="grid">
         {relays.data?.map((relay) => <RelayControl key={relay.id} relay={relay} large />)}
       </div>
+      <ScenesCard />
       {adding && <AddRelayDialog onClose={() => setAdding(false)} />}
     </main>
   );

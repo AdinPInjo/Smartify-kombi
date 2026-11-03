@@ -1,9 +1,9 @@
 // Always-on instrument panel for a tablet mounted in the van (open /panel).
 // Landscape first; keeps the screen awake where the browser allows it.
 
-import { Car, Expand, SunMedium, Zap } from "lucide-react";
+import { Car, Expand, LayoutGrid, SunMedium, X, Zap } from "lucide-react";
 import { useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   useClimate,
   useClimateHistory,
@@ -17,11 +17,30 @@ import {
   useWifi,
 } from "@/api/hooks";
 import { batteryColor, LevelBar, LineChart, RingGauge, Topo } from "@/components/instruments";
+import { DashGrid } from "@/components/DashGrid";
 import { RelayControl } from "@/components/RelayControl";
+import { SceneButtons } from "@/components/Scenes";
 import { TrackMap } from "@/components/TrackMap";
 import { Num } from "@/components/ui";
 import { coords, duration, fmt, humanize, signed, weatherText } from "@/lib/format";
+import { useDashLayout, type DashDefinition } from "@/lib/dashLayout";
 import { useNow } from "@/lib/useNow";
+
+type PanelCardId = "battery" | "cabin" | "switches" | "water" | "scenes" | "map";
+
+// The tablet's own arrangement, separate from the Overview's.
+const PANEL: DashDefinition<PanelCardId> = {
+  key: "smartify.panel.v1",
+  cards: [
+    { id: "battery", label: "House battery", w: 2, h: 2 },
+    { id: "cabin", label: "Cabin", w: 2, h: 1 },
+    { id: "switches", label: "Switches", w: 2, h: 2 },
+    { id: "water", label: "Fresh water", w: 2, h: 1 },
+    { id: "scenes", label: "Scenes", w: 4, h: 1 },
+    { id: "map", label: "Map", w: 2, h: 1 },
+  ],
+};
+const LABELS = Object.fromEntries(PANEL.cards.map((c) => [c.id, c.label])) as Record<PanelCardId, string>;
 
 function useWakeLock() {
   useEffect(() => {
@@ -52,6 +71,15 @@ export function Panel() {
   const weather = useWeather();
   const gps = useGps();
   const fix = gps.data?.fix ?? null;
+  const navigate = useNavigate();
+  const { layout, save, reset } = useDashLayout(PANEL);
+  const [params, setParams] = useSearchParams();
+  const editing = params.get("edit") === "1";
+  const setEditing = (on: boolean) => setParams(on ? { edit: "1" } : {}, { replace: true });
+  const exit = () => {
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    navigate("/");
+  };
 
   return (
     <div className="shell panel">
@@ -60,43 +88,82 @@ export function Panel() {
         <div className="row wrap" style={{ alignItems: "baseline", gap: 18 }}>
           <span className="label">Smartify · Kombi</span>
           <span className="muted">
-            {weather.data?.available
-              ? `${fmt(weather.data.temperature_c, 0)}° ${weatherText(weather.data.weather_code)}`
-              : ""}
-            {fix?.altitude_m != null ? ` · ${Math.round(fix.altitude_m)} m` : ""}
+            {editing
+              ? "Drag cards by their handle, pick a width and height. Saved on this tablet."
+              : `${weather.data?.available ? `${fmt(weather.data.temperature_c, 0)}° ${weatherText(weather.data.weather_code)}` : ""}${
+                  fix?.altitude_m != null ? ` · ${Math.round(fix.altitude_m)} m` : ""
+                }`}
           </span>
         </div>
-        <div className="row">
-          <span className="num" style={{ fontSize: 44 }}>
-            {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </span>
-          <button
-            type="button"
-            className="btn ghost"
-            aria-label="Full screen"
-            onClick={() => document.documentElement.requestFullscreen?.().catch(() => {})}
-          >
-            <Expand size={20} aria-hidden="true" />
-          </button>
-        </div>
+        {editing ? (
+          <div className="row" style={{ gap: 8 }}>
+            <button type="button" className="btn ghost" onClick={() => window.confirm("Back to the standard panel layout?") && reset()}>
+              Reset
+            </button>
+            <button type="button" className="btn primary" onClick={() => setEditing(false)}>
+              Done
+            </button>
+          </div>
+        ) : (
+          <div className="row" style={{ gap: 6 }}>
+            <span className="num" style={{ fontSize: 44, marginRight: 8 }}>
+              {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            <button type="button" className="btn ghost" aria-label="Arrange the panel" onClick={() => setEditing(true)}>
+              <LayoutGrid size={20} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="btn ghost"
+              aria-label="Full screen"
+              onClick={() => document.documentElement.requestFullscreen?.().catch(() => {})}
+            >
+              <Expand size={20} aria-hidden="true" />
+            </button>
+            <button type="button" className="btn" onClick={exit}>
+              <X size={20} aria-hidden="true" /> Exit
+            </button>
+          </div>
+        )}
       </header>
 
-      <div className="panel-grid">
-        <BatteryColumn />
-        <div className="stack" style={{ gap: "var(--gap)", minWidth: 0 }}>
-          <CabinCard />
-          <WaterBar />
-        </div>
-        <div className="stack" style={{ gap: "var(--gap)", minWidth: 0 }}>
-          <Switches />
-          <section className="card flush" style={{ flex: 1, minHeight: 160 }}>
-            <PanelMap />
-          </section>
-        </div>
-      </div>
+      <DashGrid
+        className="panel-dash"
+        layout={layout}
+        save={save}
+        editing={editing}
+        labels={LABELS}
+        render={(card) => <PanelCard id={card.id} />}
+      />
       <StatusBar />
     </div>
   );
+}
+
+function PanelCard({ id }: { id: PanelCardId }) {
+  switch (id) {
+    case "battery":
+      return <BatteryColumn />;
+    case "cabin":
+      return <CabinCard />;
+    case "switches":
+      return <Switches />;
+    case "water":
+      return <WaterBar />;
+    case "scenes":
+      return (
+        <section className="card">
+          <span className="label">Scenes</span>
+          <SceneButtons large />
+        </section>
+      );
+    case "map":
+      return (
+        <section className="card flush">
+          <PanelMap />
+        </section>
+      );
+  }
 }
 
 function BatteryColumn() {
@@ -273,7 +340,6 @@ function StatusBar() {
       <span style={{ marginLeft: "auto" }}>
         PI {fmt(system.data?.cpu_temperature_c ?? null, 0)} °C · UP {system.data ? duration(system.data.uptime_seconds).toUpperCase() : "–"}
       </span>
-      <Link to="/" className="muted">EXIT PANEL</Link>
     </footer>
   );
 }

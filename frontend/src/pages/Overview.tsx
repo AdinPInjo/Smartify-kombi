@@ -1,5 +1,4 @@
-import { ArrowLeft, ArrowRight, Car, EyeOff, GripVertical, LayoutGrid, Plus, SunMedium, Zap } from "lucide-react";
-import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { Car, LayoutGrid, SunMedium, Zap } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   useClimate,
@@ -12,26 +11,18 @@ import {
   useWater,
   useWeather,
 } from "@/api/hooks";
+import { DashGrid } from "@/components/DashGrid";
 import { batteryColor, LineChart, RingGauge, Tank } from "@/components/instruments";
 import { PageHeader } from "@/components/PageHeader";
 import { RelayControl } from "@/components/RelayControl";
+import { SceneButtons } from "@/components/Scenes";
 import { TrackMap } from "@/components/TrackMap";
 import { Card, Num, Skeleton } from "@/components/ui";
 import { coords, duration, fmt, humanize, localDay, signed, weatherText } from "@/lib/format";
-import {
-  change,
-  moveTo,
-  OVERVIEW_CARDS,
-  step,
-  useOverviewLayout,
-  WIDTHS,
-  type CardLayout,
-  type OverviewCardId,
-  type OverviewLayout,
-} from "@/lib/overviewLayout";
+import { OVERVIEW, useOverviewLayout, type OverviewCardId } from "@/lib/overviewLayout";
 import { useNow } from "@/lib/useNow";
 
-const LABEL = Object.fromEntries(OVERVIEW_CARDS.map((c) => [c.id, c.label])) as Record<OverviewCardId, string>;
+const LABEL = Object.fromEntries(OVERVIEW.cards.map((c) => [c.id, c.label])) as Record<OverviewCardId, string>;
 
 export function Overview() {
   const { layout, save, reset } = useOverviewLayout();
@@ -41,9 +32,6 @@ export function Overview() {
   const gps = useGps();
   const now = useNow();
   const fix = gps.data?.fix;
-  const drag = useDrag(layout, save);
-  const visible = layout.cards.filter((c) => !c.hidden);
-  const hidden = layout.cards.filter((c) => c.hidden);
 
   return (
     <main className="page">
@@ -84,146 +72,19 @@ export function Overview() {
           )
         }
       />
-      <div className={`dash ${editing ? "editing" : ""}`}>
-        {visible.map((card, index) => (
-          <div
-            key={card.id}
-            data-card={card.id}
-            className={`dash-item ${drag.dragging === card.id ? "dragging" : ""}`}
-            style={{ "--w": card.w, "--wm": card.w >= 4 ? 2 : 1, "--h": card.h } as CSSProperties}
-          >
-            <OverviewCard id={card.id} tall={card.h === 2} />
-            {editing && (
-              <EditBar
-                card={card}
-                first={index === 0}
-                last={index === visible.length - 1}
-                onChange={(values) => save(change(layout, card.id, values))}
-                onStep={(direction) => save(step(layout, card.id, direction))}
-                handle={drag.handle(card.id)}
-              />
-            )}
-          </div>
-        ))}
-      </div>
-      {editing && hidden.length > 0 && (
-        <div className="row wrap" style={{ gap: 8 }}>
-          <span className="small muted">Hidden:</span>
-          {hidden.map((card) => (
-            <button key={card.id} type="button" className="btn small" onClick={() => save(change(layout, card.id, { hidden: false }))}>
-              <Plus size={16} aria-hidden="true" /> {LABEL[card.id]}
-            </button>
-          ))}
-        </div>
-      )}
+      <DashGrid
+        layout={layout}
+        save={save}
+        editing={editing}
+        labels={LABEL}
+        render={(card) => <OverviewCard id={card.id} tall={card.h === 2} />}
+      />
       {!editing && (
         <button type="button" className="btn small ghost" style={{ alignSelf: "center" }} onClick={() => setEditing(true)}>
           Customize overview
         </button>
       )}
     </main>
-  );
-}
-
-/** Drag a card by its handle (mouse, finger or pen); the others make room live. */
-function useDrag(layout: OverviewLayout, save: (layout: OverviewLayout) => void) {
-  const [dragging, setDragging] = useState<OverviewCardId | null>(null);
-  const latest = useRef(layout);
-  latest.current = layout;
-  const lastTarget = useRef<string | null>(null);
-
-  const handle = (id: OverviewCardId) => ({
-    onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
-      event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      lastTarget.current = null;
-      setDragging(id);
-    },
-    onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
-      if (dragging !== id) return;
-      // Scroll when dragging near the top or bottom edge of the screen.
-      if (event.clientY < 70) window.scrollBy(0, -14);
-      else if (event.clientY > window.innerHeight - 110) window.scrollBy(0, 14);
-      const over = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-card]");
-      const target = over?.dataset.card as OverviewCardId | undefined;
-      if (!target || target === id) {
-        lastTarget.current = null;
-        return;
-      }
-      // After a swap the other card may now sit under the finger: don't swap back.
-      if (target === lastTarget.current) return;
-      lastTarget.current = target;
-      save(moveTo(latest.current, id, target));
-    },
-    onPointerUp: () => setDragging(null),
-    onPointerCancel: () => setDragging(null),
-  });
-  return { dragging, handle };
-}
-
-function EditBar({
-  card,
-  first,
-  last,
-  onChange,
-  onStep,
-  handle,
-}: {
-  card: CardLayout;
-  first: boolean;
-  last: boolean;
-  onChange: (values: Partial<Omit<CardLayout, "id">>) => void;
-  onStep: (direction: -1 | 1) => void;
-  handle: ReturnType<ReturnType<typeof useDrag>["handle"]>;
-}) {
-  const label = LABEL[card.id];
-  return (
-    <div className="dash-edit" role="group" aria-label={`${label}: layout`}>
-      <div className="dash-edit-top">
-        <button type="button" className="dash-handle" aria-label={`Drag ${label}`} {...handle}>
-          <GripVertical size={20} aria-hidden="true" />
-        </button>
-        <strong className="small grow" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {label}
-        </strong>
-        <button type="button" className="dash-icon" aria-label={`Move ${label} earlier`} disabled={first} onClick={() => onStep(-1)}>
-          <ArrowLeft size={18} aria-hidden="true" />
-        </button>
-        <button type="button" className="dash-icon" aria-label={`Move ${label} later`} disabled={last} onClick={() => onStep(1)}>
-          <ArrowRight size={18} aria-hidden="true" />
-        </button>
-        <button type="button" className="dash-icon" aria-label={`Hide ${label}`} onClick={() => onChange({ hidden: true })}>
-          <EyeOff size={18} aria-hidden="true" />
-        </button>
-      </div>
-      <div className="dash-options" role="group" aria-label="Width">
-        {WIDTHS.map((width) => (
-          <button
-            key={width.value}
-            type="button"
-            className={card.w === width.value ? "on" : ""}
-            aria-pressed={card.w === width.value}
-            aria-label={`Width: ${width.name}`}
-            onClick={() => onChange({ w: width.value })}
-          >
-            {width.label}
-          </button>
-        ))}
-      </div>
-      <div className="dash-options" role="group" aria-label="Height">
-        {([1, 2] as const).map((h) => (
-          <button
-            key={h}
-            type="button"
-            className={card.h === h ? "on" : ""}
-            aria-pressed={card.h === h}
-            onClick={() => onChange({ h })}
-          >
-            {h === 1 ? "1 row" : "2 rows"}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -237,6 +98,12 @@ function OverviewCard({ id, tall }: { id: OverviewCardId; tall: boolean }) {
       return <WaterCard />;
     case "charging":
       return <ChargingCard />;
+    case "scenes":
+      return (
+        <Card label="Scenes" action={<Link to="/switches#scenes" className="small">Edit ›</Link>}>
+          <SceneButtons />
+        </Card>
+      );
     case "switches":
       return <SwitchesCard />;
     case "map":

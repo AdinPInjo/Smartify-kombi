@@ -286,6 +286,8 @@ def apply_command(ctx: Any, command: dict[str, Any]) -> None:
         )
     elif kind == "relay_auto":
         ctx.relays.set_auto(target)
+    elif kind == "scene_run":
+        ctx.scenes.run(int(target), source="remote")
     elif kind == "relay_update":
         check_revision(ctx.relays.get(target).revision, "This relay")
         ctx.relays.update(target, payload)

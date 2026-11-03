@@ -7,6 +7,18 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.6.0 - 2026-11-04
+
+### Added
+- Scenes: one tap switches several relays, e.g. "Night" (heater on its rules, fan off) or
+  "Leaving" (everything off). Make up to 8 under Switches → Scenes; they appear as big
+  buttons on the tablet panel and as an overview card, and work from the remote dashboard.
+- The tablet panel can be arranged like the overview: tap the grid icon, drag cards, pick
+  widths and heights. The tablet keeps its own layout.
+
+### Changed
+- The tablet panel has a clear Exit button at the top.
+
 ## 0.5.1 - 2026-11-04
 
 ### Added

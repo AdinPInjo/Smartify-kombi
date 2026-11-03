@@ -17,6 +17,7 @@ from smartify.api import (
     cloud,
     notifications,
     relays,
+    scenes,
     sensors,
     system,
     updates,
@@ -105,6 +106,7 @@ def create_app(
         victron.router,
         cloud.router,
         updates.router,
+        scenes.router,
     ):
         app.include_router(router, prefix="/api")
     app.include_router(auth.router, prefix="/api")

@@ -46,7 +46,7 @@ from smartify.services.rules import RuleService
 log = logging.getLogger(__name__)
 
 State = Literal["on", "off"]
-Source = Literal["boot", "shutdown", "manual", "rule", "auto", "remote"]
+Source = Literal["boot", "shutdown", "manual", "rule", "auto", "remote", "scene"]
 
 # Pins that may not drive relays.
 RESERVED_PINS = {

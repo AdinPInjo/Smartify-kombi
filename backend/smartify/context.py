@@ -29,6 +29,7 @@ from smartify.services.maintenance import backup, check_integrity, prune_history
 from smartify.services.notify import NotificationService
 from smartify.services.relays import RelayService
 from smartify.services.rules import RuleService
+from smartify.services.scenes import SceneService
 from smartify.services.snapshot import build_state
 from smartify.services.trips import TripService
 from smartify.services.updates import UpdateService
@@ -59,6 +60,7 @@ class AppContext:
     victron: VictronDevices
     alerts: AlertService = field(init=False)
     updates: UpdateService = field(init=False)
+    scenes: SceneService = field(init=False)
     cloud: CloudSync | None = None
     cloud_store: CloudConnectionStore | None = None
     cloud_transport: Any = None
@@ -124,6 +126,7 @@ class AppContext:
             victron=victron,
         )
         ctx.alerts = AlertService(ctx, notifications, db)
+        ctx.scenes = SceneService(db, ctx.relays)
 
         def moving() -> bool:
             speed = gps.metric(GPS_SENSOR, "speed").value if gps.enabled else None
