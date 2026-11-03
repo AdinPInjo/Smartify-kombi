@@ -10,6 +10,7 @@ import { Notifications } from "./pages/Notifications";
 import { Overview } from "./pages/Overview";
 import { Panel } from "./pages/Panel";
 import { Settings } from "./pages/Settings";
+import { Changelog } from "./pages/Changelog";
 import { Setup } from "./pages/Setup";
 import { SwitchDetail } from "./pages/SwitchDetail";
 import { Switches } from "./pages/Switches";
@@ -48,6 +49,7 @@ export function App() {
           <Route path="notifications" element={<Notifications />} />
           <Route path="settings" element={<Settings />} />
           <Route path="system" element={<System />} />
+          <Route path="changelog" element={<Changelog />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

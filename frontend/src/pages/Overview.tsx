@@ -1,5 +1,6 @@
-import { Car, SunMedium, Zap } from "lucide-react";
-import { Link } from "react-router-dom";
+import { ArrowLeft, ArrowRight, Car, EyeOff, GripVertical, LayoutGrid, Plus, SunMedium, Zap } from "lucide-react";
+import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   useClimate,
   useClimateHistory,
@@ -17,68 +18,219 @@ import { RelayControl } from "@/components/RelayControl";
 import { TrackMap } from "@/components/TrackMap";
 import { Card, Num, Skeleton } from "@/components/ui";
 import { coords, duration, fmt, humanize, localDay, signed, weatherText } from "@/lib/format";
-import { useOverviewLayout, type OverviewCardId } from "@/lib/overviewLayout";
+import {
+  change,
+  moveTo,
+  OVERVIEW_CARDS,
+  step,
+  useOverviewLayout,
+  WIDTHS,
+  type CardLayout,
+  type OverviewCardId,
+  type OverviewLayout,
+} from "@/lib/overviewLayout";
 import { useNow } from "@/lib/useNow";
 
+const LABEL = Object.fromEntries(OVERVIEW_CARDS.map((c) => [c.id, c.label])) as Record<OverviewCardId, string>;
+
 export function Overview() {
-  const { layout } = useOverviewLayout();
+  const { layout, save, reset } = useOverviewLayout();
+  const [params, setParams] = useSearchParams();
+  const editing = params.get("edit") === "1";
+  const setEditing = (on: boolean) => setParams(on ? { edit: "1" } : {}, { replace: true });
   const gps = useGps();
   const now = useNow();
   const fix = gps.data?.fix;
-  const visible = layout.order.filter((id) => !layout.hidden.includes(id));
-  // Battery and water sit side by side when both are shown next to each other.
-  const rows: OverviewCardId[][] = [];
-  for (const id of visible) {
-    const last = rows[rows.length - 1];
-    if (last && last.length === 1 && isHalf(last[0]) && isHalf(id)) last.push(id);
-    else rows.push([id]);
-  }
+  const drag = useDrag(layout, save);
+  const visible = layout.cards.filter((c) => !c.hidden);
+  const hidden = layout.cards.filter((c) => c.hidden);
 
   return (
     <main className="page">
       <PageHeader
         kicker="Smartify · Kombi"
-        title="Kombi"
+        title={editing ? "Customize" : "Kombi"}
         sub={
-          fix
-            ? `${fix.altitude_m !== null ? `${Math.round(fix.altitude_m)} m · ` : ""}${fix.satellites ?? "–"} sats · ${
-                (fix.speed_kmh ?? 0) >= 3 ? `${Math.round(fix.speed_kmh ?? 0)} km/h` : "parked"
-              }`
-            : gps.data?.status === "disabled"
-              ? "GPS off"
-              : "Waiting for GPS"
+          editing
+            ? "Drag cards by their handle, pick a width and height."
+            : fix
+              ? `${fix.altitude_m !== null ? `${Math.round(fix.altitude_m)} m · ` : ""}${fix.satellites ?? "–"} sats · ${
+                  (fix.speed_kmh ?? 0) >= 3 ? `${Math.round(fix.speed_kmh ?? 0)} km/h` : "parked"
+                }`
+              : gps.data?.status === "disabled"
+                ? "GPS off"
+                : "Waiting for GPS"
         }
         right={
-          <span className="chip">
-            <span className="dot ok" />
-            {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </span>
+          editing ? (
+            <div className="row" style={{ gap: 6 }}>
+              <button type="button" className="btn small ghost" onClick={() => window.confirm("Back to the standard layout?") && reset()}>
+                Reset
+              </button>
+              <button type="button" className="btn small primary" onClick={() => setEditing(false)}>
+                Done
+              </button>
+            </div>
+          ) : (
+            <div className="row" style={{ gap: 6 }}>
+              <span className="chip">
+                <span className="dot ok" />
+                {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+              <button type="button" className="btn small ghost icon-only" aria-label="Customize the overview" onClick={() => setEditing(true)}>
+                <LayoutGrid size={18} aria-hidden="true" />
+              </button>
+            </div>
+          )
         }
       />
-      {rows.map((row) =>
-        row.length === 2 ? (
-          <div className="grid-2" key={row.join()}>
-            {row.map((id) => (
-              <OverviewCard key={id} id={id} />
-            ))}
+      <div className={`dash ${editing ? "editing" : ""}`}>
+        {visible.map((card, index) => (
+          <div
+            key={card.id}
+            data-card={card.id}
+            className={`dash-item ${drag.dragging === card.id ? "dragging" : ""}`}
+            style={{ "--w": card.w, "--wm": card.w >= 4 ? 2 : 1, "--h": card.h } as CSSProperties}
+          >
+            <OverviewCard id={card.id} tall={card.h === 2} />
+            {editing && (
+              <EditBar
+                card={card}
+                first={index === 0}
+                last={index === visible.length - 1}
+                onChange={(values) => save(change(layout, card.id, values))}
+                onStep={(direction) => save(step(layout, card.id, direction))}
+                handle={drag.handle(card.id)}
+              />
+            )}
           </div>
-        ) : (
-          <OverviewCard key={row[0]} id={row[0]} />
-        ),
+        ))}
+      </div>
+      {editing && hidden.length > 0 && (
+        <div className="row wrap" style={{ gap: 8 }}>
+          <span className="small muted">Hidden:</span>
+          {hidden.map((card) => (
+            <button key={card.id} type="button" className="btn small" onClick={() => save(change(layout, card.id, { hidden: false }))}>
+              <Plus size={16} aria-hidden="true" /> {LABEL[card.id]}
+            </button>
+          ))}
+        </div>
       )}
-      <Link to="/settings#overview" className="small muted" style={{ alignSelf: "center", padding: 12 }}>
-        Arrange cards
-      </Link>
+      {!editing && (
+        <button type="button" className="btn small ghost" style={{ alignSelf: "center" }} onClick={() => setEditing(true)}>
+          Customize overview
+        </button>
+      )}
     </main>
   );
 }
 
-const isHalf = (id: OverviewCardId) => id === "battery" || id === "water";
+/** Drag a card by its handle (mouse, finger or pen); the others make room live. */
+function useDrag(layout: OverviewLayout, save: (layout: OverviewLayout) => void) {
+  const [dragging, setDragging] = useState<OverviewCardId | null>(null);
+  const latest = useRef(layout);
+  latest.current = layout;
+  const lastTarget = useRef<string | null>(null);
 
-function OverviewCard({ id }: { id: OverviewCardId }) {
+  const handle = (id: OverviewCardId) => ({
+    onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      lastTarget.current = null;
+      setDragging(id);
+    },
+    onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
+      if (dragging !== id) return;
+      // Scroll when dragging near the top or bottom edge of the screen.
+      if (event.clientY < 70) window.scrollBy(0, -14);
+      else if (event.clientY > window.innerHeight - 110) window.scrollBy(0, 14);
+      const over = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-card]");
+      const target = over?.dataset.card as OverviewCardId | undefined;
+      if (!target || target === id) {
+        lastTarget.current = null;
+        return;
+      }
+      // After a swap the other card may now sit under the finger: don't swap back.
+      if (target === lastTarget.current) return;
+      lastTarget.current = target;
+      save(moveTo(latest.current, id, target));
+    },
+    onPointerUp: () => setDragging(null),
+    onPointerCancel: () => setDragging(null),
+  });
+  return { dragging, handle };
+}
+
+function EditBar({
+  card,
+  first,
+  last,
+  onChange,
+  onStep,
+  handle,
+}: {
+  card: CardLayout;
+  first: boolean;
+  last: boolean;
+  onChange: (values: Partial<Omit<CardLayout, "id">>) => void;
+  onStep: (direction: -1 | 1) => void;
+  handle: ReturnType<ReturnType<typeof useDrag>["handle"]>;
+}) {
+  const label = LABEL[card.id];
+  return (
+    <div className="dash-edit" role="group" aria-label={`${label}: layout`}>
+      <div className="dash-edit-top">
+        <button type="button" className="dash-handle" aria-label={`Drag ${label}`} {...handle}>
+          <GripVertical size={20} aria-hidden="true" />
+        </button>
+        <strong className="small grow" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {label}
+        </strong>
+        <button type="button" className="dash-icon" aria-label={`Move ${label} earlier`} disabled={first} onClick={() => onStep(-1)}>
+          <ArrowLeft size={18} aria-hidden="true" />
+        </button>
+        <button type="button" className="dash-icon" aria-label={`Move ${label} later`} disabled={last} onClick={() => onStep(1)}>
+          <ArrowRight size={18} aria-hidden="true" />
+        </button>
+        <button type="button" className="dash-icon" aria-label={`Hide ${label}`} onClick={() => onChange({ hidden: true })}>
+          <EyeOff size={18} aria-hidden="true" />
+        </button>
+      </div>
+      <div className="dash-options" role="group" aria-label="Width">
+        {WIDTHS.map((width) => (
+          <button
+            key={width.value}
+            type="button"
+            className={card.w === width.value ? "on" : ""}
+            aria-pressed={card.w === width.value}
+            aria-label={`Width: ${width.name}`}
+            onClick={() => onChange({ w: width.value })}
+          >
+            {width.label}
+          </button>
+        ))}
+      </div>
+      <div className="dash-options" role="group" aria-label="Height">
+        {([1, 2] as const).map((h) => (
+          <button
+            key={h}
+            type="button"
+            className={card.h === h ? "on" : ""}
+            aria-pressed={card.h === h}
+            onClick={() => onChange({ h })}
+          >
+            {h === 1 ? "1 row" : "2 rows"}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OverviewCard({ id, tall }: { id: OverviewCardId; tall: boolean }) {
   switch (id) {
     case "climate":
-      return <ClimateCard />;
+      return <ClimateCard tall={tall} />;
     case "battery":
       return <BatteryCard />;
     case "water":
@@ -88,11 +240,11 @@ function OverviewCard({ id }: { id: OverviewCardId }) {
     case "switches":
       return <SwitchesCard />;
     case "map":
-      return <MapCard />;
+      return <MapCard tall={tall} />;
   }
 }
 
-function ClimateCard() {
+function ClimateCard({ tall }: { tall: boolean }) {
   const climate = useClimate();
   const weather = useWeather();
   const [inside, outside] = climate.data ?? [];
@@ -129,7 +281,7 @@ function ClimateCard() {
       <LineChart
         label="Inside temperature, last 6 hours"
         unit="°C"
-        height={48}
+        height={tall ? 200 : 48}
         times={points.map((p) => p.created_at)}
         series={[{ label: "Inside", values: points.map((p) => p.temperature_c), color: "var(--accent)", fill: true }]}
       />
@@ -209,7 +361,7 @@ function ChargingCard() {
     return (
       <Card label="Charging">
         <p className="muted small" style={{ margin: 0 }}>
-          No Victron data. Add your devices in <code>.env</code> (SMARTIFY_VICTRON_DEVICES).
+          No Victron data yet. <Link to="/energy/devices">Add your Victron devices ›</Link>
         </p>
       </Card>
     );
@@ -251,7 +403,7 @@ function SwitchesCard() {
   );
 }
 
-function MapCard() {
+function MapCard({ tall }: { tall: boolean }) {
   const gps = useGps();
   const track = useTrack(24);
   const fix = gps.data?.fix ?? null;
@@ -260,7 +412,7 @@ function MapCard() {
       <TrackMap
         points={track.data ?? []}
         position={fix}
-        height={190}
+        height={tall ? 470 : 190}
         interactive={false}
         label="Map of the last 24 hours with the current position"
       />

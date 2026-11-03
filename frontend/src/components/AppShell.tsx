@@ -1,6 +1,6 @@
 import { Bell, Gauge, Map, Settings, SunMedium, Thermometer, ToggleRight } from "lucide-react";
-import { NavLink, Outlet } from "react-router-dom";
-import { useMode, useNotificationSettings } from "@/api/hooks";
+import { Link, NavLink, Outlet } from "react-router-dom";
+import { useHealth, useMode, useNotificationSettings } from "@/api/hooks";
 import { Topo } from "./instruments";
 
 const NAV = [
@@ -14,6 +14,7 @@ const NAV = [
 
 export function AppShell() {
   const { cloud, ready } = useMode();
+  const version = useHealth().data?.version ?? __APP_VERSION__;
   const notifications = useNotificationSettings(ready && !cloud);
   // A dot on the Alerts tab until the van can reach a phone.
   const needsSetup = notifications.data !== undefined && notifications.data.active_channels.length === 0;
@@ -34,6 +35,10 @@ export function AppShell() {
           <Settings size={22} strokeWidth={2} aria-hidden="true" />
           Settings
         </NavLink>
+        <Link to="/changelog" className="nav-version" title="What's new">
+          Smartify {version}
+          {cloud ? " · remote" : ""}
+        </Link>
       </nav>
     </div>
   );

@@ -1,11 +1,14 @@
 // Settings → Updates: what's new, install it, or go back to an earlier version.
 // The same card on the van and on the remote dashboard (each updates itself).
 import { CheckCircle2, Download, Loader2, RotateCcw } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { useMode } from "@/api/hooks";
+import { Notes } from "./Notes";
 import { ErrorNote, Segmented, useErrorToast, useToast } from "./ui";
+import { ApiError } from "@/api/client";
 import { ago } from "@/lib/format";
 
 type Mode = "off" | "notify" | "auto";
@@ -56,51 +59,6 @@ function newer(a: string, b: string): boolean {
 function date(value: string | null): string {
   if (!value) return "";
   return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-}
-
-/** The changelog's small Markdown: "### Heading", "- item" (wrapped lines continue it), `code`. */
-export function Notes({ text }: { text: string }) {
-  const blocks: ReactNode[] = [];
-  let items: string[] = [];
-  const inline = (line: string) =>
-    line.split(/(`[^`]+`)/).map((part, i) => (part.startsWith("`") && part.endsWith("`") ? <code key={i}>{part.slice(1, -1)}</code> : part));
-  const flush = () => {
-    if (items.length) {
-      blocks.push(
-        <ul key={blocks.length} className="notes-list">
-          {items.map((item, i) => (
-            <li key={i}>{inline(item)}</li>
-          ))}
-        </ul>,
-      );
-      items = [];
-    }
-  };
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
-    if (!line) continue;
-    if (line.startsWith("### ")) {
-      flush();
-      blocks.push(
-        <div key={blocks.length} className="label" style={{ marginTop: 6 }}>
-          {line.slice(4)}
-        </div>,
-      );
-    } else if (line.startsWith("- ")) {
-      items.push(line.slice(2));
-    } else if (items.length && raw.startsWith("  ")) {
-      items[items.length - 1] += ` ${line}`;
-    } else {
-      flush();
-      blocks.push(
-        <p key={blocks.length} className="small" style={{ margin: 0 }}>
-          {inline(line)}
-        </p>,
-      );
-    }
-  }
-  flush();
-  return <div className="stack small" style={{ gap: 4 }}>{blocks}</div>;
 }
 
 export function UpdatesCard() {
@@ -171,7 +129,17 @@ export function UpdatesCard() {
     return (
       <section id="updates" className="card">
         <h2 className="label">Updates</h2>
-        {view.error ? <ErrorNote error={view.error} /> : <span className="small muted">Loading…</span>}
+        {view.error instanceof ApiError && view.error.status === 404 ? (
+          <span className="small muted">
+            {cloud
+              ? "This remote dashboard can't update itself yet: upload installer.php from the newest release once."
+              : "Updates turn on after Smartify restarts. On the Pi: sudo systemctl restart smartify"}
+          </span>
+        ) : view.error ? (
+          <ErrorNote error={view.error} />
+        ) : (
+          <span className="small muted">Loading…</span>
+        )}
       </section>
     );
   }
@@ -213,7 +181,12 @@ export function UpdatesCard() {
           {check.isPending ? "Checking…" : "Check now"}
         </button>
       </div>
-      {v.check_error && <span className="tiny c-alert">Last check: {v.check_error}</span>}
+      {v.check_error &&
+        (v.check_error.startsWith("no release") ? (
+          <span className="tiny faint">No new releases published yet.</span>
+        ) : (
+          <span className="tiny c-alert">Last check: {v.check_error}</span>
+        ))}
 
       <Segmented<Mode>
         label="Updates"
@@ -277,6 +250,10 @@ export function UpdatesCard() {
           Your remote dashboard runs {v.remote.version}. Update it there, in its Settings → Updates.
         </span>
       )}
+
+      <Link to="/changelog" className="small">
+        What's new: the full changelog ›
+      </Link>
 
       {v.versions.length > 0 && (
         <details>

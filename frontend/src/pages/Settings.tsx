@@ -21,7 +21,6 @@ import { UpdatesCard } from "@/components/UpdatesCard";
 import { OnlyOnVan } from "@/components/RemoteBanner";
 import { Card, Dialog, ErrorNote, Field, Segmented, useErrorToast, useToast } from "@/components/ui";
 import { fmt } from "@/lib/format";
-import { OVERVIEW_CARDS, useOverviewLayout } from "@/lib/overviewLayout";
 
 export function Settings() {
   const me = useMe();
@@ -35,7 +34,6 @@ export function Settings() {
         <div className="stack" style={{ gap: "var(--gap)" }}>
           <WifiCard />
           <RemoteDashboardCard />
-          <OverviewCardSettings />
         </div>
         <div className="stack" style={{ gap: "var(--gap)" }}>
           <AccountCard />
@@ -49,6 +47,14 @@ export function Settings() {
               </Link>
               <Link to="/energy/devices" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
                 <span>Victron devices</span>
+                <span className="muted">›</span>
+              </Link>
+              <Link to="/?edit=1" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
+                <span>Customize the overview</span>
+                <span className="muted">›</span>
+              </Link>
+              <Link to="/changelog" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
+                <span>What's new (changelog)</span>
                 <span className="muted">›</span>
               </Link>
               <Link to="/system" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
@@ -372,60 +378,6 @@ function WaterCalibration() {
           </div>
         </details>
       )}
-    </section>
-  );
-}
-
-// --- overview layout --------------------------------------------------------------------
-
-function OverviewCardSettings() {
-  const { layout, save, reset } = useOverviewLayout();
-  const move = (index: number, delta: number) => {
-    const order = [...layout.order];
-    const [item] = order.splice(index, 1);
-    order.splice(index + delta, 0, item);
-    save({ ...layout, order });
-  };
-  const toggle = (id: (typeof layout.order)[number]) =>
-    save({ ...layout, hidden: layout.hidden.includes(id) ? layout.hidden.filter((h) => h !== id) : [...layout.hidden, id] });
-
-  return (
-    <section id="overview" className="card">
-      <div className="row-between">
-        <h2 className="label" style={{ margin: 0 }}>Overview cards</h2>
-        <button type="button" className="btn ghost small" onClick={reset}>
-          Reset
-        </button>
-      </div>
-      <span className="small muted">Saved on this device, so the phone and the tablet can differ.</span>
-      <div className="list">
-        {layout.order.map((id, index) => {
-          const label = OVERVIEW_CARDS.find((c) => c.id === id)?.label ?? id;
-          const shown = !layout.hidden.includes(id);
-          return (
-            <div key={id} className="row-between">
-              <label className="row" style={{ cursor: "pointer", minHeight: 44 }}>
-                <input type="checkbox" checked={shown} onChange={() => toggle(id)} style={{ width: 22, height: 22, accentColor: "var(--accent)" }} />
-                <span className={shown ? "" : "muted"}>{label}</span>
-              </label>
-              <span className="row" style={{ gap: 4 }}>
-                <button type="button" className="btn small" onClick={() => move(index, -1)} disabled={index === 0} aria-label={`Move ${label} up`}>
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  className="btn small"
-                  onClick={() => move(index, 1)}
-                  disabled={index === layout.order.length - 1}
-                  aria-label={`Move ${label} down`}
-                >
-                  ↓
-                </button>
-              </span>
-            </div>
-          );
-        })}
-      </div>
     </section>
   );
 }

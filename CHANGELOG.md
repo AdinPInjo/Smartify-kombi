@@ -7,6 +7,20 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.5.0 - 2026-11-04
+
+### Added
+- Your own overview: tap the grid icon (or "Customize overview") to drag cards around and
+  give each one a width (⅓, ½, ⅔ or full) and a height (1 or 2 rows), like widgets on a
+  tablet. Gaps fill themselves. Each phone or tablet keeps its own layout.
+- The version is shown bottom-left in the menu; tap it for this changelog
+  (also in Settings → What's new).
+
+### Changed
+- Settings → Updates explains what to do when updates aren't available yet, instead of
+  showing an error.
+- The overview's charging card links to the Victron setup when no devices are added yet.
+
 ## 0.4.0 - 2026-11-03
 
 ### Added
