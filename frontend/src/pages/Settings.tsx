@@ -6,6 +6,7 @@ import { api } from "@/api/client";
 import {
   useCalibrateWater,
   useMe,
+  useMode,
   useUpdateWaterSettings,
   useWater,
   useWaterSettings,
@@ -15,6 +16,7 @@ import {
 } from "@/api/hooks";
 import type { WifiNetwork } from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
+import { OnlyOnVan } from "@/components/RemoteBanner";
 import { Card, Dialog, ErrorNote, Field, Segmented, useErrorToast, useToast } from "@/components/ui";
 import { fmt } from "@/lib/format";
 import { OVERVIEW_CARDS, useOverviewLayout } from "@/lib/overviewLayout";
@@ -76,6 +78,18 @@ function LogoutRow() {
 // --- WiFi --------------------------------------------------------------------------
 
 function WifiCard() {
+  const { cloud } = useMode();
+  if (cloud) {
+    return (
+      <Card label="WiFi">
+        <OnlyOnVan what="Changing the van's WiFi" />
+      </Card>
+    );
+  }
+  return <WifiControls />;
+}
+
+function WifiControls() {
   const wifi = useWifi();
   const [scan, setScan] = useState(false);
   const networks = useWifiNetworks(scan);
@@ -160,6 +174,7 @@ function JoinDialog({ network, onClose }: { network: WifiNetwork; onClose: () =>
 // --- water calibration ------------------------------------------------------------------
 
 function WaterCalibration() {
+  const { cloud } = useMode();
   const settings = useWaterSettings();
   const water = useWater();
   const calibrate = useCalibrateWater();
@@ -193,6 +208,9 @@ function WaterCalibration() {
         Fill the tank completely and press “Tank is full”. When it is empty, press “Tank is empty”. Both points are taken from
         the live reading.
       </p>
+      {cloud ? (
+        <OnlyOnVan what="Calibrating from the live reading" />
+      ) : (
       <div className="grid-2">
         <button type="button" className="btn" onClick={() => mark("full")} disabled={calibrate.isPending}>
           Tank is full
@@ -201,6 +219,7 @@ function WaterCalibration() {
           Tank is empty
         </button>
       </div>
+      )}
       {s && (
         <details>
           <summary className="small muted" style={{ cursor: "pointer", minHeight: 32 }}>Advanced</summary>

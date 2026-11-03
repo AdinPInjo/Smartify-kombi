@@ -122,6 +122,7 @@ export function RuleEditor({ relayId, rule, onClose }: { relayId: string; rule?:
       {
         onSuccess: () => {
           toast(rule ? "Rule saved" : "Rule added");
+          // On the remote dashboard the change reaches the van on its next sync.
           onClose();
         },
       },

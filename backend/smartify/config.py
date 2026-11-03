@@ -157,6 +157,16 @@ class Settings(BaseSettings):
 
     victron_stale_seconds: int = Field(default=120, ge=10)
 
+    # --- Remote dashboard (cloud/ on any PHP + MySQL hosting) ------------------
+    cloud_url: str = ""
+    """Base URL of your cloud install, e.g. https://kombi.example.com. Empty = off."""
+    cloud_token: str = Field(default="", repr=False)
+    """Device token shown by the cloud installer."""
+    cloud_interval_seconds: float = Field(default=10, ge=3)
+    """How often the Pi asks the cloud for commands (remote switch delay)."""
+    cloud_state_seconds: float = Field(default=60, ge=10)
+    """How often live values and history are uploaded (mobile data use)."""
+
     # --- WiFi (NetworkManager / nmcli) ---------------------------------------
     wifi_interface: str = "wlan0"
 

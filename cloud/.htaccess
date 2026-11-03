@@ -1,0 +1,32 @@
+# Smartify Kombi cloud (Apache / LiteSpeed, which most shared hosting runs).
+Options -Indexes
+DirectoryIndex index.html
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # Pass the device token to PHP (some hosts drop the Authorization header).
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+  # API: everything under api/ goes to api/index.php
+  RewriteRule ^api/ api/index.php [L,QSA]
+
+  # Dashboard: files that exist are served; every other path is the app
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+<FilesMatch "\.(sqlite|sqlite-wal|sqlite-shm|md)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+</FilesMatch>
+
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "same-origin"
+  <FilesMatch "^index\.html$">
+    Header set Cache-Control "no-store"
+  </FilesMatch>
+</IfModule>

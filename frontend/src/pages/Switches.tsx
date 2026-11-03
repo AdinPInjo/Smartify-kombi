@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useCreateRelay, useRelays } from "@/api/hooks";
+import { useCreateRelay, useMode, useRelays } from "@/api/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { RelayControl } from "@/components/RelayControl";
 import { Dialog, ErrorNote, Field, Skeleton, useToast } from "@/components/ui";
@@ -7,6 +7,7 @@ import { Dialog, ErrorNote, Field, Skeleton, useToast } from "@/components/ui";
 export function Switches() {
   const relays = useRelays();
   const [adding, setAdding] = useState(false);
+  const { cloud } = useMode();
   return (
     <main className="page">
       <PageHeader
@@ -14,9 +15,11 @@ export function Switches() {
         title="Relays & rules"
         sub="Tap a name for its rules and settings."
         right={
-          <button type="button" className="btn small" onClick={() => setAdding(true)}>
-            Add relay
-          </button>
+          cloud ? undefined : (
+            <button type="button" className="btn small" onClick={() => setAdding(true)}>
+              Add relay
+            </button>
+          )
         }
       />
       {relays.isPending && <Skeleton height={160} />}

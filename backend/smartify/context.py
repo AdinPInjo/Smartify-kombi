@@ -11,12 +11,14 @@ from smartify.config import Settings
 from smartify.hardware import Hardware
 from smartify.logbuffer import LogBuffer
 from smartify.services.climate import ClimateService
+from smartify.services.cloud_sync import CloudSync, apply_command
 from smartify.services.conditions import CLIMATE_METRICS, MetricValue
 from smartify.services.energy import EnergyService
 from smartify.services.gps import GpsService
 from smartify.services.maintenance import backup, check_integrity, prune_history
 from smartify.services.relays import RelayService
 from smartify.services.rules import RuleService
+from smartify.services.snapshot import build_state
 from smartify.services.water import WaterService
 from smartify.services.weather import WeatherService
 from smartify.services.wifi import MockWifi, NmcliWifi, WifiBackend
@@ -38,6 +40,7 @@ class AppContext:
     gps: GpsService
     weather: WeatherService
     wifi: WifiBackend
+    cloud: CloudSync | None = None
     started_at: float = field(default_factory=time.time)
     workers: list[Worker] = field(default_factory=list)
 
@@ -94,6 +97,17 @@ class AppContext:
             self.workers.append(Worker("gps", 1, self.gps.poll))
         if s.weather_enabled:
             self.workers.append(Worker("weather", 60, self.weather.refresh_if_due))
+        if s.cloud_url and s.cloud_token:
+            self.cloud = CloudSync(
+                url=s.cloud_url,
+                token=s.cloud_token,
+                db_path=s.db_path,
+                state_seconds=s.cloud_state_seconds,
+                build_state=lambda: build_state(self),
+                apply_command=lambda command: apply_command(self, command),
+            )
+            self.workers.append(Worker("cloud", s.cloud_interval_seconds, self.cloud.tick))
+            log.info("Remote dashboard sync to %s", s.cloud_url)
         self.workers.append(Worker("heartbeat", 10, self._heartbeat))
         for worker in self.workers:
             worker.start()

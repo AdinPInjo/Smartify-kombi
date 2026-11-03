@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useClimate, useDeleteRelay, useDeleteRule, useRelay, useRelayEvents, useRules, useSaveRule, useUpdateRelay } from "@/api/hooks";
+import { useClimate, useMode, useDeleteRelay, useDeleteRule, useRelay, useRelayEvents, useRules, useSaveRule, useUpdateRelay } from "@/api/hooks";
 import type { Relay, Rule } from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
 import { RelayControl, relayTitle } from "@/components/RelayControl";
@@ -125,6 +125,7 @@ function RelaySettings({ relay }: { relay: Relay }) {
   const climate = useClimate();
   const toast = useToast();
   const navigate = useNavigate();
+  const { cloud } = useMode();
   const [form, setForm] = useState(() => toForm(relay));
   useEffect(() => setForm(toForm(relay)), [relay.revision]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -213,6 +214,7 @@ function RelaySettings({ relay }: { relay: Relay }) {
         <button type="submit" className="btn primary" disabled={update.isPending}>
           Save settings
         </button>
+        {!cloud && (
         <button
           type="button"
           className="btn danger"
@@ -223,6 +225,7 @@ function RelaySettings({ relay }: { relay: Relay }) {
         >
           Delete relay
         </button>
+        )}
         <ErrorNote error={remove.error} />
       </form>
     </Card>

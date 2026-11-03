@@ -57,6 +57,7 @@ def system_status(ctx: Ctx, _: User) -> dict:
         "database_bytes": db_size,
         "default_credentials": ctx.settings.uses_default_credentials,
         "workers": [asdict(w.status()) for w in ctx.workers],
+        "cloud": asdict(ctx.cloud.status) if ctx.cloud else None,
     }
 
 

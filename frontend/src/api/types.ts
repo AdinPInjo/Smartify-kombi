@@ -8,6 +8,9 @@ export interface Health {
   hardware: "pi" | "mock";
   schema_version: number;
   server_time: number;
+  /** Absent on the Pi; "cloud" on the remote dashboard. */
+  mode?: "device" | "cloud";
+  device?: { last_seen: number | null; online: boolean; version: string | null };
 }
 
 export interface Me {
@@ -39,6 +42,8 @@ export interface Relay {
   last_error: string | null;
   pending: string | null;
   explanation: string | null;
+  /** Remote dashboard only: a change on its way to the van, or why it was not applied. */
+  remote?: string | null;
 }
 
 export interface RelayEvent {
@@ -287,6 +292,14 @@ export interface SystemStatus {
   database_bytes: number;
   default_credentials: boolean;
   workers: WorkerStatus[];
+  cloud: {
+    enabled: boolean;
+    url: string;
+    last_ok_at: number | null;
+    last_error: string | null;
+    last_error_at: number | null;
+    commands_applied: number;
+  } | null;
 }
 
 export interface LogEntry {

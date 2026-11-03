@@ -17,6 +17,7 @@ function modeOf(relay: Relay): Mode {
 
 /** One line explaining why the relay is in its current state. */
 export function relayExplanation(relay: Relay, now = Date.now() / 1000): string {
+  if (relay.remote) return relay.remote;
   if (!relay.enabled) return "Disabled";
   if (relay.last_error) return `Hardware error: ${relay.last_error}`;
   if (relay.pending) return `Waiting: ${relay.pending}`;

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "@/api/client";
-import { useDistance, useGps, useGpsArchives, useTrack } from "@/api/hooks";
+import { useDistance, useGps, useGpsArchives, useMode, useTrack } from "@/api/hooks";
+import { OnlyOnVan } from "@/components/RemoteBanner";
 import { PageHeader } from "@/components/PageHeader";
 import { TrackMap } from "@/components/TrackMap";
 import { Card, Num, Segmented } from "@/components/ui";
@@ -19,6 +20,7 @@ export function MapPage() {
   const track = useTrack(Number(hours));
   const distance = useDistance();
   const archives = useGpsArchives();
+  const { cloud } = useMode();
   const fix = gps.data?.fix ?? null;
   const days = distance.data?.days ?? [];
   const maxKm = Math.max(1, ...days.map((d) => d.distance_km));
@@ -100,7 +102,8 @@ export function MapPage() {
               </div>
             ))}
           </div>
-          {archives.data?.length === 0 && <span className="small faint">Nothing archived yet.</span>}
+          {cloud && <OnlyOnVan what="Downloading the GPX archive" />}
+          {!cloud && archives.data?.length === 0 && <span className="small faint">Nothing archived yet.</span>}
         </Card>
       </div>
     </main>

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useLogs, useSystem } from "@/api/hooks";
+import { useLogs, useMode, useSystem } from "@/api/hooks";
+import { OnlyOnVan } from "@/components/RemoteBanner";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, Num, Segmented, Skeleton } from "@/components/ui";
 import { ago, bytes, clock, duration, fmt } from "@/lib/format";
@@ -13,7 +14,8 @@ const LEVELS = [
 export function System() {
   const system = useSystem();
   const [level, setLevel] = useState("INFO");
-  const logs = useLogs(level);
+  const { cloud } = useMode();
+  const logs = useLogs(cloud ? "" : level);
   const s = system.data;
 
   return (
@@ -41,6 +43,21 @@ export function System() {
               <Num value={bytes(s.database_bytes)} size="m" />
             </div>
           </div>
+          {s.cloud && (
+            <Card label="Remote dashboard">
+              <div className="row">
+                <span className={`dot ${s.cloud.last_error ? "bad" : s.cloud.last_ok_at ? "ok" : "warn"}`} />
+                <span>
+                  {s.cloud.last_error
+                    ? `Sync failing: ${s.cloud.last_error}`
+                    : s.cloud.last_ok_at
+                      ? `Synced ${ago(s.cloud.last_ok_at)}`
+                      : "Not synced yet"}
+                </span>
+              </div>
+              <span className="small muted">{s.cloud.url} · {s.cloud.commands_applied} remote changes applied since start</span>
+            </Card>
+          )}
           <Card label="Background tasks">
             <div className="table-wrap">
               <table>
@@ -70,6 +87,9 @@ export function System() {
           </Card>
         </>
       )}
+      {cloud ? (
+        <Card label="Log"><OnlyOnVan what="The live log" /></Card>
+      ) : (
       <Card label="Log" action={<div style={{ width: 260 }}><Segmented label="Log level" options={LEVELS} value={level} onChange={setLevel} /></div>}>
         <div className="mono tiny" style={{ maxHeight: 420, overflowY: "auto", display: "flex", flexDirection: "column-reverse", gap: 4 }}>
           {[...(logs.data ?? [])].reverse().map((entry) => (
@@ -80,6 +100,7 @@ export function System() {
           {logs.data?.length === 0 && <span className="muted">Nothing logged at this level.</span>}
         </div>
       </Card>
+      )}
     </main>
   );
 }

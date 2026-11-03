@@ -24,3 +24,11 @@ data/
 .DS_Store
 .vscode/
 .idea/
+
+# Cloud install (created by install.php on the server)
+cloud/private/config.php
+cloud/private/*.sqlite*
+cloud/index.html
+cloud/assets/
+cloud/favicon.svg
+dist/

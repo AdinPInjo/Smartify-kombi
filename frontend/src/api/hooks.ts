@@ -8,6 +8,7 @@ import type {
   GpsArchive,
   GpsDistance,
   GpsState,
+  Health,
   LogEntry,
   Me,
   OnOff,
@@ -28,6 +29,16 @@ import type {
 // Live values refresh every few seconds; history less often.
 const LIVE = 5_000;
 const SLOW = 60_000;
+
+export const useHealth = () =>
+  useQuery({ queryKey: ["health"], queryFn: () => api.get<Health>("/health"), refetchInterval: 15_000 });
+
+/** Remote dashboard (cloud/) or the van's own? Some features exist only on the van. */
+export function useMode() {
+  const health = useHealth();
+  const cloud = health.data?.mode === "cloud";
+  return { cloud, device: health.data?.device, ready: health.isSuccess };
+}
 
 export const useMe = () =>
   useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/auth/me"), retry: false });
@@ -118,7 +129,7 @@ export const useWeather = () =>
   useQuery({ queryKey: ["weather"], queryFn: () => api.get<Weather>("/weather"), refetchInterval: SLOW });
 
 export const useWifi = () =>
-  useQuery({ queryKey: ["wifi"], queryFn: () => api.get<WifiStatus>("/wifi"), refetchInterval: LIVE * 3 });
+  useQuery({ queryKey: ["wifi"], queryFn: () => api.get<WifiStatus>("/wifi"), refetchInterval: LIVE * 3, retry: false });
 
 export const useWifiNetworks = (enabled: boolean) =>
   useQuery({
@@ -130,11 +141,13 @@ export const useWifiNetworks = (enabled: boolean) =>
 export const useSystem = () =>
   useQuery({ queryKey: ["system"], queryFn: () => api.get<SystemStatus>("/system"), refetchInterval: LIVE * 2 });
 
+/** Pass an empty level to disable (e.g. on the remote dashboard, which has no log). */
 export const useLogs = (level: string) =>
   useQuery({
     queryKey: ["logs", level],
     queryFn: () => api.get<{ logs: LogEntry[] }>(`/logs?limit=300&level=${level}`).then((r) => r.logs),
     refetchInterval: LIVE,
+    enabled: level !== "",
   });
 
 // --- mutations ------------------------------------------------------------------
