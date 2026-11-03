@@ -21,6 +21,7 @@ pi = [
     "smbus2>=0.5",
     "pyserial>=3.5",
     "adafruit-circuitpython-dht>=4.0",
+    "gpiod>=2.2.2,<3",  # GPIO backend Adafruit Blinka needs on Raspberry Pi OS Bookworm/Trixie
     "victron-ble>=0.9",
 ]
 dev = [
