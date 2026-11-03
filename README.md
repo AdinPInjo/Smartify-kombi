@@ -11,10 +11,12 @@ their own.
 
 * **Climate**: DHT22 temperature/humidity sensors (inside, outside…), history, outside weather forecast for where you are.
 * **Water**: tank level from an analog sender via an ADS1115, compensated for the changing battery voltage.
-* **Energy**: Victron SmartShunt, SmartSolar MPPT, Orion and MultiPlus (VE.Bus Smart dongle) over Bluetooth: battery %, solar, alternator charging, inverter. Battery voltage from the ADS1115 as a fallback.
-* **Switches**: relays for heater, fan, pump… On / Off / Auto, timed manual override, and rules like *"heater on below 8 °C, never below 20 % battery"*.
+* **Energy**: Victron SmartShunt, SmartSolar MPPT, Orion and MultiPlus (VE.Bus Smart dongle) over Bluetooth, added from the dashboard: battery %, solar, alternator charging, inverter. Battery voltage from the ADS1115 as a fallback.
+* **Switches**: relays for heater, fan, pump… On / Off / Auto, timed manual override, and rules like *"heater on below 8 °C, never below 20 % battery"*, schedules (*"heater on at 06:30 on weekdays"*), water level and driving/parked.
 * **Safety first**: every relay goes off on start, stop or crash; dead sensors switch their relays off; per-relay temperature cutoff; systemd watchdog.
-* **GPS**: route history, distance per day, monthly GPX archive (Komoot, Strava, Google Earth).
+* **GPS**: route history with a time slider, distance per day, monthly GPX archive (Komoot, Strava, Google Earth). Stable position while parked, even with a weak signal.
+* **Travel log**: every place you stayed an hour or more, with place name, nights and km between stops, filled in automatically.
+* **Push notifications** to your phone (ntfy or Telegram), set up from the dashboard: battery low or heading low (forecast with the sun expected tomorrow), cold or hot inside, frost tonight, water low, a sensor stopped working, and **the van is moving** (theft). Quiet hours, and messages wait while the van is offline.
 * **WiFi** from the dashboard: scan and join campsite networks.
 * **Tablet panel**: a full-screen instrument cluster at `/panel`.
 * **Remote dashboard** on any cheap PHP + MySQL web hosting: see and switch everything from anywhere. The van connects out, so no open ports or fixed IP are needed.
@@ -36,6 +38,7 @@ Full guide from an empty SD card: **[docs/install.md](docs/install.md)**
 | [Installation](docs/install.md) | SD card, install, first checks, troubleshooting |
 | [Wiring](docs/wiring.md) | DHT22, ADS1115 + battery divider, GPS, relays, power |
 | [Victron](docs/victron.md) | Bluetooth setup for SmartShunt, MPPT, Orion, MultiPlus |
+| [Notifications](docs/notifications.md) | Alerts on your phone with ntfy or Telegram |
 | [Rules](docs/rules.md) | Automatic switching, priorities, combined conditions |
 | [Remote dashboard](cloud/README.md) | Install on your web hosting |
 

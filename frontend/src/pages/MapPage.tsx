@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { api } from "@/api/client";
-import { useDistance, useGps, useGpsArchives, useMode, useTrack } from "@/api/hooks";
+import { useDistance, useGps, useGpsArchives, useMode, useStops, useTrack } from "@/api/hooks";
+import type { Stop } from "@/api/types";
 import { OnlyOnVan } from "@/components/RemoteBanner";
 import { PageHeader } from "@/components/PageHeader";
 import { TrackMap } from "@/components/TrackMap";
 import { TrackScrubber, pointAt } from "@/components/TrackScrubber";
 import { Card, Num, Segmented } from "@/components/ui";
-import { ago, bytes, coords, fmt } from "@/lib/format";
+import { ago, bytes, coords, duration, fmt } from "@/lib/format";
 
 const RANGES = [
   { value: "24", label: "24 h" },
@@ -67,6 +68,8 @@ export function MapPage() {
         Map tiles need internet. The route itself is recorded on the Pi either way.
       </p>
 
+      <TravelLog />
+
       <div className="grid">
         <Card label="Distance">
           <div className="row" style={{ gap: 24 }}>
@@ -118,5 +121,78 @@ export function MapPage() {
         </Card>
       </div>
     </main>
+  );
+}
+
+function stayText(stop: Stop): string {
+  if (stop.nights > 0) return `${stop.nights} ${stop.nights === 1 ? "night" : "nights"}`;
+  return duration(stop.duration_seconds);
+}
+
+function dates(stop: Stop): string {
+  const day = (ts: number) => new Date(ts * 1000).toLocaleDateString([], { day: "numeric", month: "short" });
+  const start = day(stop.arrived_at);
+  if (stop.here_now) return `since ${start}`;
+  const end = day(stop.left_at!);
+  return start === end ? start : `${start} – ${end}`;
+}
+
+/** Automatic travel log: every place the van stood for an hour or more. */
+function TravelLog() {
+  const stops = useStops();
+  const [all, setAll] = useState(false);
+  const list = stops.data ?? [];
+  const shown = all ? list : list.slice(0, 8);
+  const nights = list.reduce((sum, stop) => sum + stop.nights, 0);
+  const countries = new Set(list.map((s) => s.country).filter(Boolean));
+
+  return (
+    <Card
+      label="Travel log"
+      action={
+        list.length > 0 && (
+          <span className="small muted">
+            {list.length} stops · {nights} nights{countries.size > 1 ? ` · ${countries.size} countries` : ""}
+          </span>
+        )
+      }
+    >
+      {list.length === 0 ? (
+        <p className="small muted" style={{ margin: 0 }}>
+          Every place the van stands for an hour or more is added here automatically, with the place name, how long you
+          stayed and the km driven to get there.
+        </p>
+      ) : (
+        <div className="list">
+          {shown.map((stop) => (
+            <div key={stop.id} className="row-between" style={{ gap: 12, alignItems: "flex-start" }}>
+              <span className="stack" style={{ gap: 2, minWidth: 0 }}>
+                <a
+                  href={`https://www.openstreetmap.org/?mlat=${stop.lat}&mlon=${stop.lon}#map=14/${stop.lat}/${stop.lon}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "inherit" }}
+                >
+                  <strong>{stop.place ?? coords(stop.lat, stop.lon)}</strong>
+                  {stop.country && <span className="small muted"> · {stop.country}</span>}
+                </a>
+                <span className="small muted">
+                  {dates(stop)} · {stayText(stop)}
+                  {stop.here_now && <span className="c-accent"> · here now</span>}
+                </span>
+              </span>
+              <span className="small muted" style={{ whiteSpace: "nowrap" }}>
+                {stop.km_from_previous !== null ? `+${fmt(stop.km_from_previous, 0)} km` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {list.length > 8 && (
+        <button type="button" className="btn ghost small" onClick={() => setAll(!all)}>
+          {all ? "Show fewer" : `Show all ${list.length}`}
+        </button>
+      )}
+    </Card>
   );
 }

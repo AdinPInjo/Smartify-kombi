@@ -38,6 +38,14 @@ export function Settings() {
           <WaterCalibration />
           <Card label="More">
             <div className="list">
+              <Link to="/notifications" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
+                <span>Notifications & alerts</span>
+                <span className="muted">›</span>
+              </Link>
+              <Link to="/energy/devices" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
+                <span>Victron devices</span>
+                <span className="muted">›</span>
+              </Link>
               <Link to="/system" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
                 <span>System status & logs</span>
                 <span className="muted">›</span>

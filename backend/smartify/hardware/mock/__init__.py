@@ -149,6 +149,30 @@ class MockVictronListener:
         if self._thread is not None:
             self._thread.join(timeout=5)
 
+    # Discovery for the setup screen: two simulated devices "nearby".
+    _NEARBY = (
+        ("C4:3A:BE:00:00:01", "SmartShunt HQ2143SIMUL", "battery_monitor", -61),
+        ("C4:3A:BE:00:00:02", "SmartSolar HQ2207SIMUL", "solar_charger", -74),
+    )
+    error: str | None = None
+
+    def set_devices(self, devices) -> None:
+        self.configured = list(devices)
+
+    def discovered(self) -> list:
+        from smartify.hardware.base import DiscoveredVictron
+
+        now = int(time.time())
+        return [
+            DiscoveredVictron(mac, name, kind, rssi, now) for mac, name, kind, rssi in self._NEARBY
+        ]
+
+    def check_key(self, mac: str, key: str) -> bool | None:
+        """Simulation: any key works except all zeros; unknown MACs were never heard."""
+        if mac.upper() not in {m for m, *_ in self._NEARBY}:
+            return None
+        return key.strip("0") != ""
+
     @staticmethod
     def readings(now: float | None = None) -> list:
         from smartify.hardware.base import VictronReading

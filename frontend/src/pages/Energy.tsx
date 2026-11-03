@@ -1,11 +1,12 @@
 import { Car, SunMedium, Zap } from "lucide-react";
 import { useState } from "react";
-import { useEnergy, useEnergyHistory, useWater } from "@/api/hooks";
-import type { EnergyDevice } from "@/api/types";
+import { Link } from "react-router-dom";
+import { useEnergy, useEnergyForecast, useEnergyHistory, useWater } from "@/api/hooks";
+import type { EnergyDevice, EnergyForecast } from "@/api/types";
 import { batteryColor, LineChart, RingGauge } from "@/components/instruments";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, Num, Segmented, Skeleton } from "@/components/ui";
-import { ago, duration, fmt, humanize, signed } from "@/lib/format";
+import { ago, clock, duration, fmt, humanize, signed } from "@/lib/format";
 
 const RANGES = [
   { value: "6", label: "6 h" },
@@ -26,16 +27,31 @@ export function Energy() {
 
   return (
     <main className="page">
-      <PageHeader kicker="Energy" title="Battery & charging" sub={e?.available ? `${e.devices.length} Victron devices` : undefined} />
+      <PageHeader
+        kicker="Energy"
+        title="Battery & charging"
+        sub={e?.available ? `${e.devices.length} Victron devices` : undefined}
+        right={
+          e?.available && (
+            <Link to="/energy/devices" className="btn small">
+              Devices
+            </Link>
+          )
+        }
+      />
 
       {energy.isPending && <Skeleton height={240} />}
 
       {e && !e.available && (
-        <Card label="Victron">
+        <Card label="Victron" highlight>
+          <strong style={{ fontSize: 20 }}>Connect your Victron devices</strong>
           <p className="muted" style={{ margin: 0 }}>
-            No Victron device is reporting. Add SmartShunt, MPPT, Orion and MultiPlus to <code>SMARTIFY_VICTRON_DEVICES</code> in{" "}
-            <code>.env</code> (name|MAC|key from VictronConnect › Product info › Instant readout).
+            See battery charge, solar, the DC-DC charger and the inverter here, get a battery forecast and use them in rules.
+            Works with SmartShunt, BMV, SmartSolar MPPT, Orion and MultiPlus (VE.Bus Smart dongle), over Bluetooth.
           </p>
+          <Link to="/energy/devices" className="btn primary" style={{ alignSelf: "flex-start" }}>
+            Add Victron devices
+          </Link>
           {water.data?.battery_voltage != null && (
             <div className="row">
               <span className="muted small">Battery voltage from the water sensor supply:</span>
@@ -47,6 +63,7 @@ export function Energy() {
 
       {e?.available && battery && (
         <>
+          <ForecastCard />
           <div className="grid">
             <Card label="House battery">
               <div className="row" style={{ gap: 20, flexWrap: "wrap", justifyContent: "center" }}>
@@ -241,5 +258,63 @@ function DeviceRow({ device }: { device: EnergyDevice }) {
         </div>
       )}
     </div>
+  );
+}
+
+function when(ts: number): string {
+  const date = new Date(ts * 1000);
+  const today = new Date();
+  const tomorrow = new Date();
+  tomorrow.setDate(today.getDate() + 1);
+  const day =
+    date.toDateString() === today.toDateString()
+      ? "today"
+      : date.toDateString() === tomorrow.toDateString()
+        ? "tomorrow"
+        : date.toLocaleDateString([], { weekday: "long" });
+  return `${clock(ts)} ${day}`;
+}
+
+function forecastHeadline(f: EnergyForecast): string {
+  if (f.low_at) return `Battery below 10 % around ${when(f.low_at)}`;
+  if (f.min_soc !== null && f.min_soc !== undefined && f.min_at && f.min_soc < (f.soc_now ?? 0) - 1) {
+    return `Lowest about ${Math.round(f.min_soc)} % at ${when(f.min_at)}`;
+  }
+  return "Enough for the next 36 hours";
+}
+
+/** Where the battery is heading: usage of the last day against the sun forecast. */
+function ForecastCard() {
+  const forecast = useEnergyForecast();
+  const f = forecast.data;
+  if (!f) return null;
+  if (!f.available) {
+    return (
+      <Card label="Forecast">
+        <span className="small muted">{f.reason}</span>
+      </Card>
+    );
+  }
+  const points = f.points ?? [];
+  return (
+    <Card label="Forecast" action={<span className="small muted">next 36 h</span>}>
+      <strong style={{ fontSize: 20 }}>{forecastHeadline(f)}</strong>
+      <span className="small muted">
+        Using ~{fmt(f.load_w ?? null, 0)} W on average · {fmt((f.solar_wh_24h ?? 0) / 1000, 1)} kWh of sun expected in 24 h ·{" "}
+        {f.capacity_ah} Ah battery{f.capacity_estimated ? " (estimated)" : ""}
+      </span>
+      {points.length > 1 && (
+        <LineChart
+          label="Battery forecast"
+          series={[{ values: points.map((p) => p.soc), color: batteryColor(f.min_soc ?? null), label: "Forecast", fill: true }]}
+          times={points.map((p) => p.ts)}
+          height={110}
+          min={0}
+          max={100}
+          unit="%"
+        />
+      )}
+      <span className="tiny faint">Shore power and driving are not counted, so it is on the safe side.</span>
+    </Card>
   );
 }

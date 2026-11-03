@@ -4,6 +4,7 @@ import type {
   ClimatePoint,
   ClimateSnapshot,
   Energy,
+  EnergyForecast,
   EnergyPoint,
   GpsArchive,
   GpsDistance,
@@ -11,13 +12,19 @@ import type {
   Health,
   LogEntry,
   Me,
+  NotificationEntry,
+  NotificationSettings,
+  NotifyChannel,
   OnOff,
   Relay,
   RelayEvent,
   Rule,
   RulesResponse,
+  Stop,
   SystemStatus,
   TrackPoint,
+  VictronDevicesResponse,
+  VictronNearby,
   WaterPoint,
   WaterReading,
   WaterSettings,
@@ -124,6 +131,50 @@ export const useGpsArchives = () =>
     queryKey: ["gps", "archive"],
     queryFn: () => api.get<{ files: GpsArchive[] }>("/gps/archive").then((r) => r.files),
   });
+
+export const useStops = () =>
+  useQuery({ queryKey: ["stops"], queryFn: () => api.get<{ stops: Stop[] }>("/stops").then((r) => r.stops), refetchInterval: SLOW });
+
+export const useEnergyForecast = () =>
+  useQuery({ queryKey: ["energy", "forecast"], queryFn: () => api.get<EnergyForecast>("/energy/forecast"), refetchInterval: SLOW });
+
+export const useNotificationSettings = (enabled = true) =>
+  useQuery({
+    queryKey: ["notifications", "settings"],
+    queryFn: () => api.get<NotificationSettings>("/notifications/settings"),
+    enabled,
+  });
+
+export const useNotificationHistory = (enabled = true) =>
+  useQuery({
+    queryKey: ["notifications", "history"],
+    queryFn: () => api.get<{ notifications: NotificationEntry[] }>("/notifications?limit=20").then((r) => r.notifications),
+    refetchInterval: LIVE * 2,
+    enabled,
+  });
+
+/** Any notification settings action; the backend answers with the new settings. */
+export function useNotificationAction() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ path, body, method = "post" }: { path: string; body?: unknown; method?: "post" | "patch" }) =>
+      method === "patch"
+        ? api.patch<NotificationSettings>(`/notifications${path}`, body)
+        : api.post<NotificationSettings>(`/notifications${path}`, body),
+    onSuccess: (settings) => {
+      if (settings && "channels" in settings) client.setQueryData(["notifications", "settings"], settings);
+      else client.invalidateQueries({ queryKey: ["notifications", "settings"] });
+    },
+  });
+}
+
+export function useSendTest() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (channel: NotifyChannel) => api.post<{ ok: boolean }>("/notifications/test", { channel }),
+    onSettled: () => client.invalidateQueries({ queryKey: ["notifications", "history"] }),
+  });
+}
 
 export const useWeather = () =>
   useQuery({ queryKey: ["weather"], queryFn: () => api.get<Weather>("/weather"), refetchInterval: SLOW });
@@ -247,6 +298,49 @@ export function useWifiConnect() {
     onSuccess: (status) => {
       client.setQueryData(["wifi"], status);
       client.invalidateQueries({ queryKey: ["wifi", "networks"] });
+    },
+  });
+}
+
+// --- Victron setup ---------------------------------------------------------------
+
+export const useVictronDevices = (enabled = true) =>
+  useQuery({
+    queryKey: ["victron", "devices"],
+    queryFn: () => api.get<VictronDevicesResponse>("/victron/devices"),
+    refetchInterval: LIVE,
+    enabled,
+  });
+
+/** Devices heard over Bluetooth; polled quickly while the setup is open. */
+export const useVictronNearby = (enabled: boolean) =>
+  useQuery({
+    queryKey: ["victron", "nearby"],
+    queryFn: () =>
+      api.get<{ bluetooth: boolean; error: string | null; devices: VictronNearby[] }>("/victron/nearby"),
+    refetchInterval: 3_000,
+    enabled,
+  });
+
+export function useAddVictron() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { name: string; mac: string; key: string }) =>
+      api.post<VictronDevicesResponse & { name: string; key_checked: boolean }>("/victron/devices", body),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["victron"] });
+      client.invalidateQueries({ queryKey: ["energy"] });
+    },
+  });
+}
+
+export function useRemoveVictron() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.delete<VictronDevicesResponse>(`/victron/devices/${name}`),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["victron"] });
+      client.invalidateQueries({ queryKey: ["energy"] });
     },
   });
 }

@@ -85,6 +85,8 @@ else
   warn "raspi-config not found: enable I2C and the serial port by hand (see docs/install.md)"
 fi
 systemctl enable --now bluetooth >/dev/null 2>&1 || warn "could not enable Bluetooth"
+# Raspberry Pi OS often ships with Bluetooth soft-blocked; Victron devices need it on.
+command -v rfkill >/dev/null && rfkill unblock bluetooth >/dev/null 2>&1 || true
 
 step "Giving $SERVICE_USER access to GPIO, I2C, serial, Bluetooth and WiFi"
 for group in gpio i2c dialout bluetooth netdev; do

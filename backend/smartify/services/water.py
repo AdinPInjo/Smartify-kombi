@@ -25,6 +25,7 @@ from typing import Any, Literal
 from smartify.db import transaction
 from smartify.errors import InvalidInput
 from smartify.hardware import AnalogReader, HardwareError
+from smartify.services.conditions import MetricValue, SensorIssue
 
 Method = Literal["voltage", "ratio"]
 
@@ -117,6 +118,7 @@ class WaterService:
         self._minute_failures = 0
         self._last_error: str | None = None
         self._updated_at: int | None = None
+        self._started_at = clock()
 
     # --- settings --------------------------------------------------------
 
@@ -192,6 +194,15 @@ class WaterService:
             message = error or "no reading from the ADC for too long"
             return WaterReading(False, None, None, None, None, message, updated_at)
         return self._reading(settings, signal, battery, error, updated_at)
+
+    def metric(self, sensor: str, metric: str) -> MetricValue:
+        """Value source for rule conditions on ``water_level`` (sensor ``tank``)."""
+        reading = self.current()
+        if reading.ok and reading.level_percent is not None:
+            return MetricValue(float(reading.level_percent))
+        if reading.updated_at is None and self._clock() - self._started_at < self._stale_seconds:
+            return MetricValue(None, SensorIssue.WARMING_UP)
+        return MetricValue(None, SensorIssue.STALE)
 
     def _reading(
         self,

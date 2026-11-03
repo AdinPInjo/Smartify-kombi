@@ -95,6 +95,7 @@ def gps(ctx: Ctx, _: User) -> dict:
         "fix_at": state.fix_at,
         "error": state.error,
         "parked": state.parked,
+        "parked_since": state.parked_since,
     }
 
 
@@ -116,6 +117,12 @@ def gps_archive_download(name: str, ctx: Ctx, _: User) -> FileResponse:
     return FileResponse(path, media_type="application/gpx+xml", filename=f"kombi-{name}")
 
 
+@router.get("/stops")
+def stops(ctx: Ctx, _: User, days: int = Query(365, ge=1, le=3650)) -> dict:
+    """Travel log: places the van stood still for an hour or more, newest first."""
+    return {"stops": ctx.trips.stops(int(time.time()) - days * 86400)}
+
+
 @router.get("/gps/distance")
 def gps_distance(ctx: Ctx, _: User, days: int = Query(30, ge=1, le=365)) -> dict:
     return {"total_km": ctx.gps.total_distance_km(), "days": ctx.gps.distance_by_day(days)}
@@ -130,6 +137,11 @@ def energy(ctx: Ctx, _: User) -> dict:
         **ctx.energy.summary(),
         "devices": [asdict(d) for d in ctx.energy.devices()],
     }
+
+
+@router.get("/energy/forecast")
+def energy_forecast(ctx: Ctx, _: User) -> dict:
+    return ctx.alerts.forecast().as_dict()
 
 
 @router.get("/energy/history")

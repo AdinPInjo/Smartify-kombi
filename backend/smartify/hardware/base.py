@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -77,11 +77,37 @@ class VictronReading:
     rssi: int | None = None
 
 
+@dataclass(frozen=True)
+class DiscoveredVictron:
+    """A Victron device heard over Bluetooth, configured or not."""
+
+    mac: str
+    name: str | None
+    """Bluetooth name, e.g. "SmartShunt HQ2142ABCDE"."""
+    kind: str | None
+    rssi: int | None
+    seen_at: int
+
+
 class VictronListener(Protocol):
     def start(self, on_reading: Callable[[VictronReading], None]) -> None:
         """Start listening in the background; call ``on_reading`` for every advertisement."""
 
     def stop(self) -> None: ...
+
+    def set_devices(self, devices: list[Any]) -> None:
+        """Replace the configured devices (``VictronDevice``) while running."""
+
+    def discovered(self) -> list[DiscoveredVictron]:
+        """Victron devices heard in the last minutes."""
+        ...
+
+    def check_key(self, mac: str, key: str) -> bool | None:
+        """Whether ``key`` decrypts the device's data; None if not heard yet."""
+        ...
+
+    @property
+    def error(self) -> str | None: ...
 
 
 class HardwareError(RuntimeError):

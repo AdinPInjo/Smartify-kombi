@@ -13,7 +13,7 @@ export function Switches() {
       <PageHeader
         kicker="Switches"
         title="Relays & rules"
-        sub="Tap a name for its rules and settings."
+        sub="Use “Rules” on a switch to make it work automatically. Tap its name for all settings."
         right={
           cloud ? undefined : (
             <button type="button" className="btn small" onClick={() => setAdding(true)}>

@@ -10,15 +10,25 @@ from smartify import systemd
 from smartify.config import Settings
 from smartify.hardware import Hardware
 from smartify.logbuffer import LogBuffer
+from smartify.services.alerts import AlertService
 from smartify.services.climate import ClimateService
 from smartify.services.cloud_sync import CloudSync, apply_command
-from smartify.services.conditions import CLIMATE_METRICS, MetricValue
+from smartify.services.conditions import (
+    CLIMATE_METRICS,
+    GPS_SENSOR,
+    WATER_SENSOR,
+    MetricValue,
+    SensorIssue,
+)
 from smartify.services.energy import EnergyService
 from smartify.services.gps import GpsService
 from smartify.services.maintenance import backup, check_integrity, prune_history
+from smartify.services.notify import NotificationService
 from smartify.services.relays import RelayService
 from smartify.services.rules import RuleService
 from smartify.services.snapshot import build_state
+from smartify.services.trips import TripService
+from smartify.services.victron_setup import VictronDevices
 from smartify.services.water import WaterService
 from smartify.services.weather import WeatherService
 from smartify.services.wifi import MockWifi, NmcliWifi, WifiBackend
@@ -40,6 +50,10 @@ class AppContext:
     gps: GpsService
     weather: WeatherService
     wifi: WifiBackend
+    notifications: NotificationService
+    trips: TripService
+    victron: VictronDevices
+    alerts: AlertService = field(init=False)
     cloud: CloudSync | None = None
     started_at: float = field(default_factory=time.time)
     workers: list[Worker] = field(default_factory=list)
@@ -49,22 +63,40 @@ class AppContext:
         db = settings.db_path
         climate = ClimateService(settings, hardware.climate_sensors, db)
         energy = EnergyService(db, settings.victron_stale_seconds)
+        victron = VictronDevices(db, settings.victron_devices, hardware.victron)
+
+        gps = GpsService(hardware.gps, db)
+        water = WaterService(
+            hardware.analog, db, stale_seconds=max(60, settings.water_interval_seconds * 6)
+        )
 
         def metric(sensor: str, name: str) -> MetricValue:
             if name in CLIMATE_METRICS:
                 return climate.metric(sensor, name)
+            if name == "water_level":
+                if sensor != WATER_SENSOR:
+                    return MetricValue(None, SensorIssue.MISSING)
+                return water.metric(sensor, name)
+            if name == "speed":
+                if sensor != GPS_SENSOR or not gps.enabled:
+                    return MetricValue(None, SensorIssue.MISSING)
+                return gps.metric(sensor, name)
             return energy.metric(sensor, name)
 
         def sensors_for(name: str) -> list[str]:
             if name in CLIMATE_METRICS:
                 return climate.sensor_names
+            if name == "water_level":
+                return [WATER_SENSOR]
+            if name == "speed":
+                return [GPS_SENSOR] if gps.enabled else []
             # Configured devices count even before their first advertisement.
-            configured = [d.name for d in settings.victron_devices]
+            configured = victron.names()
             return sorted(set(configured) | set(energy.devices_for(name)))
 
         rules = RuleService(db, metric, sensors_for)
-        gps = GpsService(hardware.gps, db)
-        return cls(
+        notifications = NotificationService(db)
+        ctx = cls(
             settings=settings,
             hardware=hardware,
             logs=logs,
@@ -72,18 +104,22 @@ class AppContext:
             energy=energy,
             rules=rules,
             relays=RelayService(settings, hardware.relays, rules, db),
-            water=WaterService(
-                hardware.analog, db, stale_seconds=max(60, settings.water_interval_seconds * 6)
-            ),
+            water=water,
             gps=gps,
             weather=WeatherService(gps, db, settings.weather_interval_seconds),
             wifi=MockWifi() if settings.hardware == "mock" else NmcliWifi(settings.wifi_interface),
+            notifications=notifications,
+            trips=TripService(gps, db),
+            victron=victron,
         )
+        ctx.alerts = AlertService(ctx, notifications, db)
+        return ctx
 
     def start(self) -> None:
         check_integrity(self.settings.db_path)
         self.relays.startup()
         if self.hardware.victron is not None:
+            self.victron.apply()  # devices added from the dashboard
             self.hardware.victron.start(self.energy.on_reading)
         s = self.settings
         self.workers = [
@@ -92,9 +128,12 @@ class AppContext:
             Worker("rules", s.rule_interval_seconds, self.relays.reconcile_all),
             Worker("history", 60, self._flush_history),
             Worker("maintenance", 6 * 3600, self._maintenance),
+            Worker("alerts", 10, self.alerts.check),
+            Worker("notify", 10, self.notifications.deliver_due),
         ]
         if self.gps.enabled:
             self.workers.append(Worker("gps", 1, self.gps.poll))
+            self.workers.append(Worker("trips", 30, self.trips.tick))
         if s.weather_enabled:
             self.workers.append(Worker("weather", 60, self.weather.refresh_if_due))
         if s.cloud_url and s.cloud_token:
@@ -131,6 +170,7 @@ class AppContext:
 
     def _maintenance(self) -> None:
         prune_history(self.settings.db_path, self.settings.retention_days)
+        self.notifications.prune()
         backup(self.settings.db_path)
 
     def _heartbeat(self) -> None:

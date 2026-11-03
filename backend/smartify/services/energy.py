@@ -84,6 +84,11 @@ class EnergyService:
                 if isinstance(value, int | float):
                     self._minute.setdefault(column, []).append(float(value))
 
+    def forget(self, device: str) -> None:
+        """Drop a removed device's last reading."""
+        with self._lock:
+            self._latest.pop(device, None)
+
     # --- queries ---------------------------------------------------------
 
     def devices(self) -> list[DeviceState]:

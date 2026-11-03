@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useClimate, useMode, useDeleteRelay, useDeleteRule, useRelay, useRelayEvents, useRules, useSaveRule, useUpdateRelay } from "@/api/hooks";
 import type { Relay, Rule } from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -53,8 +53,15 @@ function Rules({ relay }: { relay: Relay }) {
   const showError = useErrorToast();
   const [editing, setEditing] = useState<Rule | "new" | null>(null);
   const data = rules.data;
+  const { hash } = useLocation();
+  const anchor = useRef<HTMLDivElement>(null);
+  // Coming from the "Rules" button on a switch: jump straight to the rules.
+  useEffect(() => {
+    if (hash === "#rules") anchor.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [hash]);
 
   return (
+    <div ref={anchor} id="rules" style={{ scrollMarginTop: 16 }}>
     <Card label="Automatic rules" action={<button type="button" className="btn small" onClick={() => setEditing("new")}>Add rule</button>}>
       {data && (
         <div className={`small ${relay.mode === "manual" ? "c-accent" : "muted"}`}>
@@ -116,6 +123,7 @@ function Rules({ relay }: { relay: Relay }) {
       </div>
       {editing && <RuleEditor relayId={relay.id} rule={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
     </Card>
+    </div>
   );
 }
 

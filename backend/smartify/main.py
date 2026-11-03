@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from smartify import __version__
-from smartify.api import auth, relays, sensors, system, wifi
+from smartify.api import auth, notifications, relays, sensors, system, victron, wifi
 from smartify.api.deps import password_fingerprint
 from smartify.config import Settings, get_settings
 from smartify.context import AppContext
@@ -87,7 +87,15 @@ def create_app(
     async def _device(_: Request, exc: DeviceUnavailable) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=503)
 
-    for router in (system.router, auth.router, relays.router, sensors.router, wifi.router):
+    for router in (
+        system.router,
+        auth.router,
+        relays.router,
+        sensors.router,
+        wifi.router,
+        notifications.router,
+        victron.router,
+    ):
         app.include_router(router, prefix="/api")
 
     _mount_frontend(app, settings)

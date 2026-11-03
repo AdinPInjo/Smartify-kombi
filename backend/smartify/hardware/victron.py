@@ -72,3 +72,16 @@ def decode(device: str, key: str, data: bytes, rssi: int | None = None) -> Victr
         except Exception:  # one odd field must not drop the whole reading
             values[name[4:]] = None
     return VictronReading(device, _KINDS.get(module, module), model, values, rssi)
+
+
+def kind_of(data: bytes) -> str | None:
+    """Device kind from the unencrypted header, without the key (for discovery)."""
+    try:
+        from victron_ble.devices import detect_device_type
+    except ImportError:  # pragma: no cover
+        return None
+    parser_class = detect_device_type(data)
+    if parser_class is None:
+        return None
+    module = parser_class.__module__.rsplit(".", 1)[-1]
+    return _KINDS.get(module, module)

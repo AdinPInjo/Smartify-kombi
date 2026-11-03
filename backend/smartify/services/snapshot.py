@@ -27,6 +27,8 @@ def build_state(ctx: Any) -> dict[str, Any]:
         "gps": sensors.gps(ctx, _DEVICE),
         "gps_distance": sensors.gps_distance(ctx, _DEVICE, days=60),
         "energy": sensors.energy(ctx, _DEVICE),
+        "energy_forecast": sensors.energy_forecast(ctx, _DEVICE),
+        "stops": sensors.stops(ctx, _DEVICE, days=365),
         "weather": sensors.weather(ctx, _DEVICE),
         "system": system.system_status(ctx, _DEVICE),
     }

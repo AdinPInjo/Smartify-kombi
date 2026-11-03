@@ -1,5 +1,6 @@
-import { Gauge, Map, Settings, SunMedium, Thermometer, ToggleRight } from "lucide-react";
+import { Bell, Gauge, Map, Settings, SunMedium, Thermometer, ToggleRight } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
+import { useMode, useNotificationSettings } from "@/api/hooks";
 import { Topo } from "./instruments";
 
 const NAV = [
@@ -8,9 +9,14 @@ const NAV = [
   { to: "/climate", label: "Climate", Icon: Thermometer },
   { to: "/switches", label: "Switches", Icon: ToggleRight },
   { to: "/map", label: "Map", Icon: Map },
+  { to: "/notifications", label: "Alerts", Icon: Bell },
 ];
 
 export function AppShell() {
+  const { cloud, ready } = useMode();
+  const notifications = useNotificationSettings(ready && !cloud);
+  // A dot on the Alerts tab until the van can reach a phone.
+  const needsSetup = notifications.data !== undefined && notifications.data.active_channels.length === 0;
   return (
     <div className="shell">
       <Topo />
@@ -21,6 +27,7 @@ export function AppShell() {
           <NavLink key={to} to={to} end={end}>
             <Icon size={22} strokeWidth={2} aria-hidden="true" />
             {label}
+            {to === "/notifications" && needsSetup && <span className="nav-dot" aria-label="not set up" />}
           </NavLink>
         ))}
         <NavLink to="/settings" className="desktop-only">

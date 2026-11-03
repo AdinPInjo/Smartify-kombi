@@ -17,6 +17,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -237,9 +238,10 @@ class RuleService:
 
         evaluations: list[tuple[Rule, Evaluation]] = []
         decision: Decision | None = None
+        now = datetime.fromtimestamp(self._clock())
         for rule in rules:
             try:
-                result = evaluate(parse_condition(rule.condition), self._metric_source)
+                result = evaluate(parse_condition(rule.condition), self._metric_source, now)
             except InvalidInput as exc:
                 # A stored rule that no longer validates (manual DB edit, sync).
                 result = Evaluation(False, SensorIssue.MISSING)

@@ -86,6 +86,8 @@ export const METRIC_UNITS: Record<string, string> = {
   battery_voltage: "V",
   battery_current: "A",
   solar_power: "W",
+  water_level: "%",
+  speed: "km/h",
 };
 
 export const METRIC_LABELS: Record<string, string> = {
@@ -95,6 +97,8 @@ export const METRIC_LABELS: Record<string, string> = {
   battery_voltage: "Battery voltage",
   battery_current: "Battery current",
   solar_power: "Solar power",
+  water_level: "Water tank",
+  speed: "Speed",
 };
 
 /** YYYY-MM-DD in local time (matches the Pi's daily distance rows). */

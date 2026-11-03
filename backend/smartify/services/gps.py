@@ -33,6 +33,7 @@ from typing import Literal
 
 from smartify.db import transaction
 from smartify.hardware import GpsFix, GpsReceiver, HardwareError
+from smartify.services.conditions import MetricValue, SensorIssue
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +74,8 @@ class GpsState:
     error: str | None
     parked: bool = False
     """True while the van stands still and ``fix`` is the smoothed parked position."""
+    parked_since: int | None = None
+    """When the van stopped at the current parked spot."""
 
 
 def _good(fix: GpsFix) -> bool:
@@ -104,6 +107,8 @@ class GpsService:
         # Parked smoothing state (guarded by _lock)
         self._still: deque[tuple[float, float, int]] = deque(maxlen=_STILL_WINDOW)
         self._parked = False
+        self._parked_since: int | None = None
+        self._started_at = clock()
         self._anchor: tuple[float, float] | None = None
         self._fast_count = 0
         self._far_count = 0
@@ -139,6 +144,7 @@ class GpsService:
 
     def _leave_parked(self) -> None:
         self._parked = False
+        self._parked_since = None
         self._anchor = None
         self._still.clear()
         self._fast_count = self._far_count = 0
@@ -170,6 +176,7 @@ class GpsService:
                 self._still.clear()
                 self._still.append((fix.lat, fix.lon, now))
                 self._anchor = (fix.lat, fix.lon)
+                self._parked_since = now
                 self._far_count = 0
             elif good and meters <= 2 * _PARKED_RADIUS_M:
                 self._still.append((fix.lat, fix.lon, now))
@@ -184,6 +191,7 @@ class GpsService:
             self._still.append((fix.lat, fix.lon, now))
         if len(self._still) >= 2 and self._still[-1][2] - self._still[0][2] >= _PARK_AFTER_SECONDS:
             self._parked = True
+            self._parked_since = self._still[0][2]
             self._anchor = self._median_anchor()
             self._fast_count = self._far_count = 0
             log.info("Parked: position smoothed from %d fixes", len(self._still))
@@ -254,7 +262,23 @@ class GpsService:
                 return GpsState("no_device", self._fix, self._fix_at, self._error)
             fresh = self._fix_at is not None and self._clock() - self._fix_at < 30
             status = "ok" if fresh else "no_fix"
-            return GpsState(status, self._fix, self._fix_at, self._error, self._parked)
+            return GpsState(
+                status,
+                self._fix,
+                self._fix_at,
+                self._error,
+                self._parked,
+                self._parked_since if self._parked else None,
+            )
+
+    def metric(self, sensor: str, metric: str) -> MetricValue:
+        """Value source for rule conditions on ``speed`` (sensor ``gps``), in km/h."""
+        state = self.state()
+        if state.status == "ok" and state.fix is not None:
+            return MetricValue(0.0 if state.parked else float(state.fix.speed_kmh or 0.0))
+        if state.fix_at is None and self._clock() - self._started_at < 180:
+            return MetricValue(None, SensorIssue.WARMING_UP)  # first fix can take minutes
+        return MetricValue(None, SensorIssue.STALE)
 
     def track(self, since: int) -> list[dict]:
         with transaction(self._db_path) as conn:

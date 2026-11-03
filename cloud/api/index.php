@@ -339,6 +339,10 @@ function route(string $method, string $path): mixed
 
         case 'GET /energy':
             return $state('energy', ['available' => false, 'battery' => null, 'solar' => null, 'dcdc' => null, 'inverter' => null, 'devices' => []]);
+        case 'GET /energy/forecast':
+            return $state('energy_forecast', ['available' => false, 'reason' => 'no data from the van yet']);
+        case 'GET /stops':
+            return $state('stops', ['stops' => []]);
         case 'GET /energy/history':
             return ['points' => history('energy_samples', ['created_at', 'battery_voltage', 'battery_current', 'battery_soc', 'solar_power', 'solar_yield_today', 'dcdc_output_current', 'ac_out_power'], query_int('hours', 24, 1, 2160))];
 
@@ -361,6 +365,13 @@ function route(string $method, string $path): mixed
         case 'GET /wifi':
         case 'GET /wifi/networks':
         case 'POST /wifi/connect':
+        case 'GET /notifications':
+        case 'GET /notifications/settings':
+        case 'PATCH /notifications/settings':
+        case 'POST /notifications/test':
+        case 'POST /notifications/ntfy/new-topic':
+        case 'POST /notifications/telegram/detect-chat':
+        case 'POST /notifications/departure/pause':
             throw new HttpError(501, NOT_HERE);
     }
     throw new HttpError(404, 'Not Found');

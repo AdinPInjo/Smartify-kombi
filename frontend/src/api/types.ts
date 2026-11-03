@@ -63,7 +63,9 @@ export type Metric =
   | "battery_soc"
   | "battery_voltage"
   | "battery_current"
-  | "solar_power";
+  | "solar_power"
+  | "water_level"
+  | "speed";
 
 export type Condition =
   | { type: "threshold"; metric: Metric; sensor: string; op: "<" | "<=" | ">" | ">="; value: number }
@@ -71,7 +73,9 @@ export type Condition =
   | { type: "all"; conditions: Condition[] }
   | { type: "any"; conditions: Condition[] }
   | { type: "not"; condition: Condition }
-  | { type: "always" };
+  | { type: "always" }
+  /** Local time window; may cross midnight. days: 0 = Monday. */
+  | { type: "time"; from: string; to: string; days?: number[] };
 
 export interface RuleStatus {
   matched: boolean;
@@ -165,6 +169,87 @@ export interface GpsState {
   error: string | null;
   /** Standing still: `fix` is the smoothed parked position. */
   parked?: boolean;
+  parked_since?: number | null;
+}
+
+export interface Stop {
+  id: number;
+  lat: number;
+  lon: number;
+  arrived_at: number;
+  left_at: number | null;
+  place: string | null;
+  country: string | null;
+  here_now: boolean;
+  nights: number;
+  duration_seconds: number;
+  km_from_previous: number | null;
+}
+
+export interface EnergyForecast {
+  available: boolean;
+  reason: string | null;
+  soc_now?: number | null;
+  min_soc?: number | null;
+  min_at?: number | null;
+  low_at?: number | null;
+  load_w?: number | null;
+  solar_peak_w?: number | null;
+  solar_wh_24h?: number | null;
+  capacity_ah?: number | null;
+  capacity_estimated?: boolean;
+  points?: { ts: number; soc: number }[];
+}
+
+export type NotifyChannel = "ntfy" | "telegram";
+
+interface AlertToggle {
+  enabled: boolean;
+}
+interface ThresholdAlert extends AlertToggle {
+  threshold: number;
+}
+
+export interface NotificationSettings {
+  channels: {
+    ntfy: { enabled: boolean; server: string; topic: string; token: string; token_set: boolean };
+    telegram: { enabled: boolean; bot_token: string; bot_token_set: boolean; chat_id: string };
+  };
+  alerts: {
+    battery_low: ThresholdAlert;
+    battery_not_charging: AlertToggle;
+    cold_inside: ThresholdAlert & { sensor: string };
+    hot_inside: ThresholdAlert & { sensor: string };
+    water_low: ThresholdAlert;
+    sensor_fault: AlertToggle;
+    relay_cutoff: AlertToggle;
+    departure: AlertToggle & {
+      after_minutes: number;
+      night_only: boolean;
+      night_from: string;
+      night_to: string;
+      paused_until: number | null;
+    };
+    frost_forecast: ThresholdAlert;
+    energy_forecast: ThresholdAlert & { battery_capacity_ah: number | null; solar_peak_w: number | null };
+  };
+  quiet_hours: { enabled: boolean; from: string; to: string };
+  repeat_hours: number;
+  active_channels: NotifyChannel[];
+}
+
+export interface NotificationEntry {
+  id: number;
+  alert: string;
+  title: string;
+  message: string;
+  priority: "low" | "default" | "high" | "urgent";
+  status: "queued" | "sent" | "dropped";
+  last_error: string | null;
+  attempts: number;
+  created_at: number;
+  sent_at: number | null;
+  next_attempt_at: number;
 }
 
 export interface TrackPoint {
@@ -311,4 +396,33 @@ export interface LogEntry {
   level: string;
   logger: string;
   message: string;
+}
+
+export type VictronKind = "battery_monitor" | "solar_charger" | "dcdc_converter" | "inverter_charger";
+
+export interface VictronConfigured {
+  name: string;
+  mac: string;
+  source: "dashboard" | "env";
+  kind: string | null;
+  model: string | null;
+  rssi: number | null;
+  updated_at: number | null;
+  status: "ok" | "stale" | "never";
+}
+
+export interface VictronNearby {
+  mac: string;
+  name: string | null;
+  kind: string | null;
+  rssi: number | null;
+  seen_at: number;
+  added_as: string | null;
+  suggested_name: string;
+}
+
+export interface VictronDevicesResponse {
+  bluetooth: boolean;
+  error: string | null;
+  devices: VictronConfigured[];
 }

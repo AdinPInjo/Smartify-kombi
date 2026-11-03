@@ -81,11 +81,32 @@ When the battery is low, the higher priority wins and the heater stays off.
 { "type": "any", "conditions": [ … ] }     // at least one matches
 { "type": "not", "condition": { … } }
 { "type": "always" }
+{ "type": "time", "from": "06:30", "to": "08:00", "days": [0, 1, 2, 3, 4] }
 ```
 
-`op` is one of `<`, `<=`, `>`, `>=`. `metric` is `temperature`, `humidity`,
-`battery_soc`, `battery_voltage`, `battery_current` or `solar_power`.
+`op` is one of `<`, `<=`, `>`, `>=`. `metric` is `temperature`, `humidity`
+(sensor = DHT22 name), `battery_soc`, `battery_voltage`, `battery_current`,
+`solar_power` (sensor = Victron device name), `water_level` (sensor `tank`, in %)
+or `speed` (sensor `gps`, km/h, 0 while parked).
 Conditions can be nested up to 4 levels.
+
+`time` matches the Pi's local time from `from` up to (not including) `to`. A
+window past midnight like `22:00`–`06:00` works. `days` is optional (0 = Monday,
+6 = Sunday) and names the days the window *starts* on. In the dashboard choose
+**Time of day (schedule)**, or tick **Only at certain times** on any rule.
+
+Example: heater on at 06:30 on weekdays so the van is warm when you get up,
+but only when it is below 15 °C inside:
+
+```json
+{
+  "type": "all",
+  "conditions": [
+    { "type": "threshold", "metric": "temperature", "sensor": "inside", "op": "<", "value": 15 },
+    { "type": "time", "from": "06:30", "to": "08:00", "days": [0, 1, 2, 3, 4] }
+  ]
+}
+```
 
 Example: fan on when it's warm inside **and** the battery is above 50 %:
 

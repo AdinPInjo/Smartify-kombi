@@ -5,12 +5,14 @@ import { Climate } from "./pages/Climate";
 import { Energy } from "./pages/Energy";
 import { Login } from "./pages/Login";
 import { MapPage } from "./pages/MapPage";
+import { Notifications } from "./pages/Notifications";
 import { Overview } from "./pages/Overview";
 import { Panel } from "./pages/Panel";
 import { Settings } from "./pages/Settings";
 import { SwitchDetail } from "./pages/SwitchDetail";
 import { Switches } from "./pages/Switches";
 import { System } from "./pages/System";
+import { VictronSetup } from "./pages/VictronSetup";
 
 export function App() {
   return (
@@ -35,10 +37,12 @@ export function App() {
         >
           <Route index element={<Overview />} />
           <Route path="energy" element={<Energy />} />
+          <Route path="energy/devices" element={<VictronSetup />} />
           <Route path="climate" element={<Climate />} />
           <Route path="switches" element={<Switches />} />
           <Route path="switches/:id" element={<SwitchDetail />} />
           <Route path="map" element={<MapPage />} />
+          <Route path="notifications" element={<Notifications />} />
           <Route path="settings" element={<Settings />} />
           <Route path="system" element={<System />} />
         </Route>

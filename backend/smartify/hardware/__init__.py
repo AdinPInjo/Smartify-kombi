@@ -9,6 +9,7 @@ from smartify.hardware.base import (
     AnalogReader,
     ClimateReading,
     ClimateSensor,
+    DiscoveredVictron,
     GpsFix,
     GpsReceiver,
     Hardware,
@@ -24,6 +25,7 @@ __all__ = [
     "AnalogReader",
     "ClimateReading",
     "ClimateSensor",
+    "DiscoveredVictron",
     "GpsFix",
     "GpsReceiver",
     "Hardware",
@@ -94,14 +96,14 @@ def _build_pi(settings: Settings) -> Hardware:
         gps = SerialGpsReceiver(
             settings.gps_device, settings.gps_baud, ublox_tuning=settings.gps_ublox_tuning
         )
+    # Always listen, so Victron devices can be found and added from the dashboard.
     victron = None
-    if settings.victron_devices:
-        try:
-            from smartify.hardware.pi.victron import BleVictronListener
+    try:
+        from smartify.hardware.pi.victron import BleVictronListener
 
-            victron = BleVictronListener(settings.victron_devices)
-        except HardwareError:
-            log.exception("Victron devices configured, but Bluetooth support is missing")
+        victron = BleVictronListener(settings.victron_devices)
+    except HardwareError:
+        log.exception("Bluetooth support for Victron devices is missing")
     log.info("Using Raspberry Pi hardware (%d climate sensors)", len(sensors))
     return Hardware(
         relays=PinctrlRelayDriver(),

@@ -40,18 +40,46 @@ def build_url(lat: float, lon: float) -> str:
         "longitude": f"{lon:.4f}",
         "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
         "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code",
+        "hourly": "temperature_2m,shortwave_radiation",
         "forecast_days": "5",
         "timezone": "auto",
+        # Unix timestamps, so hourly values line up with the Pi's clock in any time zone.
+        "timeformat": "unixtime",
     }
     return f"{API_URL}?{urllib.parse.urlencode(params)}"
+
+
+def _day(value: Any, offset: int) -> str:
+    """Daily ``time`` is a Unix timestamp with ``timeformat=unixtime``; show it as a date."""
+    if isinstance(value, int | float):
+        return time.strftime("%Y-%m-%d", time.gmtime(value + offset))
+    return str(value)
+
+
+def parse_hourly(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """``[{"ts", "temperature_c", "radiation_w_m2"}]`` from the hourly forecast."""
+    hourly = data.get("hourly") or {}
+    times = hourly.get("time") or []
+    temps = hourly.get("temperature_2m") or []
+    radiation = hourly.get("shortwave_radiation") or []
+    return [
+        {
+            "ts": int(ts),
+            "temperature_c": temps[i] if i < len(temps) else None,
+            "radiation_w_m2": radiation[i] if i < len(radiation) else None,
+        }
+        for i, ts in enumerate(times)
+        if isinstance(ts, int | float)
+    ]
 
 
 def parse_response(data: dict[str, Any]) -> dict[str, Any]:
     current = data.get("current", {})
     daily = data.get("daily", {})
+    offset = int(data.get("utc_offset_seconds") or 0)
     days = [
         {
-            "date": date,
+            "date": _day(date, offset),
             "temperature_max": daily["temperature_2m_max"][i],
             "temperature_min": daily["temperature_2m_min"][i],
             "precipitation_mm": daily["precipitation_sum"][i],
@@ -86,6 +114,7 @@ class WeatherService:
         self._latest: dict[str, Any] | None = None
         self._latest_at: int | None = None
         self._latest_position: tuple[float, float] | None = None
+        self._hourly: list[dict[str, Any]] = []
         self._next_attempt = 0.0
         self._error: str | None = None
 
@@ -116,7 +145,9 @@ class WeatherService:
             if not (due or moved_km >= _REFRESH_DISTANCE_KM) or now < self._next_attempt:
                 return
         try:
-            weather = parse_response(self._fetch(build_url(*position)))
+            data = self._fetch(build_url(*position))
+            weather = parse_response(data)
+            hourly = parse_hourly(data)
         except Exception as exc:  # network errors are routine in a van
             with self._lock:
                 self._error = f"weather unavailable: {exc}"
@@ -126,6 +157,7 @@ class WeatherService:
         with self._lock:
             self._latest, self._latest_at = weather, int(now)
             self._latest_position, self._error = position, None
+            self._hourly = hourly
         with transaction(self._db_path) as conn:
             conn.execute(
                 "INSERT INTO weather_samples (lat, lon, temperature_c, humidity, created_at) "
@@ -141,6 +173,15 @@ class WeatherService:
                 "error": self._error,
                 **(self._latest or {}),
             }
+
+    def hourly(self) -> list[dict[str, Any]]:
+        """Hourly forecast (temperature, solar radiation) from the last fetch.
+
+        Kept out of :meth:`current`, which is uploaded to the remote dashboard
+        every minute and should stay small on mobile data.
+        """
+        with self._lock:
+            return list(self._hourly)
 
     def history(self, since: int) -> list[dict]:
         with transaction(self._db_path) as conn:

@@ -20,31 +20,38 @@ Other Instant Readout devices (Smart Battery Sense, Lithium Smart, Lynx Smart
 BMS, Smart BatteryProtect, AC chargers) are decoded too and appear under
 Energy → Devices.
 
-## Setup
+## Setup (in the dashboard)
 
-For every device:
+Go to **Energy → Add Victron devices** (or **Settings → Victron devices**).
+No restart and no `.env` editing needed.
 
-1. Open **VictronConnect** on your phone and connect to the device.
-2. Tap the **gear** (settings), then **Product info** (on some devices it is in the **⋮** menu).
-3. Enable **Instant readout via Bluetooth**.
-4. Tap **Show** next to **Instant readout details**: note the **MAC address** and the
-   **encryption key** (32 characters).
+1. In **VictronConnect** on your phone, open the device, tap the **gear** (on some
+   devices the **⋮** menu), then **Product info**.
+2. Set **Instant readout via Bluetooth** to **Enabled**.
+3. Tap **Show** next to **Instant readout details** and keep that screen open.
+4. In the dashboard the device appears under **Devices nearby** within a few
+   seconds. Tap **Add**, paste the **encryption key** (32 characters) and keep or
+   change the suggested name (`shunt`, `solar`, `orion`, `multiplus`).
+5. The key is checked against the device straight away. Its values appear on the
+   Energy page within seconds.
 
-Then add all devices to `backend/.env` on one line, as `name|MAC|key`,
-separated by commas:
+The **name** (lowercase, no spaces) is what rules use, e.g. `battery_soc` of `shunt`.
+Devices that are out of range can be added by hand with their MAC address.
+
+### Alternative: `.env`
+
+Devices can also be listed in `backend/.env` as `name|MAC|key`, comma separated,
+followed by `sudo systemctl restart smartify`. They show up in the dashboard
+marked “set in .env” and can only be removed there.
 
 ```bash
-SMARTIFY_VICTRON_DEVICES=shunt|C0:3B:98:AA:BB:01|0df4d0395b7d1a876c0c33ecb9e70dcd,solar|E1:5A:24:AA:BB:02|8a14…,orion|D2:01:7C:AA:BB:03|…,multiplus|F4:33:21:AA:BB:04|…
+SMARTIFY_VICTRON_DEVICES=shunt|C0:3B:98:AA:BB:01|0df4d0395b7d1a876c0c33ecb9e70dcd,solar|E1:5A:24:AA:BB:02|8a14…
 ```
-
-* The **name** is yours to choose (lowercase, no spaces). It appears in the
-  dashboard and in rules (e.g. `battery_soc` of `shunt`).
-* Restart: `sudo systemctl restart smartify`
-* Within a minute **Energy** shows the devices with their signal strength.
 
 ## Notes
 
 * Keep the encryption keys private: anyone with a key can read that device's data.
+  Keys added in the dashboard stay on the Pi and are never sent to the remote dashboard.
 * Range: a few metres through the van's interior. Below about −90 dBm readings
   get patchy; move the Pi or the device.
 * A device silent for 2 minutes (`SMARTIFY_VICTRON_STALE_SECONDS`) is shown as

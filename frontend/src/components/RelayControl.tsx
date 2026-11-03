@@ -1,3 +1,4 @@
+import { ListChecks } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useSetRelayMode } from "@/api/hooks";
@@ -68,7 +69,14 @@ export function RelayControl({ relay, large = false, link = true }: { relay: Rel
             <span className="num" style={{ fontSize: large ? 30 : 24 }}>{relayTitle(relay)}</span>
           )}
         </div>
-        <span className={`mono tiny ${on ? "c-accent" : "muted"}`}>{on ? "ON" : "OFF"}</span>
+        <div className="row" style={{ gap: 8 }}>
+          <span className={`mono tiny ${on ? "c-accent" : "muted"}`}>{on ? "ON" : "OFF"}</span>
+          {link && (
+            <Link to={`/switches/${relay.id}#rules`} className="btn small" aria-label={`Rules for ${relayTitle(relay)}`}>
+              <ListChecks size={16} aria-hidden="true" /> Rules
+            </Link>
+          )}
+        </div>
       </div>
       <div className={`small ${relay.last_error ? "c-danger" : "muted"}`}>{relayExplanation(relay)}</div>
       <Segmented<Mode>

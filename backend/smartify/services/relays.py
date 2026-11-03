@@ -174,6 +174,11 @@ class RelayService:
 
     # --- queries ---------------------------------------------------------
 
+    @property
+    def tripped_ids(self) -> set[str]:
+        """Relays currently forced off by their temperature cutoff."""
+        return set(self._tripped)
+
     def _from_row(self, row) -> Relay:
         relay_id = row["id"]
         return Relay.from_row(
