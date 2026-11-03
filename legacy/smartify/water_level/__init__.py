@@ -1,2 +1,0 @@
-"""Water level sensor module."""
-

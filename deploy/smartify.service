@@ -1,6 +1,7 @@
 # Smartify Kombi backend.
 #
 # Installed by deploy/install.sh, which replaces __USER__ and __DIR__.
+# Logs: journalctl -u smartify -f
 # Manual install:
 #   sudo cp deploy/smartify.service /etc/systemd/system/
 #   (edit __USER__ and __DIR__), then:
@@ -15,9 +16,11 @@ StartLimitBurst=10
 [Service]
 Type=notify
 User=__USER__
+# Settings come from __DIR__/backend/.env (read by Smartify itself).
 WorkingDirectory=__DIR__/backend
-EnvironmentFile=__DIR__/backend/.env
 ExecStart=__DIR__/backend/.venv/bin/python -m smartify
+# Lets the dashboard listen on port 80 (http://kombi.local) without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 # Safety net: whenever the service stops, crashes or is killed, switch every
 # relay off. pinctrl keeps pins at their last level after the process exits,

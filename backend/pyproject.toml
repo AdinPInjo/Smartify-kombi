@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "smartify-kombi"
 version = "0.2.0.dev0"
 description = "Raspberry Pi controller for camper vans: relays, temperature/humidity, water level, GPS and remote sync."
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",

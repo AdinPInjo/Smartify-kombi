@@ -1,38 +1,80 @@
 # Smartify Kombi
 
-Raspberry Pi controller for camper vans: relays (heater, fan…), temperature and
-humidity, water tank level, GPS tracking, and a web dashboard.
+**A Raspberry Pi brain for your camper van.** Temperatures, water tank,
+battery and solar, GPS track and automatic switches, on a dashboard for your
+phone, a tablet on the wall, and (optionally) from anywhere over the internet.
 
-> **Work in progress.** The project is being restructured on the
-> `refactor/restructure` branch. The previous implementation lives in `legacy/`
-> and is removed once everything has been ported.
+Built for a van travelling the Balkans, shared free with everyone who builds
+their own.
 
-## Layout
+## What it does
 
-```
-backend/    Python service that runs on the Pi (FastAPI + SQLite)
-frontend/   Web dashboard (React)                      ← currently smartify-ui/
-cloud/      Optional remote dashboard + sync (PHP + MySQL, any shared hosting)
-legacy/     Old implementation, kept for reference during the port
-```
+* **Climate**: DHT22 temperature/humidity sensors (inside, outside…), history, outside weather forecast for where you are.
+* **Water**: tank level from an analog sender via an ADS1115, compensated for the changing battery voltage.
+* **Energy**: Victron SmartShunt, SmartSolar MPPT, Orion and MultiPlus (VE.Bus Smart dongle) over Bluetooth: battery %, solar, alternator charging, inverter. Battery voltage from the ADS1115 as a fallback.
+* **Switches**: relays for heater, fan, pump… On / Off / Auto, timed manual override, and rules like *"heater on below 8 °C, never below 20 % battery"*.
+* **Safety first**: every relay goes off on start, stop or crash; dead sensors switch their relays off; per-relay temperature cutoff; systemd watchdog.
+* **GPS**: route history, distance per day, monthly GPX archive (Komoot, Strava, Google Earth).
+* **WiFi** from the dashboard: scan and join campsite networks.
+* **Tablet panel**: a full-screen instrument cluster at `/panel`.
+* **Remote dashboard** on any cheap PHP + MySQL web hosting: see and switch everything from anywhere. The van connects out, so no open ports or fixed IP are needed.
+* **Works offline**: the van's dashboard runs on the Pi, no cloud account needed.
 
-## Run the backend without a Pi
+## Quick start
 
-The backend simulates all hardware by default, so it runs on any machine:
-
-```bash
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-python -m smartify          # http://localhost:8000/api/health
-pytest                      # run the tests
-```
-
-On the Raspberry Pi install the hardware drivers too and switch to real hardware:
+On a Raspberry Pi (3B or newer) with Raspberry Pi OS Lite:
 
 ```bash
-pip install -e ".[pi]"
-SMARTIFY_HARDWARE=pi python -m smartify
+git clone https://github.com/AdinPInjo/Smartify-kombi.git ~/smartify-kombi
+cd ~/smartify-kombi && sudo ./deploy/install.sh
 ```
 
-All settings are environment variables; see [`.env.example`](.env.example).
+Full guide from an empty SD card: **[docs/install.md](docs/install.md)**
+
+| Guide | |
+|---|---|
+| [Installation](docs/install.md) | SD card, install, first checks, troubleshooting |
+| [Wiring](docs/wiring.md) | DHT22, ADS1115 + battery divider, GPS, relays, power |
+| [Victron](docs/victron.md) | Bluetooth setup for SmartShunt, MPPT, Orion, MultiPlus |
+| [Rules](docs/rules.md) | Automatic switching, priorities, combined conditions |
+| [Remote dashboard](cloud/README.md) | Install on your web hosting |
+
+## Try it without a Pi
+
+Every device has a simulation, so the whole system runs on a laptop:
+
+```bash
+cd backend && python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]" && python -m smartify      # API on :8000, simulated van
+
+cd frontend && npm install && npm run dev            # dashboard on :5173
+```
+
+Sign in with `admin` / `changeme` (only allowed with simulated hardware).
+
+## How it's built
+
+```
+backend/    Python 3.11+, FastAPI, SQLite. Runs on the Pi.
+frontend/   React + TypeScript dashboard, served by the backend.
+cloud/      PHP 8 + MySQL remote dashboard for shared hosting.
+deploy/     Installer, updater, systemd service.
+docs/       Guides.
+```
+
+* All settings: environment variables in `backend/.env` ([.env.example](.env.example)).
+* History is stored as one averaged row per minute to spare the SD card, and
+  kept 90 days; the GPS route is archived to GPX before deletion.
+* Tests: `cd backend && pytest` (simulated hardware, no Pi needed).
+
+## Hardware used in the original van
+
+Raspberry Pi 3B · 2× DHT22 · ADS1115 with a 47k/10k battery divider ·
+analog water level sender · NEO-6M GPS · 2-channel relay board (heater, fan) ·
+Victron SmartShunt, SmartSolar MPPT, Orion, MultiPlus + VE.Bus Smart dongle.
+
+## Disclaimer
+
+Smartify is a convenience, not a safety system. Heaters, batteries and
+electrical installations need their own protection: fuses, thermal cut-outs,
+a BMS. Use at your own risk.
