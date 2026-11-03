@@ -1,0 +1,13 @@
+# Smartify Kombi: starts smartify-update.service when the dashboard asks for an
+# update (Settings → Updates writes update/request.json in the data folder).
+# Installed by deploy/install.sh, which replaces __DATA__.
+
+[Unit]
+Description=Smartify Kombi update requests
+
+[Path]
+PathExists=__DATA__/update/request.json
+Unit=smartify-update.service
+
+[Install]
+WantedBy=multi-user.target

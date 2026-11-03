@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Update Smartify Kombi to the latest version and restart it.
+# Update Smartify Kombi to the latest version and restart it, from the terminal.
+# Easier: Settings → Updates in the dashboard (with rollback).
 #
 #   cd ~/smartify-kombi && sudo ./deploy/update.sh
 #
@@ -20,7 +21,14 @@ fi
 
 echo "▸ Downloading the new version"
 OLD=$(as_user git -C "$REPO" rev-parse HEAD)
-as_user git -C "$REPO" pull --ff-only
+if as_user git -C "$REPO" symbolic-ref -q HEAD >/dev/null; then
+  as_user git -C "$REPO" pull --ff-only
+else
+  # Updated from the dashboard before, so on a release: go to the newest release.
+  as_user git -C "$REPO" fetch --force --tags --quiet origin
+  LATEST=$(as_user git -C "$REPO" tag --list 'v*' --sort=-v:refname | head -n1)
+  as_user git -C "$REPO" -c advice.detachedHead=false checkout --quiet --detach "$LATEST"
+fi
 NEW=$(as_user git -C "$REPO" rev-parse HEAD)
 if [[ $OLD == "$NEW" ]]; then
   echo "  Already up to date."

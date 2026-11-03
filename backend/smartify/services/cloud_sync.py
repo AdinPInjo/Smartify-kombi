@@ -97,6 +97,8 @@ class CloudStatus:
     last_error: str | None = None
     last_error_at: int | None = None
     commands_applied: int = 0
+    remote_version: str | None = None
+    """Version of the remote dashboard, from its last answer."""
 
 
 class CloudSync:
@@ -211,6 +213,8 @@ class CloudSync:
         self._results = []  # delivered
         self.status.last_ok_at = int(now)
         self.status.last_error = None
+        if isinstance(response.get("version"), str):
+            self.status.remote_version = response["version"][:20]
         if not self._same_instance(response):
             # Our cursors belonged to another cloud: ignore this answer, start fresh next tick.
             self._next_full = now

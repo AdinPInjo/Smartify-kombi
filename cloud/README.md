@@ -62,7 +62,12 @@ Either way, the setup guide then:
 
 ## Updating
 
-Upload `installer.php` from the newest release again and open it: it asks for
+From 0.4.0 on: **Settings → Updates** in the remote dashboard shows new versions with
+their changelog, installs them with one tap, and can go back to an earlier version. A
+version that doesn't work there is undone automatically. See [docs/updates.md](../docs/updates.md).
+
+Without that (older versions, or hosting where PHP can't write its own files):
+upload `installer.php` from the newest release again and open it: it asks for
 your login, downloads the new version and keeps your settings and data
 (`private/`). Or upload the new zip's files over the old ones (keep `private/`).
 The database is updated automatically on the next visit.

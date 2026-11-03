@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+import types
+
 import pytest
 
 HEAT_RULE = {
@@ -135,7 +138,14 @@ def test_climate_snapshot_and_history(client, ctx):
     assert client.get("/api/climate/nope/history").status_code == 404
 
 
-def test_water_level_battery_and_calibration(client, ctx):
+def test_water_level_battery_and_calibration(client, ctx, monkeypatch):
+    # The simulated tank fills and empties with the clock; keep it half full here,
+    # or calibrating "full" fails at the hours when it reads empty.
+    import smartify.hardware.mock as mock_hardware
+
+    monkeypatch.setattr(
+        mock_hardware, "math", types.SimpleNamespace(sin=math.sin, cos=lambda _x: 0.0)
+    )
     assert client.get("/api/water").json()["ok"] is False  # nothing sampled yet
 
     ctx.water.sample()

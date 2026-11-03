@@ -1,0 +1,20 @@
+# Smartify Kombi updater (deploy/updater.py). Installed by deploy/install.sh,
+# which replaces __USER__, __DIR__ and __DATA__. Started by smartify-update.path.
+# Logs: journalctl -u smartify-update
+#
+# Runs as the normal user, not as root. Its only extra right is restarting
+# smartify.service, given by /etc/polkit-1/rules.d/50-smartify-update.rules.
+
+[Unit]
+Description=Smartify Kombi updater
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=/usr/bin/python3 __DIR__/deploy/updater.py --data-dir __DATA__ --repo __DIR__
+# A Pi 3 needs a while when Python packages change.
+TimeoutStartSec=45min
+NoNewPrivileges=true
+PrivateTmp=true

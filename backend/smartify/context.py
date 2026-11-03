@@ -31,6 +31,7 @@ from smartify.services.relays import RelayService
 from smartify.services.rules import RuleService
 from smartify.services.snapshot import build_state
 from smartify.services.trips import TripService
+from smartify.services.updates import UpdateService
 from smartify.services.victron_setup import VictronDevices
 from smartify.services.water import WaterService
 from smartify.services.weather import WeatherService
@@ -57,6 +58,7 @@ class AppContext:
     trips: TripService
     victron: VictronDevices
     alerts: AlertService = field(init=False)
+    updates: UpdateService = field(init=False)
     cloud: CloudSync | None = None
     cloud_store: CloudConnectionStore | None = None
     cloud_transport: Any = None
@@ -122,6 +124,17 @@ class AppContext:
             victron=victron,
         )
         ctx.alerts = AlertService(ctx, notifications, db)
+
+        def moving() -> bool:
+            speed = gps.metric(GPS_SENSOR, "speed").value if gps.enabled else None
+            return speed is not None and speed > 3
+
+        ctx.updates = UpdateService(
+            settings,
+            notifications,
+            moving=moving,
+            remote_version=lambda: ctx.cloud.status.remote_version if ctx.cloud else None,
+        )
         return ctx
 
     def start(self) -> None:
@@ -139,6 +152,7 @@ class AppContext:
             Worker("maintenance", 6 * 3600, self._maintenance),
             Worker("alerts", 10, self.alerts.check),
             Worker("notify", 10, self.notifications.deliver_due),
+            Worker("updates", 300, self.updates.tick),
         ]
         if self.gps.enabled:
             self.workers.append(Worker("gps", 1, self.gps.poll))

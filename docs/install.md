@@ -101,7 +101,7 @@ Tablet in the van: open `http://kombi.local/panel`, then use the browser's
 journalctl -u smartify -f           # live log
 sudo systemctl restart smartify     # after editing backend/.env
 nano ~/smartify-kombi/backend/.env  # settings (all options: .env.example)
-sudo ./deploy/update.sh             # update to the latest version
+sudo ./deploy/update.sh             # update to the latest version (or: Settings → Updates)
 ```
 
 ## Data and backups

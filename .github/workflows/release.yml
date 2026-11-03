@@ -1,9 +1,15 @@
 name: Release
 
-# Push a tag like v0.2.0 to publish a release with:
-#   dashboard.tar.gz     prebuilt dashboard, downloaded by deploy/install.sh
+# Push a tag like v0.4.0 to publish a release. Before that, add a
+# "## 0.4.0 - YYYY-MM-DD" section to CHANGELOG.md and set the version in the
+# version files; this workflow stops if they don't match the tag.
+#
+# Release files:
+#   dashboard.tar.gz     prebuilt dashboard (van updates, deploy/install.sh)
 #   smartify-cloud.zip   remote dashboard for web hosting (see cloud/README.md)
 #   installer.php        one-file installer/updater for the remote dashboard
+#   versions.json        every version with its changelog, read by "Settings → Updates"
+#   SHA256SUMS           checksums, verified before anything is installed
 on:
   push:
     tags: ["v*"]
@@ -16,15 +22,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Changelog and version files match the tag
+        run: python3 scripts/release_info.py check "${GITHUB_REF_NAME}"
       - uses: actions/setup-node@v5
         with:
           node-version: 22
       - run: scripts/build-cloud.sh
       - run: tar -czf dist/dashboard.tar.gz -C frontend/dist .
+      - name: Version list, release text and checksums
+        run: |
+          python3 scripts/release_info.py versions "${GITHUB_REF_NAME}" dist/versions.json
+          python3 scripts/release_info.py notes "${GITHUB_REF_NAME}" > dist/release-notes.md
+          cd dist && sha256sum dashboard.tar.gz smartify-cloud.zip installer.php versions.json > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: dist/release-notes.md
           files: |
             dist/dashboard.tar.gz
             dist/smartify-cloud.zip
             dist/installer.php
+            dist/versions.json
+            dist/SHA256SUMS

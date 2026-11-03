@@ -8,6 +8,7 @@
 declare(strict_types=1);
 
 require __DIR__ . '/lib.php';
+require __DIR__ . '/updates.php';
 
 const OFFLINE_AFTER = 90;        // seconds without a sync before the van counts as offline
 const RESULT_TIMEOUT = 300;      // delivered command without a result: assume applied
@@ -205,6 +206,8 @@ function device_sync(): array
         'server_time' => $now,
         // A new id (fresh install) tells the van to send everything again.
         'instance' => instance_id(),
+        // Lets the van mention in its update notification that this needs an update too.
+        'version' => SMARTIFY_CLOUD_VERSION,
     ];
 }
 
@@ -377,6 +380,25 @@ function route(string $method, string $path): mixed
             // A new token: the van stays disconnected until it gets this code.
             return ['code' => new_device_token(), 'url' => base_url()];
 
+        case 'GET /updates':
+            update_check(); // when due
+            return update_view();
+        case 'PATCH /updates/settings':
+            $mode = json_in()['mode'] ?? null;
+            if (!in_array($mode, ['off', 'notify', 'auto'], true)) throw new HttpError(422, 'mode must be off, notify or auto');
+            set_meta('update_mode', $mode);
+            return update_view();
+        case 'POST /updates/check':
+            update_check(true);
+            return update_view();
+        case 'POST /updates/install':
+            $version = (string)(json_in()['version'] ?? '');
+            if (!preg_match('/^\d+\.\d+\.\d+$/', $version)) throw new HttpError(422, 'version must look like 1.2.3');
+            $result = update_install($version);
+            // This request still runs the old code: report what is installed now.
+            $installed = $result['state'] === 'done' ? $version : SMARTIFY_CLOUD_VERSION;
+            return array_merge(update_view(), ['current' => $installed, 'update_available' => version_newer(update_latest(), $installed)]);
+
         case 'GET /commands':
             $rows = db()->query('SELECT id, type, target, status, result, created_at, done_at FROM commands ORDER BY id DESC LIMIT 50')->fetchAll();
             return ['commands' => $rows];
@@ -418,8 +440,16 @@ try {
     if (is_file(CONFIG_FILE)) {
         ensure_schema();
     }
-    $result = route($_SERVER['REQUEST_METHOD'] ?? 'GET', $path);
+    $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    $result = route($method, $path);
     json_out($result);
+    if ($method === 'POST' && rtrim($path, '/') === '/device/sync') {
+        try {
+            update_after_sync();
+        } catch (Throwable $e) {
+            error_log('smartify cloud update check: ' . $e->getMessage());
+        }
+    }
 } catch (HttpError $e) {
     json_out(['detail' => $e->getMessage()], $e->status);
 } catch (Throwable $e) {

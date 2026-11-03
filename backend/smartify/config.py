@@ -169,6 +169,14 @@ class Settings(BaseSettings):
     cloud_state_seconds: float = Field(default=60, ge=10)
     """How often live values and history are uploaded (mobile data use)."""
 
+    # --- Updates (Settings → Updates) -----------------------------------------
+    update_repo: str = "AdinPInjo/Smartify-kombi"
+    """GitHub project (owner/name) whose releases the van installs."""
+    update_check_hours: float = Field(default=6, ge=1)
+    """How often to look for a new version (unless updates are off)."""
+    updater_unit: Path = Path("/etc/systemd/system/smartify-update.path")
+    """Installed by deploy/install.sh; without it the dashboard can't install updates."""
+
     # --- WiFi (NetworkManager / nmcli) ---------------------------------------
     wifi_interface: str = "wlan0"
 

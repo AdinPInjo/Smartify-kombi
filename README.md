@@ -40,6 +40,8 @@ Full guide from an empty SD card: **[docs/install.md](docs/install.md)**
 | [Victron](docs/victron.md) | Bluetooth setup for SmartShunt, MPPT, Orion, MultiPlus |
 | [Notifications](docs/notifications.md) | Alerts on your phone with ntfy or Telegram |
 | [Rules](docs/rules.md) | Automatic switching, priorities, combined conditions |
+| [Updates](docs/updates.md) | New versions from the dashboard, going back, what makes it safe |
+| [Releasing](docs/releasing.md) | For maintainers: changelog, version, tag |
 | [Remote dashboard](cloud/README.md) | Install on your web hosting |
 
 ## Try it without a Pi

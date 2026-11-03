@@ -189,6 +189,32 @@ systemctl daemon-reload
 systemctl enable smartify >/dev/null 2>&1
 ok "smartify.service enabled (starts on every boot)"
 
+step "Enabling updates from the dashboard (Settings → Updates)"
+DATA_DIR=$(grep -E '^SMARTIFY_DATA_DIR=' "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- || true)
+DATA_DIR=${DATA_DIR:-data}
+[[ $DATA_DIR == /* ]] || DATA_DIR="$BACKEND/$DATA_DIR"
+as_user mkdir -p "$DATA_DIR/update"
+for unit in smartify-update.service smartify-update.path; do
+  sed -e "s|__USER__|$SERVICE_USER|g" -e "s|__DIR__|$REPO|g" -e "s|__DATA__|$DATA_DIR|g" \
+    "$REPO/deploy/$unit" >"/etc/systemd/system/$unit"
+done
+# The updater runs as $SERVICE_USER; this is the one extra right it gets.
+cat >/etc/polkit-1/rules.d/50-smartify-update.rules <<EOF
+// Smartify Kombi: let the updater (user $SERVICE_USER) start, stop and restart smartify.service.
+polkit.addRule(function (action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "$SERVICE_USER") {
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (unit == "smartify.service" && (verb == "start" || verb == "stop" || verb == "restart")) {
+      return polkit.Result.YES;
+    }
+  }
+});
+EOF
+systemctl daemon-reload
+systemctl enable --now smartify-update.path >/dev/null 2>&1
+ok "updates can be installed and rolled back from the dashboard"
+
 # --- done ---------------------------------------------------------------------------------------------
 
 HOST=$(hostname)
