@@ -23,5 +23,5 @@ $html = str_replace('<base href="/" />', '<base href="' . $base . '" />', $html)
 header('Content-Type: text/html; charset=utf-8');
 header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
-header('Referrer-Policy: same-origin');
+header('Referrer-Policy: strict-origin-when-cross-origin'); // map tiles need a Referer
 echo $html;

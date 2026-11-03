@@ -41,7 +41,13 @@ export function TrackMap({
       keyboard: interactive,
       attributionControl: true,
     }).setView([44.2, 17.9], 7);
-    L.tileLayer(TILES, { attribution: ATTRIBUTION, maxZoom: 18, className: "map-tiles" }).addTo(map.current);
+    L.tileLayer(TILES, {
+      attribution: ATTRIBUTION,
+      maxZoom: 18,
+      className: "map-tiles",
+      // OpenStreetMap blocks tiles without a Referer, even if the host sets a strict policy.
+      referrerPolicy: "strict-origin-when-cross-origin",
+    }).addTo(map.current);
     layers.current = L.layerGroup().addTo(map.current);
     return () => {
       map.current?.remove();

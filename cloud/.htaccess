@@ -27,5 +27,6 @@ DirectoryIndex index.php
 
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"
-  Header set Referrer-Policy "same-origin"
+  # Map tiles (OpenStreetMap) require a Referer; this sends only the site origin to other sites.
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
 </IfModule>
