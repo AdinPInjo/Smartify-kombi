@@ -32,3 +32,4 @@ cloud/index.html
 cloud/assets/
 cloud/favicon.svg
 dist/
+*.tsbuildinfo
