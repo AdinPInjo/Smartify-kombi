@@ -78,6 +78,15 @@ Raspberry Pi 3B · 2× DHT22 · ADS1115 with a 47k/10k battery divider ·
 analog water level sender · NEO-6M GPS · 2-channel relay board (heater, fan) ·
 Victron SmartShunt, SmartSolar MPPT, Orion, MultiPlus + VE.Bus Smart dongle.
 
+## Support
+
+Smartify Kombi is free and built in my spare time. If it keeps your van warm or saves
+you a dead battery, you can buy me a coffee:
+
+[![Support me on Ko-fi](https://img.shields.io/badge/Ko--fi-support%20this%20project-f0a43a?logo=kofi&logoColor=white)](https://ko-fi.com/adinpinjo)
+
+Bug reports, ideas and photos of your van setup are just as welcome (GitHub issues).
+
 ## Disclaimer
 
 Smartify is a convenience, not a safety system. Heaters, batteries and

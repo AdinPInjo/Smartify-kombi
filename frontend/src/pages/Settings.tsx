@@ -21,6 +21,7 @@ import { UpdatesCard } from "@/components/UpdatesCard";
 import { OnlyOnVan } from "@/components/RemoteBanner";
 import { Card, Dialog, ErrorNote, Field, Segmented, useErrorToast, useToast } from "@/components/ui";
 import { fmt } from "@/lib/format";
+import { SUPPORT_URL } from "@/lib/support";
 
 export function Settings() {
   const me = useMe();
@@ -65,6 +66,10 @@ export function Settings() {
                 <span>Open tablet panel</span>
                 <span className="muted">›</span>
               </Link>
+              <a href={SUPPORT_URL} target="_blank" rel="noreferrer" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
+                <span>Support the project ♥</span>
+                <span className="muted">Ko-fi ↗</span>
+              </a>
               <LogoutRow />
             </div>
           </Card>

@@ -2,6 +2,7 @@ import { useHealth } from "@/api/hooks";
 import { Notes } from "@/components/Notes";
 import { PageHeader } from "@/components/PageHeader";
 import { CHANGELOG } from "@/lib/changelog";
+import { SUPPORT_URL } from "@/lib/support";
 
 function date(value: string | null): string {
   if (!value) return "";
@@ -28,6 +29,12 @@ export function Changelog() {
           <Notes text={entry.notes} />
         </section>
       ))}
+      <p className="small muted" style={{ textAlign: "center", margin: "8px 0" }}>
+        Smartify Kombi is free and made in spare time.{" "}
+        <a href={SUPPORT_URL} target="_blank" rel="noreferrer">
+          Support the project ♥
+        </a>
+      </p>
     </main>
   );
 }

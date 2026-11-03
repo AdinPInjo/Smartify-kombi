@@ -7,6 +7,12 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.5.1 - 2026-11-04
+
+### Added
+- A "Support the project ♥" link in Settings and at the end of this changelog, for anyone
+  who would like to buy the maker a coffee on Ko-fi. No pop-ups, no reminders.
+
 ## 0.5.0 - 2026-11-04
 
 ### Added
