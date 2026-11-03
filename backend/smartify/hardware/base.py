@@ -34,6 +34,7 @@ class GpsFix:
     course: float | None = None
     altitude_m: float | None = None
     satellites: int | None = None
+    hdop: float | None = None
 
 
 class RelayDriver(Protocol):

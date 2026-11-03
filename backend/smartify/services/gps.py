@@ -6,16 +6,28 @@ To keep the track clean and SD card writes low:
 * while parked, GPS jitter is ignored and one heartbeat point is stored every
   ``_PARKED_INTERVAL`` seconds;
 * distance only accumulates while the van is actually moving.
+
+With a weak signal a parked van seems to wander tens of metres and the receiver
+even reports short bursts of speed. So once the van has stood still for
+``_PARK_AFTER_SECONDS`` it is treated as *parked*:
+
+* the reported position is the median of the good fixes while parked, which
+  stays put instead of bouncing;
+* fixes with poor geometry (high HDOP, few satellites) are left out;
+* the van only counts as driving again when good fixes show it really left
+  (speed plus distance from the parked spot, or several fast fixes in a row).
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import statistics
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -30,6 +42,15 @@ _MAX_PLAUSIBLE_KMH = 250.0
 _MOVING_INTERVAL = 10
 _PARKED_INTERVAL = 600
 _FIX_TIMEOUT = 5.0
+
+# Parked smoothing
+_PARK_AFTER_SECONDS = 20  # standing still this long = parked
+_PARKED_RADIUS_M = 30.0  # jitter inside this radius is ignored while parked
+_LEAVE_FAST_FIXES = 3  # good fast fixes in a row needed to leave the parked spot
+_RELOCATE_FIXES = 5  # good fixes far from the spot in a row: moved slowly, re-anchor
+_STILL_WINDOW = 600  # most recent good fixes used for the parked median (~10 min at 1 Hz)
+_MAX_HDOP = 4.0  # worse geometry than this is not trusted while parked
+_MIN_SATELLITES = 4
 
 Status = Literal["disabled", "no_device", "no_fix", "ok"]
 
@@ -50,6 +71,17 @@ class GpsState:
     fix: GpsFix | None
     fix_at: int | None
     error: str | None
+    parked: bool = False
+    """True while the van stands still and ``fix`` is the smoothed parked position."""
+
+
+def _good(fix: GpsFix) -> bool:
+    """Is the fix geometry good enough to move the parked position or to leave it?"""
+    if fix.hdop is not None and fix.hdop > _MAX_HDOP:
+        return False
+    if fix.satellites is not None and fix.satellites < _MIN_SATELLITES:
+        return False
+    return True
 
 
 class GpsService:
@@ -69,6 +101,12 @@ class GpsService:
         self._connected = False
         self._last_stored: tuple[int, float, float] | None = None
         self._last_moving_point: tuple[float, float, int] | None = None
+        # Parked smoothing state (guarded by _lock)
+        self._still: deque[tuple[float, float, int]] = deque(maxlen=_STILL_WINDOW)
+        self._parked = False
+        self._anchor: tuple[float, float] | None = None
+        self._fast_count = 0
+        self._far_count = 0
 
     @property
     def enabled(self) -> bool:
@@ -93,13 +131,73 @@ class GpsService:
     def _clock_sleep(self, seconds: float) -> None:
         time.sleep(seconds)
 
+    def _median_anchor(self) -> tuple[float, float]:
+        return (
+            statistics.median(p[0] for p in self._still),
+            statistics.median(p[1] for p in self._still),
+        )
+
+    def _leave_parked(self) -> None:
+        self._parked = False
+        self._anchor = None
+        self._still.clear()
+        self._fast_count = self._far_count = 0
+
+    def _classify(self, fix: GpsFix, now: int) -> tuple[bool, GpsFix]:
+        """Update the parked state with one fix. Returns (moving, fix to report and store)."""
+        fast = (fix.speed_kmh or 0.0) >= _MOVING_SPEED_KMH
+        good = _good(fix)
+
+        if self._parked and self._anchor is not None:
+            anchor_lat, anchor_lon = self._anchor
+            meters = distance_m(anchor_lat, anchor_lon, fix.lat, fix.lon)
+            self._fast_count = self._fast_count + 1 if (fast and good) else 0
+            far = good and meters > 3 * _PARKED_RADIUS_M
+            self._far_count = self._far_count + 1 if far else 0
+
+            left = meters > _PARKED_RADIUS_M or self._fast_count >= _LEAVE_FAST_FIXES
+            if good and fast and left:
+                # Really driving off: start the driven segment at the parked spot.
+                since = self._still[-1][2] if self._still else now - 1
+                self._leave_parked()
+                self._last_moving_point = (anchor_lat, anchor_lon, since)
+                speed = fix.speed_kmh or 0.0
+                log.info("Leaving parked spot (%.0f m away, %.0f km/h)", meters, speed)
+                return True, fix
+            if self._far_count >= _RELOCATE_FIXES:
+                # Moved slowly (e.g. re-parked) without a speed reading: re-anchor here.
+                log.info("Parked position re-anchored %.0f m away", meters)
+                self._still.clear()
+                self._still.append((fix.lat, fix.lon, now))
+                self._anchor = (fix.lat, fix.lon)
+                self._far_count = 0
+            elif good and meters <= 2 * _PARKED_RADIUS_M:
+                self._still.append((fix.lat, fix.lon, now))
+                self._anchor = self._median_anchor()
+            lat, lon = self._anchor
+            return False, replace(fix, lat=lat, lon=lon, speed_kmh=0.0, course=None)
+
+        if fast:
+            self._still.clear()
+            return True, fix
+        if good:
+            self._still.append((fix.lat, fix.lon, now))
+        if len(self._still) >= 2 and self._still[-1][2] - self._still[0][2] >= _PARK_AFTER_SECONDS:
+            self._parked = True
+            self._anchor = self._median_anchor()
+            self._fast_count = self._far_count = 0
+            log.info("Parked: position smoothed from %d fixes", len(self._still))
+            lat, lon = self._anchor
+            return False, replace(fix, lat=lat, lon=lon, speed_kmh=0.0, course=None)
+        return False, fix
+
     def process(self, fix: GpsFix) -> None:
         now = int(self._clock())
         add_km = 0.0
         store = False
         with self._lock:
+            moving, fix = self._classify(fix, now)
             self._fix, self._fix_at = fix, now
-            moving = (fix.speed_kmh or 0.0) >= _MOVING_SPEED_KMH
             previous = self._last_moving_point
 
             if previous is not None:
@@ -155,7 +253,8 @@ class GpsService:
             if not self._connected and self._error:
                 return GpsState("no_device", self._fix, self._fix_at, self._error)
             fresh = self._fix_at is not None and self._clock() - self._fix_at < 30
-            return GpsState("ok" if fresh else "no_fix", self._fix, self._fix_at, self._error)
+            status = "ok" if fresh else "no_fix"
+            return GpsState(status, self._fix, self._fix_at, self._error, self._parked)
 
     def track(self, since: int) -> list[dict]:
         with transaction(self._db_path) as conn:

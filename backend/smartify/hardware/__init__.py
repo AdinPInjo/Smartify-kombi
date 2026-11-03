@@ -91,7 +91,9 @@ def _build_pi(settings: Settings) -> Hardware:
 
     gps = None
     if settings.gps_enabled:
-        gps = SerialGpsReceiver(settings.gps_device, settings.gps_baud)
+        gps = SerialGpsReceiver(
+            settings.gps_device, settings.gps_baud, ublox_tuning=settings.gps_ublox_tuning
+        )
     victron = None
     if settings.victron_devices:
         try:

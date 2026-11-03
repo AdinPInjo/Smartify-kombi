@@ -114,3 +114,81 @@ def test_mock_hardware_produces_plausible_readings(settings):
 
     fix = hardware.gps.read_fix(timeout_seconds=1)
     assert fix is not None and -90 <= fix.lat <= 90
+
+
+# --- GGA accuracy and u-blox tuning --------------------------------------------------
+
+from smartify.hardware import ubx  # noqa: E402
+
+
+def test_gga_hdop_is_parsed():
+    sentence = nmea.parse(_with_checksum(GGA[1:].split("*")[0]))
+    assert isinstance(sentence, nmea.GgaSentence)
+    assert sentence.hdop == pytest.approx(0.9)
+
+
+def test_ubx_frame_checksum_matches_the_u_blox_manual():
+    # CFG-NAV5 poll, as documented: B5 62 06 24 00 00 2A 84
+    assert ubx.frame(0x06, 0x24) == bytes.fromhex("b562062400002a84")
+
+
+def test_ubx_nav5_sets_static_hold_and_automotive_model():
+    message = ubx.cfg_nav5(static_hold_cm_s=50)
+    assert message[:4] == bytes.fromhex("b5620624") and len(message) == 6 + 36 + 2
+    payload = message[6:-2]
+    assert int.from_bytes(payload[0:2], "little") == 0x0041  # dyn + static hold applied
+    assert payload[2] == ubx.DYN_MODEL_AUTOMOTIVE
+    assert payload[22] == 50
+    assert ubx.checksum(message[2:-2]) == message[-2:]
+
+
+def test_ubx_sbas_message():
+    message = ubx.cfg_sbas()
+    assert message[:4] == bytes.fromhex("b5620616") and len(message) == 6 + 8 + 2
+    assert message[6:9] == bytes((0x01, 0x07, 3))
+
+
+def test_find_ack_between_nmea():
+    ack = ubx.frame(0x05, 0x01, bytes((0x06, 0x24)))
+    nak = ubx.frame(0x05, 0x00, bytes((0x06, 0x16)))
+    noise = b"$GPGSV,3,1,09*40\r\n"
+    assert ubx.find_ack(noise + ack + noise, 0x06, 0x24) is True
+    assert ubx.find_ack(noise + nak, 0x06, 0x16) is False
+    assert ubx.find_ack(noise, 0x06, 0x24) is None
+    assert ubx.find_ack(noise + ack, 0x06, 0x16) is None  # ACK for another message
+
+
+class _FakePort:
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.written = []
+        self.in_waiting = 0
+
+    def write(self, data):
+        self.written.append(data)
+        self.pending = self.replies.pop(0) if self.replies else b""
+
+    def flush(self):
+        pass
+
+    def read(self, n):
+        chunk, self.pending = self.pending[:64], self.pending[64:]
+        return chunk
+
+
+def test_receiver_sends_tuning_and_reads_acks(caplog, monkeypatch):
+    from smartify.hardware.pi import gps as pi_gps
+
+    monkeypatch.setattr(pi_gps, "_ACK_TIMEOUT", 0.2)
+    receiver = pi_gps.SerialGpsReceiver("/dev/null")
+    port = _FakePort(
+        [
+            b"$GPRMC,junk*00\r\n" + ubx.frame(0x05, 0x01, bytes((0x06, 0x24))),
+            b"",  # no answer to SBAS
+        ]
+    )
+    with caplog.at_level("INFO"):
+        receiver._tune(port)
+    assert port.written == [message for _, _, _, message in ubx.TUNING]
+    assert "GPS tuning applied: static hold" in caplog.text
+    assert "did not confirm tuning (SBAS" in caplog.text

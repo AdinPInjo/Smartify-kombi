@@ -145,6 +145,8 @@ class Settings(BaseSettings):
     gps_enabled: bool = True
     gps_device: str = "/dev/serial0"
     gps_baud: int = 9600
+    gps_ublox_tuning: bool = True
+    """Send u-blox static hold + SBAS settings on connect (other receivers ignore them)."""
 
     # --- Weather (Open-Meteo, free, no API key) ------------------------------
     weather_enabled: bool = True

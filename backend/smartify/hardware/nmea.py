@@ -32,6 +32,8 @@ class GgaSentence:
     lon: float | None
     satellites: int | None
     altitude_m: float | None
+    hdop: float | None = None
+    """Horizontal dilution of precision: ~1 is excellent, above ~4 the position is poor."""
 
 
 def checksum_ok(line: str) -> bool:
@@ -107,6 +109,7 @@ def parse(line: str) -> RmcSentence | GgaSentence | None:
             lon=to_decimal(fields[4], fields[5]),
             satellites=_int(fields[7]),
             altitude_m=_float(fields[9]),
+            hdop=_float(fields[8]),
         )
 
     return None

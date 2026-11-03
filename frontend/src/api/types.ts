@@ -155,6 +155,7 @@ export interface GpsFix {
   course: number | null;
   altitude_m: number | null;
   satellites: number | null;
+  hdop?: number | null;
 }
 
 export interface GpsState {
@@ -162,6 +163,8 @@ export interface GpsState {
   fix: GpsFix | null;
   fix_at: number | null;
   error: string | null;
+  /** Standing still: `fix` is the smoothed parked position. */
+  parked?: boolean;
 }
 
 export interface TrackPoint {

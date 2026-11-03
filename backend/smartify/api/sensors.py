@@ -94,6 +94,7 @@ def gps(ctx: Ctx, _: User) -> dict:
         "fix": asdict(state.fix) if state.fix else None,
         "fix_at": state.fix_at,
         "error": state.error,
+        "parked": state.parked,
     }
 
 

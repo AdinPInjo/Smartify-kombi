@@ -377,3 +377,74 @@ def test_gps_archive_api(client, ctx):
     response = client.get(f"/api/gps/archive/{files[0]['name']}")
     assert response.status_code == 200 and b"<trkpt" in response.content
     assert client.get("/api/gps/archive/..%2Fsmartify.db").status_code == 404
+
+
+# --- GPS parked smoothing ------------------------------------------------------------
+
+
+# A receiver is needed for state() to report "ok"; the tests feed fixes directly.
+_NO_READS = object()
+
+
+def _park(gps, clock, lat, lon, seconds=120):
+    """Weak-signal parking: ~±20 m jitter and a speed spike every few fixes."""
+    for i in range(seconds):
+        clock.now += 1
+        dlat = (((i * 37) % 11) - 5) * 4e-5  # up to ~22 m north/south
+        dlon = (((i * 53) % 13) - 6) * 4e-5  # up to ~19 m east/west
+        speed = 6.0 if i >= 30 and i % 7 == 3 else 0.4
+        gps.process(GpsFix(lat + dlat, lon + dlon, speed_kmh=speed, satellites=6, hdop=2.0))
+
+
+def test_gps_parked_position_is_smoothed_and_spikes_ignored(db):
+    clock = Clock()
+    gps = GpsService(receiver=_NO_READS, db_path=db, clock=clock)
+    lat, lon = 44.0, 17.0
+    _park(gps, clock, lat, lon)
+
+    state = gps.state()
+    assert state.parked is True
+    # The median of the parked fixes, not the last jittery one:
+    assert distance_m(lat, lon, state.fix.lat, state.fix.lon) < 5
+    assert state.fix.speed_kmh == 0.0
+    assert gps.total_distance_km() == 0  # speed spikes while parked are not driving
+
+    # A poor fix far away (bad geometry) does not move the parked position.
+    before = (state.fix.lat, state.fix.lon)
+    clock.now += 1
+    gps.process(GpsFix(lat + 0.002, lon, speed_kmh=8.0, satellites=3, hdop=9.0))
+    state = gps.state()
+    assert state.parked is True
+    assert (state.fix.lat, state.fix.lon) == before
+
+
+def test_gps_drives_off_from_the_parked_spot(db):
+    clock = Clock()
+    gps = GpsService(receiver=_NO_READS, db_path=db, clock=clock)
+    lat, lon = 44.0, 17.0
+    _park(gps, clock, lat, lon)
+
+    for i in range(1, 11):  # drive north ~111 m per step
+        clock.now += 10
+        gps.process(GpsFix(lat + i * 0.001, lon, speed_kmh=40, satellites=8, hdop=1.2))
+    state = gps.state()
+    assert state.parked is False
+    assert state.fix.lat == pytest.approx(lat + 0.01)
+    # The segment starts at the parked spot, so all ten steps count.
+    assert gps.total_distance_km() == pytest.approx(1.11, rel=0.05)
+
+
+def test_gps_reanchors_after_moving_slowly(db):
+    clock = Clock()
+    gps = GpsService(receiver=_NO_READS, db_path=db, clock=clock)
+    lat, lon = 44.0, 17.0
+    _park(gps, clock, lat, lon)
+
+    # Re-parked 150 m further on without any speed reading.
+    for _ in range(6):
+        clock.now += 1
+        gps.process(GpsFix(lat + 0.00135, lon, speed_kmh=0.3, satellites=7, hdop=1.5))
+    state = gps.state()
+    assert state.parked is True
+    assert distance_m(lat + 0.00135, lon, state.fix.lat, state.fix.lon) < 5
+    assert gps.total_distance_km() == 0

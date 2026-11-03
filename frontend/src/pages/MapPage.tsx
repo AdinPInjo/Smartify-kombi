@@ -35,7 +35,7 @@ export function MapPage() {
         title="Where we've been"
         sub={
           gps.data?.status === "ok" && fix
-            ? `${coords(fix.lat, fix.lon)} · ${fix.satellites ?? "–"} satellites`
+            ? `${coords(fix.lat, fix.lon)} · ${fix.satellites ?? "–"} satellites${gps.data.parked ? " · parked" : ""}`
             : gps.data?.status === "no_fix"
               ? "Searching for satellites…"
               : gps.data?.status === "no_device"
