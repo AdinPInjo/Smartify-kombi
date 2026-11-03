@@ -4,6 +4,7 @@ import { useDistance, useGps, useGpsArchives, useMode, useTrack } from "@/api/ho
 import { OnlyOnVan } from "@/components/RemoteBanner";
 import { PageHeader } from "@/components/PageHeader";
 import { TrackMap } from "@/components/TrackMap";
+import { TrackScrubber, pointAt } from "@/components/TrackScrubber";
 import { Card, Num, Segmented } from "@/components/ui";
 import { ago, bytes, coords, fmt } from "@/lib/format";
 
@@ -16,6 +17,8 @@ const RANGES = [
 
 export function MapPage() {
   const [hours, setHours] = useState("24");
+  // Time picked with the slider under the map; null = now (whole route, live position).
+  const [time, setTime] = useState<number | null>(null);
   const gps = useGps();
   const track = useTrack(Number(hours));
   const distance = useDistance();
@@ -41,16 +44,24 @@ export function MapPage() {
         }
       />
       <div style={{ maxWidth: 420 }}>
-        <Segmented label="Time range" options={RANGES} value={hours} onChange={setHours} />
+        <Segmented label="Time range" options={RANGES} value={hours} onChange={(value) => {
+            setHours(value);
+            setTime(null);
+          }}
+        />
       </div>
       <section className="card flush" style={{ height: "min(62vh, 560px)" }}>
         <TrackMap
           key={hours}
           points={track.data ?? []}
           position={fix}
+          cursor={time === null ? null : pointAt(track.data ?? [], time)}
           height="100%"
           label={`Map with the route of the selected period, ${track.data?.length ?? 0} points`}
         />
+      </section>
+      <section className="card flush">
+        <TrackScrubber points={track.data ?? []} time={time} onChange={setTime} />
       </section>
       <p className="tiny faint" style={{ margin: "-6px 4px 0" }}>
         Map tiles need internet. The route itself is recorded on the Pi either way.
