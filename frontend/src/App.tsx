@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { RequireLogin } from "./auth";
+import { ROUTER_BASENAME } from "./lib/base";
 import { AppShell } from "./components/AppShell";
 import { Climate } from "./pages/Climate";
 import { Energy } from "./pages/Energy";
@@ -17,7 +18,7 @@ import { VictronSetup } from "./pages/VictronSetup";
 
 export function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={ROUTER_BASENAME || undefined}>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/setup" element={<Setup />} />

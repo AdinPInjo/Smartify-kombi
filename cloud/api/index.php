@@ -199,7 +199,13 @@ function device_sync(): array
         throw $e;
     }
     cleanup_if_due();
-    return ['commands' => $commands, 'accepted' => (object)$accepted, 'server_time' => $now];
+    return [
+        'commands' => $commands,
+        'accepted' => (object)$accepted,
+        'server_time' => $now,
+        // A new id (fresh install) tells the van to send everything again.
+        'instance' => instance_id(),
+    ];
 }
 
 function cleanup_if_due(): void
@@ -219,7 +225,7 @@ function cleanup_if_due(): void
 function route(string $method, string $path): mixed
 {
     $seg = array_values(array_filter(explode('/', $path), 'strlen'));
-    $route = $method . ' /' . implode('/', array_map(fn($s, $i) => preg_match('/^[a-z-]+$/', $s) && !($i > 0 && in_array($seg[$i - 1], ['relays', 'rules', 'climate', 'archive'], true)) ? $s : '*', $seg, array_keys($seg)));
+    $route = $method . ' /' . implode('/', array_map(fn($s, $i) => preg_match('/^[a-z-]+$/', $s) && !($i > 0 && in_array($seg[$i - 1], ['relays', 'rules', 'climate', 'archive', 'devices'], true)) ? $s : '*', $seg, array_keys($seg)));
     $state = fn(string $key, mixed $default = null) => state()[$key] ?? $default;
 
     switch ($route) {
@@ -232,6 +238,7 @@ function route(string $method, string $path): mixed
                 'hardware' => $state('system', [])['hardware'] ?? 'pi',
                 'schema_version' => (int)meta('schema_version', '0'),
                 'server_time' => time(),
+                'setup_required' => false,
                 'device' => ['last_seen' => $seen, 'online' => van_online(), 'version' => $state('version')],
             ];
 
@@ -260,7 +267,10 @@ function route(string $method, string $path): mixed
             return ['ok' => true];
 
         case 'GET /auth/me':
-            return ['user' => require_user(), 'default_credentials' => false];
+            return ['user' => require_user(), 'default_credentials' => false, 'login_source' => 'cloud'];
+
+        case 'GET /setup':
+            return ['required' => false];
     }
 
     require_user();
@@ -354,6 +364,19 @@ function route(string $method, string $path): mixed
             $system['cloud'] = ['enabled' => true, 'url' => 'this server', 'last_ok_at' => last_seen(), 'last_error' => null, 'last_error_at' => null, 'commands_applied' => 0];
             return $system;
 
+        case 'GET /cloud/connection':
+            $seen = last_seen();
+            return [
+                'url' => base_url(),
+                'last_seen' => $seen,
+                'online' => van_online(),
+                'version' => SMARTIFY_CLOUD_VERSION,
+                'van_version' => $state('version'),
+            ];
+        case 'POST /cloud/connection-code':
+            // A new token: the van stays disconnected until it gets this code.
+            return ['code' => new_device_token(), 'url' => base_url()];
+
         case 'GET /commands':
             $rows = db()->query('SELECT id, type, target, status, result, created_at, done_at FROM commands ORDER BY id DESC LIMIT 50')->fetchAll();
             return ['commands' => $rows];
@@ -372,6 +395,15 @@ function route(string $method, string $path): mixed
         case 'POST /notifications/ntfy/new-topic':
         case 'POST /notifications/telegram/detect-chat':
         case 'POST /notifications/departure/pause':
+        case 'GET /victron/devices':
+        case 'GET /victron/nearby':
+        case 'POST /victron/devices':
+        case 'DELETE /victron/devices/*':
+        case 'POST /auth/password':
+        case 'POST /setup':
+        case 'GET /cloud':
+        case 'POST /cloud':
+        case 'DELETE /cloud':
             throw new HttpError(501, NOT_HERE);
     }
     throw new HttpError(404, 'Not Found');
@@ -383,6 +415,9 @@ try {
     $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
     $pos = strpos($uri, '/api/');
     $path = $pos === false ? '/' : substr($uri, $pos + 4);
+    if (is_file(CONFIG_FILE)) {
+        ensure_schema();
+    }
     $result = route($_SERVER['REQUEST_METHOD'] ?? 'GET', $path);
     json_out($result);
 } catch (HttpError $e) {

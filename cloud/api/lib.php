@@ -4,8 +4,12 @@
 
 declare(strict_types=1);
 
-const SMARTIFY_CLOUD_VERSION = '0.2.0';
+const SMARTIFY_CLOUD_VERSION = '0.3.0';
 const SMARTIFY_PROTOCOL = 1;
+// Bump when schema_sql() changes; the API brings older databases up to date by
+// itself on the next request, so an update is just uploading the new files.
+const SMARTIFY_SCHEMA = 2;
+const MIN_PHP = '8.0.0';
 const PRIVATE_DIR = __DIR__ . '/../private';
 const CONFIG_FILE = PRIVATE_DIR . '/config.php';
 
@@ -137,7 +141,81 @@ function create_schema(PDO $pdo): void
             }
         }
     }
-    set_meta('schema_version', '1');
+    set_meta('schema_version', (string)SMARTIFY_SCHEMA);
+}
+
+/** After uploading a new version: update the database once, automatically. */
+function ensure_schema(): void
+{
+    if ((int)meta('schema_version', '0') < SMARTIFY_SCHEMA) {
+        create_schema(db());
+    }
+}
+
+// --- configuration ---------------------------------------------------------------------
+
+function write_config(array $config): void
+{
+    $php = "<?php\n// Written by install.php. Delete this file to run the installer again\n"
+        . "// (your data stays in the database).\nreturn " . var_export($config, true) . ";\n";
+    $tmp = CONFIG_FILE . '.tmp';
+    if (file_put_contents($tmp, $php, LOCK_EX) === false || !rename($tmp, CONFIG_FILE)) {
+        @unlink($tmp);
+        throw new RuntimeException('Cannot write private/config.php: make the private folder writable.');
+    }
+    @chmod(CONFIG_FILE, 0600);
+    if (function_exists('opcache_invalidate')) {
+        @opcache_invalidate(CONFIG_FILE, true);
+    }
+}
+
+/** This installation's id: tells the van when it talks to a different (or reinstalled) cloud. */
+function instance_id(): string
+{
+    return config()['instance_id'] ?? substr(config()['device_token_hash'], 0, 16);
+}
+
+function is_https(): bool
+{
+    return (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+        || (($_SERVER['SERVER_PORT'] ?? '') === '443');
+}
+
+/** Public URL of the cloud folder, e.g. https://example.com/kombi (no trailing slash). */
+function base_url(): string
+{
+    $script = $_SERVER['SCRIPT_NAME'] ?? '/index.php';
+    $dir = rtrim(str_replace('\\', '/', dirname($script)), '/');
+    if (str_ends_with($dir, '/api')) {
+        $dir = substr($dir, 0, -4);
+    }
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    return (is_https() ? 'https' : 'http') . '://' . $host . $dir;
+}
+
+/** Folder path for <base href>, e.g. "/kombi/". */
+function base_path(): string
+{
+    $path = parse_url(base_url(), PHP_URL_PATH) ?: '';
+    return rtrim($path, '/') . '/';
+}
+
+/** One string with everything the van needs to connect: "SMK1-<base64url json>". */
+function connection_code(string $token): string
+{
+    $json = json_encode(['u' => base_url(), 't' => $token], JSON_UNESCAPED_SLASHES);
+    return 'SMK1-' . rtrim(strtr(base64_encode($json), '+/', '-_'), '=');
+}
+
+/** A new device token: the old one stops working. Returns the connection code. */
+function new_device_token(): string
+{
+    $token = bin2hex(random_bytes(24));
+    $config = config();
+    $config['device_token_hash'] = hash('sha256', $token);
+    write_config($config);
+    return connection_code($token);
 }
 
 function meta(string $key, ?string $default = null): ?string
@@ -206,13 +284,11 @@ function start_session(): void
     if (session_status() === PHP_SESSION_ACTIVE) {
         return;
     }
-    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-        || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
     session_name('smartify_cloud');
     session_set_cookie_params([
         'lifetime' => 30 * 24 * 3600,
-        'path' => '/',
-        'secure' => $https,
+        'path' => base_path(),
+        'secure' => is_https(),
         'httponly' => true,
         'samesite' => 'Lax',
     ]);

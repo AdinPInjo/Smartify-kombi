@@ -12,9 +12,12 @@ echo "Building the dashboard…"
 rm -rf "$OUT" "$ROOT/dist/smartify-cloud.zip"
 mkdir -p "$OUT"
 cp -r "$ROOT/cloud/." "$OUT/"
-rm -f "$OUT/dev-router.php" "$OUT/private/config.php" "$OUT"/private/*.sqlite*
+rm -f "$OUT/dev-router.php" "$OUT/installer.php" "$OUT/private/config.php" "$OUT"/private/*.sqlite*
 cp -r "$ROOT/frontend/dist/." "$OUT/"
+# The one-file installer is a separate download, next to the zip.
+cp "$ROOT/cloud/installer.php" "$ROOT/dist/installer.php"
 
 (cd "$ROOT/dist" && zip -qr smartify-cloud.zip smartify-cloud)
-echo "Done: dist/smartify-cloud.zip"
-echo "Upload the contents of smartify-cloud/ to your hosting, then open install.php."
+echo "Done: dist/smartify-cloud.zip and dist/installer.php"
+echo "Upload the contents of smartify-cloud/ to your hosting and open the address,"
+echo "or upload only installer.php and open it."

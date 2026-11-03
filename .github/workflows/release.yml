@@ -3,6 +3,7 @@ name: Release
 # Push a tag like v0.2.0 to publish a release with:
 #   dashboard.tar.gz     prebuilt dashboard, downloaded by deploy/install.sh
 #   smartify-cloud.zip   remote dashboard for web hosting (see cloud/README.md)
+#   installer.php        one-file installer/updater for the remote dashboard
 on:
   push:
     tags: ["v*"]
@@ -26,3 +27,4 @@ jobs:
           files: |
             dist/dashboard.tar.gz
             dist/smartify-cloud.zip
+            dist/installer.php

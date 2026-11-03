@@ -19,7 +19,7 @@ their own.
 * **Push notifications** to your phone (ntfy or Telegram), set up from the dashboard: battery low or heading low (forecast with the sun expected tomorrow), cold or hot inside, frost tonight, water low, a sensor stopped working, and **the van is moving** (theft). Quiet hours, and messages wait while the van is offline.
 * **WiFi** from the dashboard: scan and join campsite networks.
 * **Tablet panel**: a full-screen instrument cluster at `/panel`.
-* **Remote dashboard** on any cheap PHP + MySQL web hosting: see and switch everything from anywhere. The van connects out, so no open ports or fixed IP are needed.
+* **Remote dashboard** on any cheap PHP web hosting, installed like WordPress (one file, a setup guide) and connected to the van with one tap: see and switch everything from anywhere. The van connects out, so no open ports or fixed IP are needed.
 * **Works offline**: the van's dashboard runs on the Pi, no cloud account needed.
 
 ## Quick start

@@ -26,6 +26,7 @@ import logging
 import time
 import urllib.error
 import urllib.request
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -138,6 +139,37 @@ class CloudSync:
                 (name, value),
             )
 
+    def reset_cursors(self) -> None:
+        """Start over: send all history again and take commands from the first one.
+
+        Needed when the van talks to a different (or reinstalled) cloud, whose
+        command numbers start again at 1.
+        """
+        with transaction(self._db_path) as conn:
+            conn.execute("DELETE FROM sync_cursors")
+        self._results = []
+        self._next_full = 0.0
+
+    def _same_instance(self, response: dict[str, Any]) -> bool:
+        """False (and cursors reset) when the cloud is a different installation."""
+        instance = response.get("instance")
+        if not isinstance(instance, str) or not instance:
+            return True  # older cloud without an id
+        marker = zlib.crc32(instance.encode()) or 1
+        known = self._cursor("instance")
+        if known == marker:
+            return True
+        with transaction(self._db_path) as conn:
+            progress = conn.execute(
+                "SELECT COUNT(*) FROM sync_cursors WHERE value != 0"
+            ).fetchone()[0]
+        if known:
+            log.info("Remote dashboard was reinstalled or replaced: syncing everything again")
+        self.reset_cursors()
+        self._set_cursor("instance", marker)
+        # Nothing synced before (first connection): this answer is fine to use.
+        return progress == 0
+
     def _history(self) -> dict[str, list[dict[str, Any]]]:
         batches: dict[str, list[dict[str, Any]]] = {}
         with transaction(self._db_path) as conn:
@@ -179,6 +211,10 @@ class CloudSync:
         self._results = []  # delivered
         self.status.last_ok_at = int(now)
         self.status.last_error = None
+        if not self._same_instance(response):
+            # Our cursors belonged to another cloud: ignore this answer, start fresh next tick.
+            self._next_full = now
+            return
         if full:
             self._next_full = now + self._state_seconds
         for table, last_id in (response.get("accepted") or {}).items():

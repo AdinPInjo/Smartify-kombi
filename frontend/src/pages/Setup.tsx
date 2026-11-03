@@ -61,7 +61,7 @@ function Screen({ children }: { children: ReactNode }) {
 function Welcome({ onNext }: { onNext: () => void }) {
   return (
     <div className="stack" style={{ gap: 16 }}>
-      <img src="/logo.svg" alt="" width={84} height={84} />
+      <img src="logo.svg" alt="" width={84} height={84} />
       <div className="stack" style={{ gap: 6 }}>
         <div className="label">Smartify · Kombi</div>
         <h1 className="page-title" style={{ fontSize: 40 }}>Welcome aboard</h1>
@@ -183,7 +183,7 @@ function Done() {
   const navigate = useNavigate();
   return (
     <div className="stack" style={{ gap: 16 }}>
-      <img src="/logo.svg" alt="" width={64} height={64} />
+      <img src="logo.svg" alt="" width={64} height={64} />
       <div className="stack" style={{ gap: 6 }}>
         <div className="label">All set</div>
         <h1 className="page-title" style={{ fontSize: 34 }}>Your dashboard is ready</h1>

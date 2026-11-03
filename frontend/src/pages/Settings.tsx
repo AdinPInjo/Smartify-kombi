@@ -16,6 +16,7 @@ import {
 } from "@/api/hooks";
 import type { WifiNetwork } from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
+import { RemoteDashboardCard } from "@/components/RemoteDashboardCard";
 import { OnlyOnVan } from "@/components/RemoteBanner";
 import { Card, Dialog, ErrorNote, Field, Segmented, useErrorToast, useToast } from "@/components/ui";
 import { fmt } from "@/lib/format";
@@ -32,6 +33,7 @@ export function Settings() {
       <div className="grid">
         <div className="stack" style={{ gap: "var(--gap)" }}>
           <WifiCard />
+          <RemoteDashboardCard />
           <OverviewCardSettings />
         </div>
         <div className="stack" style={{ gap: "var(--gap)" }}>

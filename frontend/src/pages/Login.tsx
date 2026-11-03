@@ -39,7 +39,7 @@ export function Login() {
       <Topo />
       <form className="card" onSubmit={submit} style={{ width: "100%", maxWidth: 380, position: "relative", gap: 16 }}>
         <div className="row" style={{ gap: 14 }}>
-          <img src="/logo.svg" alt="" width={56} height={56} />
+          <img src="logo.svg" alt="" width={56} height={56} />
           <div className="stack" style={{ gap: 4 }}>
             <div className="label">Smartify · Kombi</div>
             <h1 className="page-title">Sign in</h1>

@@ -1,6 +1,6 @@
 # Smartify Kombi cloud (Apache / LiteSpeed, which most shared hosting runs).
 Options -Indexes
-DirectoryIndex index.html
+DirectoryIndex index.php
 
 <IfModule mod_rewrite.c>
   RewriteEngine On
@@ -12,9 +12,11 @@ DirectoryIndex index.html
   RewriteRule ^api/ api/index.php [L,QSA]
 
   # Dashboard: files that exist are served; every other path is the app
+  # (index.php serves it for this folder, or sends you to the installer first).
+  RewriteRule ^index\.html$ index.php [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteRule ^ index.html [L]
+  RewriteRule ^ index.php [L]
 </IfModule>
 
 <FilesMatch "\.(sqlite|sqlite-wal|sqlite-shm|md)$">
@@ -26,7 +28,4 @@ DirectoryIndex index.html
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"
   Header set Referrer-Policy "same-origin"
-  <FilesMatch "^index\.html$">
-    Header set Cache-Control "no-store"
-  </FilesMatch>
 </IfModule>

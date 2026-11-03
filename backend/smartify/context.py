@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -13,7 +14,8 @@ from smartify.hardware import Hardware
 from smartify.logbuffer import LogBuffer
 from smartify.services.alerts import AlertService
 from smartify.services.climate import ClimateService
-from smartify.services.cloud_sync import CloudSync, apply_command
+from smartify.services.cloud_link import CloudConnectionStore
+from smartify.services.cloud_sync import CloudStatus, CloudSync, apply_command, http_transport
 from smartify.services.conditions import (
     CLIMATE_METRICS,
     GPS_SENSOR,
@@ -56,6 +58,10 @@ class AppContext:
     victron: VictronDevices
     alerts: AlertService = field(init=False)
     cloud: CloudSync | None = None
+    cloud_store: CloudConnectionStore | None = None
+    cloud_transport: Any = None
+    """Replaces the HTTP transport to the remote dashboard (tests)."""
+    _cloud_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     accounts: Any = None
     """The dashboard login (``AccountService``), set by the app factory."""
     started_at: float = field(default_factory=time.time)
@@ -139,25 +145,76 @@ class AppContext:
             self.workers.append(Worker("trips", 30, self.trips.tick))
         if s.weather_enabled:
             self.workers.append(Worker("weather", 60, self.weather.refresh_if_due))
-        if s.cloud_url and s.cloud_token:
-            self.cloud = CloudSync(
-                url=s.cloud_url,
-                token=s.cloud_token,
-                db_path=s.db_path,
-                state_seconds=s.cloud_state_seconds,
-                build_state=lambda: build_state(self),
-                apply_command=lambda command: apply_command(self, command),
-            )
-            self.workers.append(Worker("cloud", s.cloud_interval_seconds, self.cloud.tick))
-            log.info("Remote dashboard sync to %s", s.cloud_url)
         self.workers.append(Worker("heartbeat", 10, self._heartbeat))
         for worker in self.workers:
             worker.start()
+        connection = self._cloud_store().current()
+        if connection is not None:
+            self._start_cloud(self._new_sync(connection.url, connection.token))
         log.info("Started %d workers", len(self.workers))
         systemd.notify("READY=1")
 
+    # --- remote dashboard ---------------------------------------------------------
+
+    def _cloud_store(self) -> CloudConnectionStore:
+        if self.cloud_store is None:
+            s = self.settings
+            self.cloud_store = CloudConnectionStore(s.db_path, s.cloud_url, s.cloud_token)
+        return self.cloud_store
+
+    def _new_sync(self, url: str, token: str) -> CloudSync:
+        return CloudSync(
+            url=url,
+            token=token,
+            db_path=self.settings.db_path,
+            state_seconds=self.settings.cloud_state_seconds,
+            build_state=lambda: build_state(self),
+            apply_command=lambda command: apply_command(self, command),
+            transport=self.cloud_transport or http_transport,
+        )
+
+    def _start_cloud(self, sync: CloudSync) -> None:
+        self._stop_cloud()
+        self.cloud = sync
+        worker = Worker("cloud", self.settings.cloud_interval_seconds, sync.tick)
+        self.workers.append(worker)
+        worker.start()
+        log.info("Remote dashboard sync to %s", sync.status.url)
+
+    def _stop_cloud(self) -> None:
+        for worker in [w for w in self.workers if w.name == "cloud"]:
+            worker.stop()
+            self.workers.remove(worker)
+        self.cloud = None
+
+    def cloud_connection(self):
+        return self._cloud_store().current()
+
+    def connect_cloud(self, url: str, token: str) -> CloudStatus:
+        """Test the connection with one full sync, then keep syncing. Raises CloudError."""
+        with self._cloud_lock:
+            sync = self._new_sync(url, token)
+            # A different (or reinstalled) remote dashboard is recognised by its
+            # installation id on this first exchange; the van then sends everything
+            # again. Nothing is reset before the code has proven to work.
+            sync.tick()  # raises CloudError when the URL or code is wrong
+            self._cloud_store().save(url, token)
+            if self.workers:  # running (not in tests without workers)
+                self._start_cloud(sync)
+            else:
+                self.cloud = sync
+            return sync.status
+
+    def disconnect_cloud(self) -> None:
+        with self._cloud_lock:
+            self._cloud_store().clear()
+            self._stop_cloud()
+            fallback = self._cloud_store().current()  # .env, if set
+            if fallback is not None and self.workers:
+                self._start_cloud(self._new_sync(fallback.url, fallback.token))
+
     def stop(self) -> None:
-        for worker in self.workers:
+        for worker in list(self.workers):
             worker.stop()
         if self.hardware.victron is not None:
             self.hardware.victron.stop()

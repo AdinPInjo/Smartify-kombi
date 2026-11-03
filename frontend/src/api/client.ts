@@ -1,3 +1,5 @@
+import { BASE_PATH } from "@/lib/base";
+
 // Thin fetch wrapper. All requests go to the same origin as the dashboard
 // (the backend serves it), or through Vite's dev proxy.
 
@@ -10,7 +12,8 @@ export class ApiError extends Error {
   }
 }
 
-const BASE = import.meta.env.VITE_API_BASE ?? "";
+// "/api" on the van, "/kombi/api" for a remote dashboard in a subfolder.
+const BASE = import.meta.env.VITE_API_BASE ?? BASE_PATH.replace(/\/$/, "");
 
 let onUnauthorized: (() => void) | null = null;
 
