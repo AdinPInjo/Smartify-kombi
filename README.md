@@ -210,6 +210,12 @@ a dead battery, you can buy me a coffee:
 
 Bug reports, ideas and photos of your van setup are just as welcome: open an issue.
 
+## License
+
+Smartify Kombi is free software under the [GNU General Public License v3.0 or later](LICENSE):
+you may use, study, change and share it. If you share a changed version, it has to stay
+under the same license, with its source code available.
+
 ## Disclaimer
 
 Smartify is a convenience, not a safety system. Heaters, batteries and electrical

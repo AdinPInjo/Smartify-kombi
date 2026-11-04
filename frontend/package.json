@@ -1,6 +1,7 @@
 {
   "name": "smartify-kombi-dashboard",
   "private": true,
+  "license": "GPL-3.0-or-later",
   "version": "0.10.0",
   "type": "module",
   "scripts": {
