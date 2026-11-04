@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from smartify.api.deps import Ctx, User
 from smartify.errors import DeviceUnavailable
 from smartify.hardware.base import SensorConfig
+from smartify.services import diagnose
 from smartify.services.sensors import CLIMATE_KINDS, INPUT_KINDS, RESTART_KINDS
 
 router = APIRouter(tags=["sensors"])
@@ -140,6 +141,65 @@ async def test_sensor(body: TestBody, ctx: Ctx, _: User) -> dict:
     if ctx.hardware.sensors is None:
         raise DeviceUnavailable("sensors are not available on this Smartify")
     return await run_in_threadpool(ctx.hardware.sensors.test, body.kind, body.config)
+
+
+@router.get("/sensors/{sensor_id}/diagnostics")
+def diagnostics(sensor_id: str, ctx: Ctx, _: User) -> dict:
+    """What the sensor read lately, and hints about the wiring."""
+    sensor = ctx.sensor_store.get(sensor_id)
+    result: dict[str, Any] = {
+        "name": sensor.name,
+        "kind": sensor.kind,
+        "status": _status(ctx, sensor),
+    }
+    if sensor.kind in CLIMATE_KINDS:
+        data = ctx.climate.diagnostics(sensor.name) or {"reads": 0, "good": 0, "recent": []}
+        errors = [r["error"] for r in data["recent"] if r["error"]]
+        result.update(data)
+        result["hints"] = diagnose.climate_hints(
+            sensor.kind, sensor.config, data["reads"], data["good"], errors
+        )
+    elif sensor.kind in INPUT_KINDS:
+        data = ctx.inputs.diagnostics(sensor.name) or {
+            "reads": 0,
+            "good": 0,
+            "active": None,
+            "error": None,
+            "changes": [],
+        }
+        result.update(data)
+        result["hints"] = diagnose.input_hints(sensor.kind, sensor.config, data)
+    elif sensor.kind == "gps":
+        gps = ctx.gps.state()
+        satellites = gps.fix.satellites if gps.fix else None
+        result.update({"gps_status": gps.status, "satellites": satellites, "error": gps.error})
+        result["hints"] = (
+            diagnose.gps_hints(gps.status, satellites, gps.error)
+            if ctx.gps.enabled
+            else ["Starts after a restart."]
+        )
+    elif sensor.kind == "water_tank":
+        result["hints"] = (
+            diagnose.water_hints(ctx.water.current())
+            if ctx.water.enabled
+            else ["Starts after a restart."]
+        )
+    return result
+
+
+class DebugBody(BaseModel):
+    enabled: bool
+    hours: float = Field(default=2, ge=0.25, le=24)
+
+
+@router.get("/system/debug")
+def debug_state(ctx: Ctx, _: User) -> dict:
+    return ctx.debug.state()
+
+
+@router.post("/system/debug")
+def debug_set(body: DebugBody, ctx: Ctx, _: User) -> dict:
+    return ctx.debug.set(body.enabled, body.hours)
 
 
 @router.post("/system/restart")

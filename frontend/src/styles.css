@@ -852,3 +852,11 @@ details > summary { color: var(--muted); }
 .pin.chosen .pin-num { color: #1b1407; }
 button.pin { cursor: pointer; }
 button.pin:hover { border-color: var(--line-strong); color: var(--text); }
+
+/* Logs and sensor diagnostics */
+.log-view { max-height: 60vh; overflow: auto; background: var(--surface-2); border-radius: var(--radius-sm); padding: 10px 12px; display: grid; gap: 2px; }
+.log-line { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+.log-line.debug { color: var(--muted); }
+.log-line.warning { color: var(--accent); }
+.log-line.error { color: var(--danger); }
+.log-level { display: inline-block; min-width: 54px; color: var(--faint); }

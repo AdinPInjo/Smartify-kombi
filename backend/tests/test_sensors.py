@@ -226,3 +226,44 @@ def test_a_van_without_sensors_works(pi_less):
     water = pi_less.get("/api/water").json()
     assert water["ok"] is False and "Sensors tab" in water["error"]
     assert pi_less.get("/api/gps").json()["status"] in ("disabled", "no_fix")
+
+
+def test_diagnose_shows_reads_and_hints(client, ctx):
+    inside = next(s for s in client.get("/api/sensors").json()["sensors"] if s["name"] == "inside")
+    early = client.get(f"/api/sensors/{inside['id']}/diagnostics").json()
+    assert early["hints"] == ["Collecting readings: give it a minute."]
+    for _ in range(12):
+        ctx.climate.sample()
+    data = client.get(f"/api/sensors/{inside['id']}/diagnostics").json()
+    assert data["reads"] == 12 and len(data["recent"]) == 12
+    assert data["hints"]
+
+
+def test_diagnose_explains_a_dead_sensor(client, ctx):
+    from smartify.hardware import FailedSensor
+
+    ctx.climate.set_sensors([FailedSensor("inside", "DHT sensor not found, check wiring")])
+    for _ in range(6):
+        ctx.climate.sample()
+    inside = next(s for s in client.get("/api/sensors").json()["sensors"] if s["name"] == "inside")
+    hints = client.get(f"/api/sensors/{inside['id']}/diagnostics").json()["hints"]
+    assert "No reading at all" in hints[0] and "GPIO 4 (pin 7)" in hints[0]
+
+
+def test_door_that_never_changed(client):
+    door = client.post(
+        "/api/sensors", json={"name": "side_door", "kind": "door", "config": {"pin": 22}}
+    ).json()
+    hints = client.get(f"/api/sensors/{door['id']}/diagnostics").json()["hints"]
+    assert "Open and close the door" in hints[0]
+
+
+def test_debug_mode_shows_detailed_logs_and_ends(client, ctx):
+    assert client.get("/api/system/debug").json() == {"enabled": False, "until": None}
+    on = client.post("/api/system/debug", json={"enabled": True, "hours": 1}).json()
+    assert on["enabled"] and on["until"]
+    ctx.climate.sample()
+    debug_logs = client.get("/api/logs?level=DEBUG&limit=500").json()["logs"]
+    assert any(r["level"] == "DEBUG" and r["message"].startswith("inside") for r in debug_logs)
+    off = client.post("/api/system/debug", json={"enabled": False}).json()
+    assert off["enabled"] is False

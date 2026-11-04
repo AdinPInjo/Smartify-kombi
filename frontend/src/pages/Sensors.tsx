@@ -1,8 +1,9 @@
 // Sensors tab: what's connected to the Pi, and a wizard to add more.
 // No sensors at all is fine too: then Smartify is for Victron and the heater.
 
-import { ChevronLeft, ChevronRight, DoorOpen, Droplets, Loader2, MapPin, Pencil, Plus, RotateCw, Thermometer, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, DoorOpen, Droplets, Loader2, MapPin, Pencil, Plus, RotateCw, ScrollText, Stethoscope, Thermometer, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { useMode } from "@/api/hooks";
@@ -11,6 +12,7 @@ import { PiHeader, type PinUse } from "@/components/PiHeader";
 import { OnlyOnVan } from "@/components/RemoteBanner";
 import { Card, Dialog, ErrorNote, Field, Skeleton, useErrorToast, useToast } from "@/components/ui";
 import { CATALOG, CATEGORY_NAMES, catalogEntry, GPIO_TO_PIN, type Category, type CatalogEntry } from "@/lib/sensorCatalog";
+import { useDebugMode, useSetDebugMode } from "@/lib/debug";
 
 interface Sensor {
   id: string;
@@ -57,6 +59,7 @@ export function Sensors() {
   const sensors = useSensors(!cloud);
   const [wizard, setWizard] = useState<CatalogEntry | "choose" | null>(null);
   const [editing, setEditing] = useState<Sensor | null>(null);
+  const [diagnosing, setDiagnosing] = useState<Sensor | null>(null);
   const data = sensors.data;
 
   return (
@@ -67,9 +70,14 @@ export function Sensors() {
         sub="What's connected to the Pi. Only Victron and a diesel heater? Then you need none of these."
         right={
           !cloud && (
-            <button type="button" className="btn small primary" onClick={() => setWizard("choose")}>
-              <Plus size={16} aria-hidden="true" /> Add sensor
-            </button>
+            <div className="row" style={{ gap: 6 }}>
+              <Link to="/logs" className="btn small ghost">
+                <ScrollText size={16} aria-hidden="true" /> Logs
+              </Link>
+              <button type="button" className="btn small primary" onClick={() => setWizard("choose")}>
+                <Plus size={16} aria-hidden="true" /> Add sensor
+              </button>
+            </div>
           )
         }
       />
@@ -96,7 +104,7 @@ export function Sensors() {
               <Card key={category} label={<span className="row" style={{ gap: 8 }}>{CATEGORY_ICON[category]} {CATEGORY_NAMES[category]}</span>}>
                 <div className="list">
                   {list.map((sensor) => (
-                    <SensorRow key={sensor.id} sensor={sensor} onEdit={() => setEditing(sensor)} />
+                    <SensorRow key={sensor.id} sensor={sensor} onEdit={() => setEditing(sensor)} onDiagnose={() => setDiagnosing(sensor)} />
                   ))}
                 </div>
               </Card>
@@ -118,11 +126,12 @@ export function Sensors() {
         />
       )}
       {editing && data && <EditDialog sensor={editing} view={data} onClose={() => setEditing(null)} />}
+      {diagnosing && <DiagnoseDialog sensor={diagnosing} onClose={() => setDiagnosing(null)} />}
     </main>
   );
 }
 
-function SensorRow({ sensor, onEdit }: { sensor: Sensor; onEdit: () => void }) {
+function SensorRow({ sensor, onEdit, onDiagnose }: { sensor: Sensor; onEdit: () => void; onDiagnose: () => void }) {
   const entry = catalogEntry(sensor.kind);
   const where =
     typeof sensor.config.pin === "number"
@@ -148,10 +157,108 @@ function SensorRow({ sensor, onEdit }: { sensor: Sensor; onEdit: () => void }) {
           </span>
         </span>
       </span>
-      <button type="button" className="btn small ghost" aria-label={`Edit ${sensor.name}`} onClick={onEdit}>
-        <Pencil size={16} aria-hidden="true" />
-      </button>
+      <span className="row" style={{ gap: 2 }}>
+        <button type="button" className="btn small ghost" aria-label={`Diagnose ${sensor.name}`} title="Diagnose" onClick={onDiagnose}>
+          <Stethoscope size={16} aria-hidden="true" />
+        </button>
+        <button type="button" className="btn small ghost" aria-label={`Edit ${sensor.name}`} title="Edit" onClick={onEdit}>
+          <Pencil size={16} aria-hidden="true" />
+        </button>
+      </span>
     </div>
+  );
+}
+
+interface Diagnostics {
+  name: string;
+  kind: string;
+  status: Sensor["status"];
+  hints: string[];
+  reads?: number;
+  good?: number;
+  recent?: { time: number; temperature_c: number | null; humidity: number | null; error: string | null }[];
+  changes?: { time: number; active: boolean }[];
+}
+
+function DiagnoseDialog({ sensor, onClose }: { sensor: Sensor; onClose: () => void }) {
+  const diag = useQuery({
+    queryKey: ["sensors", sensor.id, "diagnostics"],
+    queryFn: () => api.get<Diagnostics>(`/sensors/${sensor.id}/diagnostics`),
+    refetchInterval: 2_000,
+  });
+  const debug = useDebugMode();
+  const setDebug = useSetDebugMode();
+  const d = diag.data;
+  const rate = d?.reads ? Math.round(((d.good ?? 0) / d.reads) * 100) : null;
+  const time = (t: number) => new Date(t * 1000).toLocaleTimeString();
+  return (
+    <Dialog title={`Diagnose ${sensor.name}`} onClose={onClose}>
+      <div className="stack" style={{ gap: 14 }}>
+        <span className="small">
+          Now: <strong>{d?.status.text ?? sensor.status.text}</strong>
+        </span>
+        {rate !== null && (
+          <div className="stack" style={{ gap: 4 }}>
+            <span className="small">
+              Reads that worked (last hour): <strong>{rate} %</strong> <span className="muted">of {d?.reads}</span>
+            </span>
+            <div className="strength" style={{ width: "100%", height: 8 }} aria-hidden="true">
+              <i style={{ width: `${rate}%`, background: rate >= 90 ? "var(--ok)" : rate >= 70 ? "var(--accent)" : "var(--alert)" }} />
+            </div>
+          </div>
+        )}
+        <div className="stack" style={{ gap: 6 }}>
+          <span className="label">What to check</span>
+          <ul className="guide-list small">
+            {(d?.hints ?? ["Loading…"]).map((hint) => (
+              <li key={hint}>{hint}</li>
+            ))}
+          </ul>
+        </div>
+        {d?.recent && d.recent.length > 0 && (
+          <div className="stack" style={{ gap: 6 }}>
+            <span className="label">Latest reads (newest first)</span>
+            <div className="log-view mono tiny" style={{ maxHeight: 200 }}>
+              {d.recent.map((r, i) => (
+                <div key={i} className={`log-line ${r.error ? "warning" : ""}`}>
+                  <span className="faint">{time(r.time)}</span>{" "}
+                  {r.error
+                    ? `failed: ${r.error}`
+                    : `${r.temperature_c?.toFixed(1)} °C${r.humidity != null ? ` · ${r.humidity.toFixed(0)} %` : ""}`}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {d?.changes && (
+          <div className="stack" style={{ gap: 6 }}>
+            <span className="label">Changes</span>
+            {d.changes.length === 0 ? (
+              <span className="small muted">None yet.</span>
+            ) : (
+              <div className="log-view mono tiny" style={{ maxHeight: 160 }}>
+                {d.changes.map((c, i) => (
+                  <div key={i} className="log-line">
+                    <span className="faint">{time(c.time)}</span>{" "}
+                    {sensor.kind === "door" ? (c.active ? "opened" : "closed") : c.active ? "motion" : "quiet"}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        <div className="row wrap" style={{ gap: 8 }}>
+          {!debug.data?.enabled && (
+            <button type="button" className="btn small" disabled={setDebug.isPending} onClick={() => setDebug.mutate({ enabled: true, hours: 2 })}>
+              Turn on debug mode (2 h)
+            </button>
+          )}
+          <Link to={`/logs?filter=${encodeURIComponent(sensor.name)}`} className="btn small ghost">
+            <ScrollText size={16} aria-hidden="true" /> Log for {sensor.name}
+          </Link>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 

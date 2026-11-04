@@ -15,9 +15,10 @@ import { PageHeader } from "@/components/PageHeader";
 import { RemoteDashboardCard } from "@/components/RemoteDashboardCard";
 import { UpdatesCard } from "@/components/UpdatesCard";
 import { OnlyOnVan } from "@/components/RemoteBanner";
-import { Card, Dialog, ErrorNote, Field, Segmented, useToast } from "@/components/ui";
+import { Card, Dialog, ErrorNote, Field, Segmented, useErrorToast, useToast } from "@/components/ui";
 import { SUPPORT_URL } from "@/lib/support";
 import { useLook, type Theme } from "@/lib/look";
+import { useDebugMode, useSetDebugMode } from "@/lib/debug";
 
 export function Settings() {
   const me = useMe();
@@ -34,6 +35,7 @@ export function Settings() {
         </div>
         <div className="stack" style={{ gap: "var(--gap)" }}>
           <LookCard />
+          <TroubleshootingCard />
           <AccountCard />
           <UpdatesCard />
           <Card label="More">
@@ -60,6 +62,50 @@ export function Settings() {
         </div>
       </div>
     </main>
+  );
+}
+
+// --- troubleshooting ---------------------------------------------------------------------
+
+function TroubleshootingCard() {
+  const { cloud } = useMode();
+  const debug = useDebugMode();
+  const set = useSetDebugMode();
+  const showError = useErrorToast();
+  if (cloud) return null;
+  const on = debug.data?.enabled;
+  const until = debug.data?.until ? new Date(debug.data.until * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  return (
+    <section id="troubleshooting" className="card" style={{ scrollMarginTop: 16 }}>
+      <h2 className="label" style={{ margin: 0 }}>Troubleshooting</h2>
+      <span className="small muted">
+        Debug mode logs every sensor reading and Bluetooth message, to find wiring problems. It switches itself off after the
+        chosen time.
+      </span>
+      <div className="row wrap" style={{ gap: 8 }}>
+        {on ? (
+          <>
+            <span className="chip"><span className="dot ok" /> on until {until}</span>
+            <button type="button" className="btn small" onClick={() => set.mutate({ enabled: false }, { onError: showError })}>
+              Turn off
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="btn small primary" onClick={() => set.mutate({ enabled: true, hours: 2 }, { onError: showError })}>
+              Debug mode for 2 hours
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => set.mutate({ enabled: true, hours: 24 }, { onError: showError })}>
+              for 24 hours
+            </button>
+          </>
+        )}
+      </div>
+      <div className="row wrap" style={{ gap: 12 }}>
+        <Link to="/logs" className="small">Open the logs ›</Link>
+        <Link to="/sensors" className="small">Diagnose a sensor ›</Link>
+      </div>
+    </section>
   );
 }
 

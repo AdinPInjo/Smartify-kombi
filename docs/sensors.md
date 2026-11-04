@@ -7,6 +7,20 @@ saves it. Nothing to edit in `.env`.
 
 No sensors at all is fine: a van with only Victron devices and a diesel heater needs none.
 
+## Which Raspberry Pi
+
+The Raspberry Pi 3, 4, 5 and Zero 2 W all have the same 40-pin header: the same GPIO
+numbers on the same physical pins. The wiring steps and the pin picture in the wizard fit
+every model. On the Pi 5 the pins sit on a different chip inside (RP1); Smartify finds the
+right one by itself.
+
+## Diagnose and logs
+
+Every sensor on the Sensors page has a **Diagnose** button: how many reads worked in the
+last hour, the latest readings, and what to check ("SDA and SCL swapped?"). For more,
+switch on **debug mode** (Settings → Troubleshooting, for 2 or 24 hours) and open **Logs**:
+every reading and Bluetooth message, with a filter (e.g. `fridge`).
+
 ## The catalog
 
 | Sensor | For | Connects to |

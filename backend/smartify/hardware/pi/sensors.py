@@ -98,6 +98,27 @@ class I2cClimateSensor:
         return ClimateReading(self.name, round(temperature, 2), round(humidity, 1))
 
 
+# The 40-pin header's GPIO controller: the same pins on every Pi with a 40-pin
+# header, but a different chip inside (Pi 3: bcm2835, Pi 4: bcm2711, Pi 5: RP1).
+HEADER_CHIPS = ("pinctrl-rp1", "pinctrl-bcm2711", "pinctrl-bcm2835")
+
+
+def header_chip() -> str:
+    try:
+        import gpiod
+
+        for path in sorted(Path("/dev").glob("gpiochip*")):
+            try:
+                with gpiod.Chip(str(path)) as chip:
+                    if chip.get_info().label in HEADER_CHIPS:
+                        return str(path)
+            except OSError:
+                continue
+    except ImportError:  # pragma: no cover - depends on the Pi
+        pass
+    return "/dev/gpiochip0"
+
+
 class GpioInput:
     """A door contact (to ground, with the Pi's pull-up) or a motion sensor output."""
 
@@ -116,7 +137,7 @@ class GpioInput:
             raise HardwareError("GPIO inputs need the 'gpiod' package (update Smartify)") from exc
         bias = Bias.PULL_UP if self.kind == "door" else Bias.PULL_DOWN
         return gpiod.request_lines(
-            "/dev/gpiochip0",
+            header_chip(),
             consumer=f"smartify-{self.name}",
             config={self.pin: gpiod.LineSettings(direction=Direction.INPUT, bias=bias)},
         )

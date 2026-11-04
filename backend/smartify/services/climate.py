@@ -15,6 +15,7 @@ SD card writes low (one row per sensor per minute).
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import deque
@@ -34,6 +35,9 @@ Status = Literal["ready", "warming_up", "stale"]
 # DHT22 specification limits. Anything outside is a corrupted read.
 _TEMPERATURE_RANGE = (-40.0, 80.0)
 _HUMIDITY_RANGE = (0.0, 100.0)
+
+
+log = logging.getLogger(__name__)
 
 
 def _plausible(temperature: float | None, humidity: float | None) -> bool:
@@ -71,6 +75,9 @@ class _SensorState:
         self.good_total = 0
         self.temperature: float | None = None
         self.humidity: float | None = None
+        # For "Diagnose" in the Sensors tab: the latest raw reads, and an hour of ok/failed.
+        self.recent: deque[tuple[int, float | None, float | None, str | None]] = deque(maxlen=30)
+        self.reads: deque[tuple[float, bool]] = deque()
 
 
 class ClimateService:
@@ -110,7 +117,29 @@ class ClimateService:
                 state = self._state.get(sensor.name)
                 if state is None:  # removed while reading
                     continue
-                if reading.ok and _plausible(reading.temperature_c, reading.humidity):
+                good = reading.ok and _plausible(reading.temperature_c, reading.humidity)
+                error = (
+                    None
+                    if good
+                    else (
+                        reading.error
+                        or f"implausible reading {reading.temperature_c} °C / {reading.humidity} %"
+                    )
+                )
+                state.recent.append((int(now), reading.temperature_c, reading.humidity, error))
+                state.reads.append((now, good))
+                while state.reads and state.reads[0][0] < now - 3600:
+                    state.reads.popleft()
+                if good:
+                    log.debug(
+                        "%s: %.1f °C%s",
+                        sensor.name,
+                        reading.temperature_c,
+                        f" {reading.humidity:.0f} %" if reading.humidity is not None else "",
+                    )
+                else:
+                    log.debug("%s: read failed: %s", sensor.name, error)
+                if good:
                     state.window.append((now, reading.temperature_c, reading.humidity))
                     state.minute.append((reading.temperature_c, reading.humidity))
                     state.last_good_at = now
@@ -174,6 +203,20 @@ class ClimateService:
                 last_good_at=int(state.last_good_at) if state.last_good_at else None,
                 last_error=state.last_error,
             )
+
+    def diagnostics(self, name: str) -> dict | None:
+        """Success rate over the last hour and the latest raw reads."""
+        with self._lock:
+            state = self._state.get(name)
+            if state is None:
+                return None
+            total = len(state.reads)
+            good = sum(1 for _, ok in state.reads if ok)
+            recent = [
+                {"time": t, "temperature_c": temp, "humidity": hum, "error": err}
+                for t, temp, hum, err in reversed(state.recent)
+            ]
+        return {"reads": total, "good": good, "recent": recent}
 
     def snapshots(self) -> list[ClimateSnapshot]:
         return [snap for name in self.sensor_names if (snap := self.snapshot(name))]

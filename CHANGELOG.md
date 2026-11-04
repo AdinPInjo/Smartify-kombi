@@ -7,6 +7,19 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.10.0 - 2026-11-04
+
+### Added
+- Diagnose for every sensor (Sensors tab): how many reads worked in the last hour, the latest
+  readings live, and plain-language hints about the wiring ("SDA and SCL swapped?").
+- Debug mode (Settings → Troubleshooting): logs every sensor reading and Bluetooth message
+  for 2 or 24 hours, then switches itself off.
+- A Logs page with a live readout and a filter; in the side menu while debug mode is on.
+
+### Changed
+- Door contacts and motion sensors work on the Raspberry Pi 5 too.
+- The README now explains what Smartify does before how it's built.
+
 ## 0.9.0 - 2026-11-04
 
 ### Added

@@ -13,6 +13,7 @@ the supply (``ratio`` method) cancels that drift.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import deque
@@ -100,6 +101,9 @@ _EDITABLE = {
 }
 
 
+log = logging.getLogger(__name__)
+
+
 class WaterService:
     def __init__(
         self,
@@ -181,6 +185,7 @@ class WaterService:
                 self._minute_failures += 1
             return
         battery = supply_divided * settings.divider_factor
+        log.debug("water: signal %.3f V, battery %.2f V", signal, battery)
         with self._lock:
             self._recent.append((signal, battery))
             self._minute.append((signal, battery))

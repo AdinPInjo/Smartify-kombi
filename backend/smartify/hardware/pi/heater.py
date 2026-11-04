@@ -188,6 +188,7 @@ class BleHeaters:
         heater.write_char = layout.write
 
         def notified(_char: Any, data: bytearray) -> None:
+            log.debug("Heater %s sent %s", heater.config.name, bytes(data).hex())
             if session.feed(bytes(data)) is not None:
                 heater.last_seen = int(time.time())
                 heater.answer.set()

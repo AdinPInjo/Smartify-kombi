@@ -28,6 +28,9 @@ class _State:
         self.error: str | None = None
         self.changed_at: int | None = None
         self.alerted_at = 0.0
+        self.changes: list[tuple[int, bool]] = []
+        self.reads = 0
+        self.errors = 0
 
 
 class InputService:
@@ -59,10 +62,15 @@ class InputService:
                 changed = reading.active is not None and reading.active != state.active
                 first = state.active is None
                 state.error = reading.error
+                state.reads += 1
+                if reading.error:
+                    state.errors += 1
+                    log.debug("%s: %s", sensor.name, reading.error)
                 if reading.active is not None:
                     state.active = reading.active
                 if changed:
                     state.changed_at = int(now)
+                    state.changes = ([(int(now), bool(reading.active))] + state.changes)[:20]
                     log.info(
                         "%s %s",
                         sensor.name,
@@ -91,6 +99,19 @@ class InputService:
             self._notify.notify(
                 f"motion:{name}", f"{name}: motion", f"Motion seen by {name}.", "high"
             )
+
+    def diagnostics(self, name: str) -> dict[str, Any] | None:
+        with self._lock:
+            state = self._state.get(name)
+            if state is None:
+                return None
+            return {
+                "reads": state.reads,
+                "good": state.reads - state.errors,
+                "active": state.active,
+                "error": state.error,
+                "changes": [{"time": t, "active": a} for t, a in state.changes],
+            }
 
     def states(self) -> list[dict[str, Any]]:
         with self._lock:

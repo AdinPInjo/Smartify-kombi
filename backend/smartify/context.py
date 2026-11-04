@@ -23,6 +23,7 @@ from smartify.services.conditions import (
     MetricValue,
     SensorIssue,
 )
+from smartify.services.debug import DebugMode
 from smartify.services.energy import EnergyService
 from smartify.services.gps import GpsService
 from smartify.services.heaters import HeaterService
@@ -66,6 +67,7 @@ class AppContext:
     scenes: SceneService = field(init=False)
     heaters: HeaterService = field(init=False)
     inputs: InputService = field(init=False)
+    debug: DebugMode = field(init=False)
     sensor_store: SensorStore = field(init=False)
     boot_sensors: str = field(init=False, default="")
     """GPS and water sender settings at start: a change needs a restart."""
@@ -144,6 +146,7 @@ class AppContext:
         ctx.relays.sensor_pins = store.gpio_pins
         ctx.boot_sensors = _restart_signature(configs)
         ctx.inputs = InputService(notifications)
+        ctx.debug = DebugMode(db, logs, settings.log_level)
         ctx.apply_inputs(configs)
         ctx.heaters = HeaterService(db, hardware.heaters)
         ctx.scenes = SceneService(db, ctx.relays, ctx.heaters)
@@ -179,6 +182,7 @@ class AppContext:
             Worker("alerts", 10, self.alerts.check),
             Worker("notify", 10, self.notifications.deliver_due),
             Worker("inputs", 1, self.inputs.poll),
+            Worker("debug", 60, self.debug.apply),
             Worker("updates", 300, self.updates.tick),
         ]
         if self.gps.enabled:

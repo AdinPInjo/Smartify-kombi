@@ -14,6 +14,12 @@ class LogBuffer(logging.Handler):
         self._lock_records = threading.Lock()
         self._next_id = 1
 
+    def set_debug(self, on: bool) -> None:
+        """Debug mode: keep debug records too, and more of them."""
+        self.setLevel(logging.DEBUG if on else logging.INFO)
+        with self._lock_records:
+            self._records = deque(self._records, maxlen=3000 if on else 500)
+
     def emit(self, record: logging.LogRecord) -> None:
         try:
             message = record.getMessage()

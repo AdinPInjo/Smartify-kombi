@@ -1,6 +1,7 @@
-import { Bell, Cpu, Gauge, Map, Settings, SunMedium, Thermometer, ToggleRight } from "lucide-react";
+import { Bell, Cpu, Gauge, Map, ScrollText, Settings, SunMedium, Thermometer, ToggleRight } from "lucide-react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useHealth, useMode, useNotificationSettings } from "@/api/hooks";
+import { useDebugMode } from "@/lib/debug";
 import { Topo } from "./instruments";
 
 const NAV = [
@@ -16,6 +17,7 @@ const NAV = [
 export function AppShell() {
   const { cloud, ready } = useMode();
   const version = useHealth().data?.version ?? __APP_VERSION__;
+  const debug = useDebugMode();
   const notifications = useNotificationSettings(ready && !cloud);
   // A dot on the Alerts tab until the van can reach a phone.
   const needsSetup = notifications.data !== undefined && notifications.data.active_channels.length === 0;
@@ -32,6 +34,12 @@ export function AppShell() {
             {to === "/notifications" && needsSetup && <span className="nav-dot" aria-label="not set up" />}
           </NavLink>
         ))}
+        {debug.data?.enabled && (
+          <NavLink to="/logs" className="desktop-only">
+            <ScrollText size={22} strokeWidth={2} aria-hidden="true" />
+            Logs
+          </NavLink>
+        )}
         <NavLink to="/settings" className="desktop-only">
           <Settings size={22} strokeWidth={2} aria-hidden="true" />
           Settings
