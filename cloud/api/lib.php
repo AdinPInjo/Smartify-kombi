@@ -4,7 +4,7 @@
 
 declare(strict_types=1);
 
-const SMARTIFY_CLOUD_VERSION = '0.12.0';
+const SMARTIFY_CLOUD_VERSION = '0.12.1';
 const SMARTIFY_PROTOCOL = 1;
 // Bump when schema_sql() changes; the API brings older databases up to date by
 // itself on the next request, so an update is just uploading the new files.

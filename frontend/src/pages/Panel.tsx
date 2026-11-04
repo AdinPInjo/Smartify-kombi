@@ -27,6 +27,8 @@ import { Num } from "@/components/ui";
 import { coords, duration, fmt, humanize, signed, weatherText } from "@/lib/format";
 import { useDashLayout, type DashDefinition } from "@/lib/dashLayout";
 import { useNow } from "@/lib/useNow";
+import { cabinAndOutside } from "@/lib/cabin";
+import { useMissingFeatures } from "@/lib/features";
 
 type PanelCardId = "battery" | "cabin" | "weather" | "heater" | "switches" | "water" | "scenes" | "map";
 
@@ -77,6 +79,9 @@ export function Panel() {
   const fix = gps.data?.fix ?? null;
   const navigate = useNavigate();
   const { layout, save, reset } = useDashLayout(PANEL);
+  const features = useMissingFeatures();
+  // Panel card ids that differ from the feature names.
+  const panelMissing = new Set<string>([...features].map((f) => (f === "climate" ? "cabin" : f)));
   const [params, setParams] = useSearchParams();
   const editing = params.get("edit") === "1";
   const setEditing = (on: boolean) => setParams(on ? { edit: "1" } : {}, { replace: true });
@@ -138,6 +143,7 @@ export function Panel() {
         editing={editing}
         labels={LABELS}
         render={(card) => <PanelCard id={card.id} />}
+        missing={panelMissing}
       />
       <StatusBar />
     </div>
@@ -247,7 +253,7 @@ function SourceRow({ icon, name, value, detail, active }: { icon: React.ReactNod
 
 function CabinCard() {
   const climate = useClimate();
-  const [inside, outside] = climate.data ?? [];
+  const { inside, outside } = cabinAndOutside(climate.data);
   const history = useClimateHistory(inside?.sensor, 24);
   const outsideHistory = useClimateHistory(outside?.sensor, 24);
   const points = history.data ?? [];

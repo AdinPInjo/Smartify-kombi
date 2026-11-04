@@ -23,6 +23,8 @@ import { Card, Num, Skeleton } from "@/components/ui";
 import { coords, duration, fmt, humanize, localDay, signed, weatherText } from "@/lib/format";
 import { OVERVIEW, useOverviewLayout, type OverviewCardId } from "@/lib/overviewLayout";
 import { useNow } from "@/lib/useNow";
+import { cabinAndOutside } from "@/lib/cabin";
+import { useMissingFeatures } from "@/lib/features";
 
 const LABEL = Object.fromEntries(OVERVIEW.cards.map((c) => [c.id, c.label])) as Record<OverviewCardId, string>;
 
@@ -32,6 +34,7 @@ export function Overview() {
   const editing = params.get("edit") === "1";
   const setEditing = (on: boolean) => setParams(on ? { edit: "1" } : {}, { replace: true });
   const navigate = useNavigate();
+  const missing = useMissingFeatures();
   const gps = useGps();
   const now = useNow();
   const fix = gps.data?.fix;
@@ -84,6 +87,7 @@ export function Overview() {
         editing={editing}
         labels={LABEL}
         render={(card) => <OverviewCard id={card.id} tall={card.h === 2} />}
+        missing={missing}
       />
       {!editing && (
         <button type="button" className="btn small ghost" style={{ alignSelf: "center" }} onClick={() => setEditing(true)}>
@@ -128,7 +132,7 @@ function OverviewCard({ id, tall }: { id: OverviewCardId; tall: boolean }) {
 function ClimateCard({ tall }: { tall: boolean }) {
   const climate = useClimate();
   const weather = useWeather();
-  const [inside, outside] = climate.data ?? [];
+  const { inside, outside } = cabinAndOutside(climate.data);
   const history = useClimateHistory(inside?.sensor, 6);
   const points = history.data ?? [];
   const tomorrow = weather.data?.forecast?.[1];

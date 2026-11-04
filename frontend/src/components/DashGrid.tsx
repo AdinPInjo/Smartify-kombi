@@ -13,6 +13,7 @@ export function DashGrid<Id extends string>({
   labels,
   render,
   className = "",
+  missing,
 }: {
   layout: DashLayout<Id>;
   save: (layout: DashLayout<Id>) => void;
@@ -20,9 +21,11 @@ export function DashGrid<Id extends string>({
   labels: Record<Id, string>;
   render: (card: CardLayout<Id>) => ReactNode;
   className?: string;
+  /** Cards for hardware this van doesn't have: left out, except while arranging. */
+  missing?: Set<string>;
 }) {
   const drag = useDrag(layout, save);
-  const visible = layout.cards.filter((c) => !c.hidden);
+  const visible = layout.cards.filter((c) => !c.hidden && (editing || !missing?.has(c.id)));
   const hidden = layout.cards.filter((c) => c.hidden);
   return (
     <>
@@ -35,6 +38,7 @@ export function DashGrid<Id extends string>({
             style={{ "--w": card.w, "--wm": card.w >= 4 ? 2 : 1, "--h": card.h } as CSSProperties}
           >
             {render(card)}
+            {editing && missing?.has(card.id) && <span className="dash-missing">not set up yet: hidden on the overview</span>}
             {editing && (
               <EditBar
                 card={card}

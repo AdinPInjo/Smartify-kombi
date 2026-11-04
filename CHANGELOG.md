@@ -7,6 +7,16 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.12.1 - 2026-11-04
+
+### Changed
+- The overview and the tablet panel only show what your van has: no empty cards for a
+  water tank, GPS, Victron or switches you haven't set up. While customizing, those cards
+  still appear, marked "not set up yet".
+- One temperature sensor is enough: without an outside sensor, the Climate page uses the
+  forecast for outside; without that, the outside value is simply left out. A van with only
+  an outside sensor no longer calls it "inside".
+
 ## 0.12.0 - 2026-11-04
 
 ### Changed

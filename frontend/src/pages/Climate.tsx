@@ -14,6 +14,7 @@ import { LineChart } from "@/components/instruments";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, Num, Segmented, Skeleton } from "@/components/ui";
 import { WeatherCard } from "@/components/WeatherCard";
+import { isOutside } from "@/lib/cabin";
 import { ago, fmt } from "@/lib/format";
 
 const RANGES = [
@@ -25,7 +26,6 @@ const RANGES = [
 // One color per sensor line, in order.
 const COLORS = ["var(--accent)", "var(--tone-weather)", "var(--tone-scenes)", "var(--tone-switches)", "var(--tone-charging)", "var(--tone-heater)"];
 
-const isOutside = (name: string) => /out|ext|aussen|vani/i.test(name);
 
 /** Dew point (°C) with the Magnus formula: below it, moisture condenses on surfaces. */
 function dewPoint(temperature: number, humidity: number): number {
@@ -51,8 +51,10 @@ export function Climate() {
   const climate = useClimate();
   const weather = useWeather();
   const sensors = climate.data ?? [];
-  const inside = sensors.find((s) => !isOutside(s.sensor)) ?? sensors[0];
-  const outsideSensor = sensors.find((s) => s !== inside && isOutside(s.sensor));
+  // The cabin sensor: the first one that isn't outside. A van with only an outside
+  // sensor has no "inside now" (that sensor still shows in the chart and the list).
+  const inside = sensors.find((s) => !isOutside(s.sensor));
+  const outsideSensor = sensors.find((s) => isOutside(s.sensor));
   const outsideC = outsideSensor?.temperature_c ?? (weather.data?.available ? (weather.data.temperature_c ?? null) : null);
   const hint = condensationHint(inside, outsideC);
 
@@ -61,7 +63,13 @@ export function Climate() {
       <PageHeader kicker="Climate" title="Climate" sub="How comfortable the van is, and the heater that keeps it so." />
       {climate.isPending && <Skeleton height={180} />}
       {climate.data && (
-        <InsideNow inside={inside} outsideC={outsideC} outsideFrom={outsideSensor ? outsideSensor.sensor : "forecast"} hint={hint} />
+        <InsideNow
+          inside={inside}
+          outsideC={outsideC}
+          outsideFrom={outsideSensor ? outsideSensor.sensor : "forecast"}
+          hint={hint}
+          onlyOutside={sensors.length > 0 && !inside}
+        />
       )}
       <Card label="Diesel heater" action={<Link to="/climate/heaters" className="small">Setup ›</Link>}>
         <HeaterCards />
@@ -80,11 +88,13 @@ function InsideNow({
   outsideC,
   outsideFrom,
   hint,
+  onlyOutside = false,
 }: {
   inside: ClimateSnapshot | undefined;
   outsideC: number | null;
   outsideFrom: string;
   hint: string | null;
+  onlyOutside?: boolean;
 }) {
   const heaters = useHeaters();
   const heater = heaters.data?.heaters[0];
@@ -101,7 +111,9 @@ function InsideNow({
     return (
       <Card label="Inside now">
         <p className="small muted" style={{ margin: 0 }}>
-          No temperature sensor yet. <Link to="/sensors">Add one in the Sensors tab ›</Link>
+          {onlyOutside ? "No sensor inside the van yet (only outside). " : "No temperature sensor yet. "}
+          <Link to="/sensors">Add one in the Sensors tab ›</Link>
+          {outsideC != null && ` Outside it's ${fmt(outsideC, 0)} °C.`}
         </p>
       </Card>
     );
@@ -124,12 +136,14 @@ function InsideNow({
               <Num value={fmt(inside.humidity, 0)} unit="%" size="l" />
             </div>
           )}
-          <div className="stack" style={{ gap: 0 }}>
-            <span className="tiny muted row" style={{ gap: 4 }}>
-              <Wind size={12} aria-hidden="true" /> {isOutside(outsideFrom) ? outsideFrom : `outside (${outsideFrom})`}
-            </span>
-            <Num value={fmt(outsideC, 0)} unit="°C" size="l" />
-          </div>
+          {outsideC != null && (
+            <div className="stack" style={{ gap: 0 }}>
+              <span className="tiny muted row" style={{ gap: 4 }}>
+                <Wind size={12} aria-hidden="true" /> {isOutside(outsideFrom) ? outsideFrom : `outside (${outsideFrom})`}
+              </span>
+              <Num value={fmt(outsideC, 0)} unit="°C" size="l" />
+            </div>
+          )}
         </div>
       </div>
       {inside.status !== "ready" && (
