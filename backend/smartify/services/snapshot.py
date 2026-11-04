@@ -14,7 +14,7 @@ _DEVICE = "device"  # stands in for the logged-in user when calling API function
 
 
 def build_state(ctx: Any) -> dict[str, Any]:
-    from smartify.api import relays, scenes, sensors, system
+    from smartify.api import heaters, relays, scenes, sensors, system
 
     relay_list = relays.list_relays(ctx, _DEVICE)["relays"]
     return {
@@ -32,4 +32,5 @@ def build_state(ctx: Any) -> dict[str, Any]:
         "weather": sensors.weather(ctx, _DEVICE),
         "system": system.system_status(ctx, _DEVICE),
         "scenes": scenes.list_scenes(ctx, _DEVICE),
+        "heaters": heaters.list_heaters(ctx, _DEVICE),
     }

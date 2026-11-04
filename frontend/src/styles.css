@@ -700,3 +700,10 @@ details > summary { color: var(--muted); }
 .dash-icon.selected { border-color: var(--accent); color: var(--accent); background: rgba(240, 164, 58, 0.12); }
 /* Tablet panel grid: taller rows */
 .dash.panel-dash { position: relative; flex: 1; grid-auto-rows: minmax(190px, auto); }
+
+/* Diesel heater controls */
+.heater-power { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.heater-power .btn { min-height: 52px; font-size: 17px; }
+.stepper { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.stepper .dash-icon { min-width: 52px; min-height: 52px; }
+.stepper-value { font-size: 40px; line-height: 1; }

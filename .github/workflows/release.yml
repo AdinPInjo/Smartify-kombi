@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # all tags, to tell whether this is the newest version
       - name: Changelog and version files match the tag
         run: python3 scripts/release_info.py check "${GITHUB_REF_NAME}"
       - uses: actions/setup-node@v5
@@ -34,8 +36,16 @@ jobs:
           python3 scripts/release_info.py versions "${GITHUB_REF_NAME}" dist/versions.json
           python3 scripts/release_info.py notes "${GITHUB_REF_NAME}" > dist/release-notes.md
           cd dist && sha256sum dashboard.tar.gz smartify-cloud.zip installer.php versions.json > SHA256SUMS
+      - name: Is this the newest version?
+        # GitHub's "latest" release is what vans and remote dashboards read. Releasing an
+        # older fix after a newer version must not take that away from the newer one.
+        id: newest
+        run: |
+          newest=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1)
+          echo "latest=$([ "$newest" = "$GITHUB_REF_NAME" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
         with:
+          make_latest: ${{ steps.newest.outputs.latest }}
           body_path: dist/release-notes.md
           files: |
             dist/dashboard.tar.gz

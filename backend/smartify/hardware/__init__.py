@@ -74,6 +74,7 @@ def _build_mock(settings: Settings) -> Hardware:
         analog=mock.MockAnalogReader(),
         gps=gps,
         victron=mock.MockVictronListener(),
+        heaters=mock.MockHeaters(),
     )
 
 
@@ -104,6 +105,13 @@ def _build_pi(settings: Settings) -> Hardware:
         victron = BleVictronListener(settings.victron_devices)
     except HardwareError:
         log.exception("Bluetooth support for Victron devices is missing")
+    heaters = None
+    try:
+        from smartify.hardware.pi.heater import BleHeaters
+
+        heaters = BleHeaters()
+    except HardwareError:
+        log.exception("Bluetooth support for diesel heaters is missing")
     log.info("Using Raspberry Pi hardware (%d climate sensors)", len(sensors))
     return Hardware(
         relays=PinctrlRelayDriver(),
@@ -111,4 +119,5 @@ def _build_pi(settings: Settings) -> Hardware:
         analog=Ads1115Reader(settings.ads1115_bus, settings.ads1115_address),
         gps=gps,
         victron=victron,
+        heaters=heaters,
     )

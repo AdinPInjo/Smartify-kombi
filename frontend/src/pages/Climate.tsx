@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useClimate, useClimateHistory, useWater, useWaterHistory, useWeather } from "@/api/hooks";
 import type { ClimateSnapshot } from "@/api/types";
+import { HeaterCards } from "@/components/Heater";
 import { LineChart, Tank } from "@/components/instruments";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, Num, Segmented, Skeleton } from "@/components/ui";
@@ -28,6 +29,10 @@ export function Climate() {
       <div style={{ maxWidth: 260 }}>
         <Segmented label="Time range" options={RANGES} value={hours} onChange={setHours} />
       </div>
+
+      <Card label="Diesel heater" action={<Link to="/climate/heaters" className="small">Setup ›</Link>}>
+        <HeaterCards />
+      </Card>
 
       <WaterSection hours={Number(hours)} />
 

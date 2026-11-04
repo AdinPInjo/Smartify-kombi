@@ -168,11 +168,35 @@ class AlertService:
                 ("departure", self._departure),
                 ("frost", self._frost),
                 ("energy forecast", self._energy_forecast),
+                ("heater", self._heater),
             ):
                 try:
                     check(settings)
                 except Exception:
                     log.exception("Alert check %s failed", name)
+
+    def _heater(self, settings: NotificationSettings) -> None:
+        """Faults the diesel heater reports. Always on: a fault or CO alarm matters."""
+        for heater in self._ctx.heaters.list():
+            status = heater["status"]
+            fault = status["error"] if status else None
+            carbon = bool(fault and ("CO" in fault or "carbon" in fault.lower()))
+            self._level(
+                f"heater_fault:{heater['id']}",
+                None if status is None else fault is not None,
+                f"{heater['name']}: {'carbon monoxide alarm' if carbon else 'fault'}",
+                (
+                    f"The heater reports: {fault}. Ventilate the van now "
+                    "and leave it if you feel unwell."
+                    if carbon
+                    else f"The heater reports: {fault}."
+                )
+                if fault
+                else "",
+                settings,
+                "urgent" if carbon else "high",
+                confirm=0 if carbon else 30,
+            )
 
     def _battery(self, settings: NotificationSettings) -> None:
         alerts = settings.alerts

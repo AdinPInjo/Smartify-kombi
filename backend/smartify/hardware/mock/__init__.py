@@ -10,8 +10,17 @@ import math
 import random
 import threading
 import time
+from collections.abc import Callable
+from typing import Any
 
-from smartify.hardware.base import ClimateReading, GpsFix, HardwareError
+from smartify.hardware.base import (
+    ClimateReading,
+    DiscoveredHeater,
+    GpsFix,
+    HardwareError,
+    HeaterLink,
+    HeaterStatus,
+)
 
 
 class MockRelayDriver:
@@ -256,3 +265,106 @@ class MockVictronListener:
                 rssi=-68,
             ),
         ]
+
+
+class MockHeaters:
+    """Two simulated diesel heaters nearby. Added ones behave like the real
+    thing: self-test, ignition, running; switching off means cooling down first."""
+
+    NEARBY = (
+        ("D4:8A:FC:10:20:30", "Air Heater", -61),
+        ("C8:47:8C:40:50:60", "Hcalory-HBU1S", -78),
+    )
+    SELF_TEST, IGNITION, COOLDOWN = 3, 25, 40  # seconds
+
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+        self._clock = clock
+        self._heaters: dict[str, Any] = {}
+        self._state: dict[str, dict[str, Any]] = {}
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def set_heaters(self, heaters: list[Any]) -> None:
+        self._heaters = {h.id: h for h in heaters}
+        for heater_id in self._heaters:
+            self._state.setdefault(
+                heater_id,
+                {
+                    "on": False,
+                    "since": 0.0,
+                    "mode": "temperature",
+                    "target": 20,
+                    "level": 5,
+                    "cabin": 9.0,
+                    "at": self._clock(),
+                },
+            )
+
+    def discovered(self) -> list[DiscoveredHeater]:
+        now = int(self._clock())
+        return [DiscoveredHeater(mac, name, rssi, now) for mac, name, rssi in self.NEARBY]
+
+    def _phase(self, s: dict[str, Any]) -> str:
+        age = self._clock() - s["since"]
+        if s["on"]:
+            return (
+                "self_test"
+                if age < self.SELF_TEST
+                else "ignition"
+                if age < self.IGNITION
+                else "running"
+            )
+        return "cooldown" if s["since"] and age < self.COOLDOWN else "standby"
+
+    def link(self, heater_id: str) -> HeaterLink:
+        s = self._state.get(heater_id)
+        if s is None:
+            return HeaterLink(False, None, "not set up", None)
+        now = self._clock()
+        phase = self._phase(s)
+        # The cabin warms towards the target while running, cools towards 6 °C otherwise.
+        goal = (
+            (s["target"] if s["mode"] == "temperature" else 14 + s["level"])
+            if phase == "running"
+            else 6.0
+        )
+        s["cabin"] += (goal - s["cabin"]) * min(1.0, (now - s["at"]) / 900)
+        s["at"] = now
+        status = HeaterStatus(
+            running=s["on"],
+            phase=phase,
+            mode=s["mode"],
+            target_temperature=float(s["target"]) if s["mode"] == "temperature" else None,
+            level=s["level"],
+            cabin_temperature=round(s["cabin"], 1),
+            heater_temperature={"running": 120.0, "ignition": 60.0, "cooldown": 70.0}.get(
+                phase, round(s["cabin"])
+            ),
+            voltage=12.8 if phase != "ignition" else 12.1,
+            error_code=None,
+            error=None,
+            co_ppm=None,
+            protocol="AA55 (simulated)",
+            updated_at=int(now),
+        )
+        return HeaterLink(True, status, None, int(now))
+
+    def command(self, heater_id: str, command: int, argument: int = 0) -> None:
+        from smartify.hardware import heater_protocol as hp
+
+        s = self._state.get(heater_id)
+        if s is None:
+            raise HardwareError("heater not connected")
+        if command == hp.CMD_POWER:
+            if bool(argument) != s["on"]:
+                s["on"], s["since"] = bool(argument), self._clock()
+        elif command == hp.CMD_MODE:
+            s["mode"] = "level" if argument == hp.MODE_LEVEL else "temperature"
+        elif command == hp.CMD_TEMPERATURE:
+            s["target"] = argument
+        elif command == hp.CMD_LEVEL:
+            s["level"] = argument

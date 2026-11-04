@@ -15,6 +15,7 @@ import { DashGrid } from "@/components/DashGrid";
 import { batteryColor, LineChart, RingGauge, Tank } from "@/components/instruments";
 import { PageHeader } from "@/components/PageHeader";
 import { RelayControl } from "@/components/RelayControl";
+import { HeaterCards } from "@/components/Heater";
 import { SceneButtons } from "@/components/Scenes";
 import { TrackMap } from "@/components/TrackMap";
 import { Card, Num, Skeleton } from "@/components/ui";
@@ -98,6 +99,12 @@ function OverviewCard({ id, tall }: { id: OverviewCardId; tall: boolean }) {
       return <WaterCard />;
     case "charging":
       return <ChargingCard />;
+    case "heater":
+      return (
+        <Card label="Diesel heater" action={<Link to="/climate/heaters" className="small">Setup ›</Link>}>
+          <HeaterCards />
+        </Card>
+      );
     case "scenes":
       return (
         <Card label="Scenes" action={<Link to="/switches#scenes" className="small">Edit ›</Link>}>

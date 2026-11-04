@@ -228,7 +228,7 @@ function cleanup_if_due(): void
 function route(string $method, string $path): mixed
 {
     $seg = array_values(array_filter(explode('/', $path), 'strlen'));
-    $route = $method . ' /' . implode('/', array_map(fn($s, $i) => preg_match('/^[a-z-]+$/', $s) && !($i > 0 && in_array($seg[$i - 1], ['relays', 'rules', 'climate', 'archive', 'devices', 'scenes'], true)) ? $s : '*', $seg, array_keys($seg)));
+    $route = $method . ' /' . implode('/', array_map(fn($s, $i) => preg_match('/^[a-z-]+$/', $s) && !($i > 0 && in_array($seg[$i - 1], ['relays', 'rules', 'climate', 'archive', 'devices', 'scenes', 'heaters'], true)) ? $s : '*', $seg, array_keys($seg)));
     $state = fn(string $key, mixed $default = null) => state()[$key] ?? $default;
 
     switch ($route) {
@@ -325,6 +325,24 @@ function route(string $method, string $path): mixed
             queue('rule_delete', $rule['id'], [], (int)$rule['revision']);
             return array_merge($rule, ['pending' => true]);
 
+        case 'GET /heaters':
+            return $state('heaters', ['heaters' => [], 'available' => false]);
+        case 'POST /heaters/*/power':
+        case 'POST /heaters/*/settings':
+            $heater = null;
+            foreach ($state('heaters', ['heaters' => []])['heaters'] as $candidate) {
+                if ($candidate['id'] === $seg[1]) $heater = $candidate;
+            }
+            if ($heater === null) throw new HttpError(404, 'heater not found');
+            $body = json_in();
+            if ($seg[2] === 'power') {
+                queue('heater_power', $heater['id'], ['on' => (bool)($body['on'] ?? false)], null, (int)(config()['command_ttl_seconds'] ?? 900));
+            } else {
+                $settings = array_intersect_key($body, array_flip(['mode', 'temperature', 'level']));
+                queue('heater_settings', $heater['id'], $settings, null, (int)(config()['command_ttl_seconds'] ?? 900));
+            }
+            return array_merge($heater, ['pending' => true]);
+
         case 'GET /scenes':
             return $state('scenes', ['scenes' => [], 'icons' => []]);
         case 'POST /scenes/*/run':
@@ -416,6 +434,10 @@ function route(string $method, string $path): mixed
 
         case 'POST /relays':
         case 'DELETE /relays/*':
+        case 'GET /heaters/*':
+        case 'POST /heaters':
+        case 'PATCH /heaters/*':
+        case 'DELETE /heaters/*':
         case 'POST /scenes':
         case 'PATCH /scenes/*':
         case 'DELETE /scenes/*':

@@ -288,6 +288,12 @@ def apply_command(ctx: Any, command: dict[str, Any]) -> None:
         ctx.relays.set_auto(target)
     elif kind == "scene_run":
         ctx.scenes.run(int(target), source="remote")
+    elif kind == "heater_power":
+        ctx.heaters.power(target, bool(payload.get("on")), source="remote")
+    elif kind == "heater_settings":
+        ctx.heaters.settings(
+            target, payload.get("mode"), payload.get("temperature"), payload.get("level")
+        )
     elif kind == "relay_update":
         check_revision(ctx.relays.get(target).revision, "This relay")
         ctx.relays.update(target, payload)

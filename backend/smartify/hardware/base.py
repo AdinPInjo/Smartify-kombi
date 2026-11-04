@@ -110,6 +110,78 @@ class VictronListener(Protocol):
     def error(self) -> str | None: ...
 
 
+@dataclass(frozen=True)
+class DiscoveredHeater:
+    """A diesel heater controller heard over Bluetooth."""
+
+    mac: str
+    name: str | None
+    rssi: int | None
+    seen_at: int
+
+
+@dataclass(frozen=True)
+class HeaterConfig:
+    """A heater added in the dashboard."""
+
+    id: str
+    name: str
+    mac: str
+    pin: int
+
+
+@dataclass
+class HeaterStatus:
+    """What the heater reports, the same for every brand and protocol."""
+
+    running: bool
+    phase: str
+    """standby, self_test, ignition, running, cooldown, ventilation or fault."""
+    mode: str | None
+    """"temperature" (keeps the cabin at a temperature) or "level" (fixed power)."""
+    target_temperature: float | None
+    level: int | None
+    cabin_temperature: float | None
+    heater_temperature: float | None
+    voltage: float | None
+    error_code: int | None
+    error: str | None
+    co_ppm: float | None
+    protocol: str | None
+    updated_at: int
+
+
+@dataclass
+class HeaterLink:
+    """Connection state of one configured heater."""
+
+    connected: bool
+    status: HeaterStatus | None
+    error: str | None
+    """Why it is not connected, in plain words."""
+    last_seen: int | None
+
+
+class HeaterBackend(Protocol):
+    """Talks to diesel heaters (Bluetooth on the Pi, simulated in mock mode)."""
+
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def set_heaters(self, heaters: list[HeaterConfig]) -> None:
+        """Connect to these heaters (and drop the others)."""
+
+    def link(self, heater_id: str) -> HeaterLink: ...
+
+    def discovered(self) -> list[DiscoveredHeater]:
+        """Heater controllers nearby. The first call starts a short scan."""
+        ...
+
+    def command(self, heater_id: str, command: int, argument: int = 0) -> None:
+        """Send one command (heater_protocol.CMD_*). Raises HardwareError."""
+
+
 class HardwareError(RuntimeError):
     """A device could not be reached or returned invalid data."""
 
@@ -123,3 +195,4 @@ class Hardware:
     analog: AnalogReader
     gps: GpsReceiver | None
     victron: VictronListener | None = None
+    heaters: HeaterBackend | None = None

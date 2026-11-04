@@ -16,8 +16,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from smartify.db import transaction
-from smartify.errors import Conflict, InvalidInput, NotFound
+from smartify.errors import Conflict, DeviceUnavailable, InvalidInput, NotFound
 from smartify.services.relays import RelayService
+
+HEATER = "heater:"
+"""Scene actions for a diesel heater use the key "heater:<id>" (on or off only)."""
 
 Action = Literal["on", "off", "auto"]
 ACTIONS = ("on", "off", "auto")
@@ -37,9 +40,16 @@ class Scene:
 
 
 class SceneService:
-    def __init__(self, db_path: Path, relays: RelayService, clock: Callable[[], float] = time.time):
+    def __init__(
+        self,
+        db_path: Path,
+        relays: RelayService,
+        heaters: Any = None,
+        clock: Callable[[], float] = time.time,
+    ):
         self._db = db_path
         self._relays = relays
+        self._heaters = heaters
         self._clock = clock
 
     def _validate(
@@ -53,11 +63,15 @@ class SceneService:
         if not isinstance(actions, dict) or not actions:
             raise InvalidInput("choose what the scene does with at least one switch")
         known = {relay.id for relay in self._relays.list()}
+        heaters = {HEATER + c.id for c in self._heaters.configs()} if self._heaters else set()
         clean: dict[str, Action] = {}
         for relay_id, action in actions.items():
-            if relay_id not in known:
+            if relay_id in heaters:
+                if action not in ("on", "off"):
+                    raise InvalidInput("a heater in a scene is on or off")
+            elif relay_id not in known:
                 raise InvalidInput(f"unknown switch {relay_id!r}")
-            if action not in ACTIONS:
+            elif action not in ACTIONS:
                 raise InvalidInput("each switch in a scene is on, off or auto")
             clean[relay_id] = action
         return name, icon, clean
@@ -65,6 +79,11 @@ class SceneService:
     def _active(self, actions: dict[str, Action]) -> bool:
         relays = {relay.id: relay for relay in self._relays.list()}
         for relay_id, action in actions.items():
+            if relay_id.startswith(HEATER):
+                running = self._heaters.is_on(relay_id[len(HEATER) :]) if self._heaters else None
+                if running is not None and running != (action == "on"):
+                    return False
+                continue
             relay = relays.get(relay_id)
             if relay is None:
                 continue
@@ -135,7 +154,16 @@ class SceneService:
         scene = self.get(scene_id)
         known = {relay.id for relay in self._relays.list()}
         applied, skipped = [], []
+        heaters = {HEATER + c.id for c in self._heaters.configs()} if self._heaters else set()
         for relay_id, action in scene.actions.items():
+            if relay_id in heaters:
+                try:
+                    self._heaters.power(relay_id[len(HEATER) :], action == "on", source=source)
+                except DeviceUnavailable:
+                    skipped.append(relay_id)  # out of range: the rest still happens
+                    continue
+                applied.append(relay_id)
+                continue
             if relay_id not in known:
                 skipped.append(relay_id)
                 continue

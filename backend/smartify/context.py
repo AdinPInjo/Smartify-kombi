@@ -25,6 +25,7 @@ from smartify.services.conditions import (
 )
 from smartify.services.energy import EnergyService
 from smartify.services.gps import GpsService
+from smartify.services.heaters import HeaterService
 from smartify.services.maintenance import backup, check_integrity, prune_history
 from smartify.services.notify import NotificationService
 from smartify.services.relays import RelayService
@@ -61,6 +62,7 @@ class AppContext:
     alerts: AlertService = field(init=False)
     updates: UpdateService = field(init=False)
     scenes: SceneService = field(init=False)
+    heaters: HeaterService = field(init=False)
     cloud: CloudSync | None = None
     cloud_store: CloudConnectionStore | None = None
     cloud_transport: Any = None
@@ -126,7 +128,8 @@ class AppContext:
             victron=victron,
         )
         ctx.alerts = AlertService(ctx, notifications, db)
-        ctx.scenes = SceneService(db, ctx.relays)
+        ctx.heaters = HeaterService(db, hardware.heaters)
+        ctx.scenes = SceneService(db, ctx.relays, ctx.heaters)
 
         def moving() -> bool:
             speed = gps.metric(GPS_SENSOR, "speed").value if gps.enabled else None
@@ -146,6 +149,9 @@ class AppContext:
         if self.hardware.victron is not None:
             self.victron.apply()  # devices added from the dashboard
             self.hardware.victron.start(self.energy.on_reading)
+        if self.hardware.heaters is not None:
+            self.hardware.heaters.start()
+            self.heaters.apply()
         s = self.settings
         self.workers = [
             Worker("climate", s.sensor_interval_seconds, self.climate.sample),
@@ -235,6 +241,8 @@ class AppContext:
             worker.stop()
         if self.hardware.victron is not None:
             self.hardware.victron.stop()
+        if self.hardware.heaters is not None:
+            self.hardware.heaters.stop()
         # Nothing controls the relays once we exit, so leave them off.
         self.relays.all_off("shutdown", "service stopped")
         if self.hardware.gps is not None:

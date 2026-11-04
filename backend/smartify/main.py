@@ -15,6 +15,7 @@ from smartify import __version__
 from smartify.api import (
     auth,
     cloud,
+    heaters,
     notifications,
     relays,
     scenes,
@@ -107,6 +108,7 @@ def create_app(
         cloud.router,
         updates.router,
         scenes.router,
+        heaters.router,
     ):
         app.include_router(router, prefix="/api")
     app.include_router(auth.router, prefix="/api")

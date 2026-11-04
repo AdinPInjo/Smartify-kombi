@@ -11,6 +11,7 @@ import { Overview } from "./pages/Overview";
 import { Panel } from "./pages/Panel";
 import { Settings } from "./pages/Settings";
 import { Changelog } from "./pages/Changelog";
+import { HeaterSetup } from "./pages/HeaterSetup";
 import { Setup } from "./pages/Setup";
 import { SwitchDetail } from "./pages/SwitchDetail";
 import { Switches } from "./pages/Switches";
@@ -43,6 +44,7 @@ export function App() {
           <Route path="energy" element={<Energy />} />
           <Route path="energy/devices" element={<VictronSetup />} />
           <Route path="climate" element={<Climate />} />
+          <Route path="climate/heaters" element={<HeaterSetup />} />
           <Route path="switches" element={<Switches />} />
           <Route path="switches/:id" element={<SwitchDetail />} />
           <Route path="map" element={<MapPage />} />

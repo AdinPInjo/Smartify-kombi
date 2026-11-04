@@ -20,6 +20,7 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { useMode, useRelays } from "@/api/hooks";
+import { useHeaters } from "./Heater";
 import { Dialog, ErrorNote, Field, Segmented, useErrorToast, useToast } from "./ui";
 
 type Action = "on" | "off" | "auto";
@@ -63,7 +64,11 @@ function summary(scene: Scene, names: Record<string, string>): string {
 
 function useRelayNames() {
   const relays = useRelays();
-  return Object.fromEntries((relays.data ?? []).map((r) => [r.id, r.label || r.name])) as Record<string, string>;
+  const heaters = useHeaters();
+  return Object.fromEntries([
+    ...(relays.data ?? []).map((r) => [r.id, r.label || r.name]),
+    ...(heaters.data?.heaters ?? []).map((h) => [`heater:${h.id}`, h.name]),
+  ]) as Record<string, string>;
 }
 
 /** Big buttons that run a scene. `large` for the tablet panel. */
@@ -166,6 +171,7 @@ export function ScenesCard() {
 
 function SceneDialog({ scene, onClose }: { scene: Scene | null; onClose: () => void }) {
   const relays = useRelays();
+  const heaters = useHeaters();
   const client = useQueryClient();
   const toast = useToast();
   const [name, setName] = useState(scene?.name ?? "");
@@ -235,6 +241,24 @@ function SceneDialog({ scene, onClose }: { scene: Scene | null; onClose: () => v
               />
             </div>
           ))}
+          {heaters.data?.heaters.map((heater) => {
+            const key = `heater:${heater.id}`;
+            return (
+              <div key={key} className="stack" style={{ gap: 4 }}>
+                <span>{heater.name} (diesel heater)</span>
+                <Segmented<"keep" | "on" | "off">
+                  label={`${heater.name} in this scene`}
+                  value={(actions[key] as "on" | "off" | undefined) ?? "keep"}
+                  onChange={(value) => setActions({ ...actions, [key]: value })}
+                  options={[
+                    { value: "keep", label: "Unchanged" },
+                    { value: "on", label: "On" },
+                    { value: "off", label: "Off" },
+                  ]}
+                />
+              </div>
+            );
+          })}
           <span className="tiny faint">
             On and Off stay until you change them. Auto hands the switch back to its rules.
           </span>

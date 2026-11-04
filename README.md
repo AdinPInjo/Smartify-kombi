@@ -38,6 +38,7 @@ Full guide from an empty SD card: **[docs/install.md](docs/install.md)**
 | [Installation](docs/install.md) | SD card, install, first checks, troubleshooting |
 | [Wiring](docs/wiring.md) | DHT22, ADS1115 + battery divider, GPS, relays, power |
 | [Victron](docs/victron.md) | Bluetooth setup for SmartShunt, MPPT, Orion, MultiPlus |
+| [Diesel heater](docs/heater.md) | Vevor, Hcalory, Sunster and other heaters over Bluetooth |
 | [Notifications](docs/notifications.md) | Alerts on your phone with ntfy or Telegram |
 | [Rules](docs/rules.md) | Automatic switching, priorities, combined conditions |
 | [Updates](docs/updates.md) | New versions from the dashboard, going back, what makes it safe |

@@ -7,6 +7,25 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.7.0 - 2026-11-04
+
+### Added
+- Diesel heater over Bluetooth, without its app: Climate → Diesel heater. Find it nearby,
+  enter its PIN, then switch it on and off and set a temperature or power level. Live status:
+  heating phase, temperatures, voltage and fault codes. Works with Vevor, BYD, Hcalory,
+  Sunster, HeaterCC and other heaters that use apps like AirHeaterBLE.
+- The heater in scenes ("Warm up": heater on), on the overview and the tablet panel, and
+  from the remote dashboard.
+- Alerts for heater faults; a carbon monoxide alarm from the heater is sent right away.
+
+### Fixed
+- Releasing two versions at once could mark the older one as the newest, so devices didn't
+  see the newer update.
+
+### Note
+- Off always lets the heater cool down by itself. Don't switch a diesel heater's power with
+  a relay.
+
 ## 0.6.0 - 2026-11-04
 
 ### Added

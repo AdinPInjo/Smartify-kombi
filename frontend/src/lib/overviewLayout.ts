@@ -2,12 +2,14 @@
 
 import { useDashLayout, type DashDefinition, type DashLayout } from "./dashLayout";
 
-export type OverviewCardId = "climate" | "battery" | "water" | "charging" | "scenes" | "switches" | "map";
+export type OverviewCardId = "climate" | "heater" | "battery" | "water" | "charging" | "scenes" | "switches" | "map";
 
 export const OVERVIEW: DashDefinition<OverviewCardId> = {
   key: "smartify.overview.v3",
   cards: [
     { id: "climate", label: "Cabin climate", w: 4, h: 1 },
+    // Hidden until a heater is added (its setup offers to show it).
+    { id: "heater", label: "Diesel heater", w: 3, h: 1, hidden: true },
     { id: "battery", label: "Battery", w: 2, h: 1 },
     { id: "water", label: "Fresh water", w: 2, h: 1 },
     { id: "charging", label: "Charging", w: 4, h: 1 },
