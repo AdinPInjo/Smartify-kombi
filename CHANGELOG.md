@@ -7,6 +7,23 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.8.0 - 2026-11-04
+
+### Added
+- Step-by-step guides for adding Victron devices and a diesel heater: one step at a time,
+  written for first-timers, with help when something doesn't work.
+- Settings → Look: Dark, Daylight (light) or Auto (follows your phone), and colorful cards:
+  water blue, battery green, solar yellow, heater flame-red and more.
+- A weather card on the overview: now and the next days, where the van is.
+- The diesel heater card has its own little flame: asleep when off, flickering while it
+  ignites, burning while heating, cool blue while cooling down.
+- A tablet panel button at the top right of the overview.
+
+### Changed
+- Scenes are at the top of the Switches page ("Switches & scenes").
+- Water level calibration moved from Settings to the Climate page, under the tank.
+- Settings → More is tidier: Alerts, Victron devices and the tablet panel have their own places.
+
 ## 0.7.0 - 2026-11-04
 
 ### Added

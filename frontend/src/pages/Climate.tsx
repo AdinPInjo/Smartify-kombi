@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useClimate, useClimateHistory, useWater, useWaterHistory, useWeather } from "@/api/hooks";
 import type { ClimateSnapshot } from "@/api/types";
 import { HeaterCards } from "@/components/Heater";
+import { WaterCalibration } from "@/components/WaterCalibration";
 import { LineChart, Tank } from "@/components/instruments";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, Num, Segmented, Skeleton } from "@/components/ui";
@@ -35,6 +36,7 @@ export function Climate() {
       </Card>
 
       <WaterSection hours={Number(hours)} />
+      <WaterCalibration />
 
       <Card label="Outside weather">
         {!weather.data?.available ? (
@@ -119,7 +121,7 @@ function WaterSection({ hours }: { hours: number }) {
     <section id="water" className="card">
       <div className="row-between">
         <h2 className="label" style={{ margin: 0 }}>Fresh water</h2>
-        <Link to="/settings#water" className="small">Calibrate ›</Link>
+        <Link to="#water-calibration" className="small">Calibrate ›</Link>
       </div>
       <div className="row" style={{ gap: 18, alignItems: "flex-end" }}>
         <Tank percent={level} height={140} width={56} />

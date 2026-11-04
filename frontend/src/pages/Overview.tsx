@@ -1,5 +1,5 @@
-import { Car, LayoutGrid, SunMedium, Zap } from "lucide-react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Car, LayoutGrid, SunMedium, Tablet, Zap } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   useClimate,
   useClimateHistory,
@@ -17,6 +17,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { RelayControl } from "@/components/RelayControl";
 import { HeaterCards } from "@/components/Heater";
 import { SceneButtons } from "@/components/Scenes";
+import { WeatherCard } from "@/components/WeatherCard";
 import { TrackMap } from "@/components/TrackMap";
 import { Card, Num, Skeleton } from "@/components/ui";
 import { coords, duration, fmt, humanize, localDay, signed, weatherText } from "@/lib/format";
@@ -30,6 +31,7 @@ export function Overview() {
   const [params, setParams] = useSearchParams();
   const editing = params.get("edit") === "1";
   const setEditing = (on: boolean) => setParams(on ? { edit: "1" } : {}, { replace: true });
+  const navigate = useNavigate();
   const gps = useGps();
   const now = useNow();
   const fix = gps.data?.fix;
@@ -66,8 +68,11 @@ export function Overview() {
                 <span className="dot ok" />
                 {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
-              <button type="button" className="btn small ghost icon-only" aria-label="Customize the overview" onClick={() => setEditing(true)}>
+              <button type="button" className="btn small ghost icon-only" aria-label="Customize the overview" title="Customize" onClick={() => setEditing(true)}>
                 <LayoutGrid size={18} aria-hidden="true" />
+              </button>
+              <button type="button" className="btn small ghost icon-only" aria-label="Open the tablet panel" title="Tablet panel" onClick={() => navigate("/panel")}>
+                <Tablet size={18} aria-hidden="true" />
               </button>
             </div>
           )
@@ -99,6 +104,8 @@ function OverviewCard({ id, tall }: { id: OverviewCardId; tall: boolean }) {
       return <WaterCard />;
     case "charging":
       return <ChargingCard />;
+    case "weather":
+      return <WeatherCard tall={tall} />;
     case "heater":
       return (
         <Card label="Diesel heater" action={<Link to="/climate/heaters" className="small">Setup ›</Link>}>

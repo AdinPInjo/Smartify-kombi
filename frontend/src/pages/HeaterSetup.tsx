@@ -9,6 +9,7 @@ import { api } from "@/api/client";
 import { useMode } from "@/api/hooks";
 import { useHeaters, type Heater } from "@/components/Heater";
 import { PageHeader } from "@/components/PageHeader";
+import { SetupGuide, type GuideStep } from "@/components/SetupGuide";
 import { OnlyOnVan } from "@/components/RemoteBanner";
 import { Card, Dialog, ErrorNote, Field, useToast } from "@/components/ui";
 import { change, type DashLayout } from "@/lib/dashLayout";
@@ -36,6 +37,107 @@ function showOnOverview() {
   }
 }
 
+const HEATER_GUIDE: GuideStep[] = [
+  {
+    title: "What you need",
+    body: (
+      <>
+        <p style={{ margin: 0 }}>
+          If your diesel heater can be controlled with a phone app over Bluetooth, Smartify can control it too, and then you
+          don't need the app any more. You need:
+        </p>
+        <ul className="guide-list">
+          <li>
+            A heater with Bluetooth. Its app is called something like <strong>AirHeaterBLE</strong>,{" "}
+            <strong>Hcalory</strong>, <strong>Sunster</strong> or <strong>HeaterCC</strong> (Vevor, BYD and many other brands).
+          </li>
+          <li>The heater connected to 12 V (it doesn't need to be running).</li>
+          <li>The Pi within a few metres of the heater's control panel.</li>
+        </ul>
+      </>
+    ),
+  },
+  {
+    title: "Find the PIN, then free the Bluetooth",
+    body: (
+      <>
+        <p style={{ margin: 0 }}>
+          The heater has a 4-digit <strong>PIN</strong>. Almost always it's <strong>1234</strong>. If you changed it in the
+          heater's app, use yours.
+        </p>
+        <p style={{ margin: 0 }}>
+          Then <strong>close the heater's app</strong> on your phone (swipe it away), or switch your phone's Bluetooth off for
+          a moment. Most heaters accept only <strong>one</strong> connection at a time: while the app is connected,
+          Smartify can't get in.
+        </p>
+      </>
+    ),
+  },
+  {
+    title: "Add it here",
+    body: (
+      <>
+        <p style={{ margin: 0 }}>
+          Under <strong>Heaters nearby</strong> on this page, your heater appears within about 20 seconds, often called{" "}
+          <strong>“Air Heater”</strong>, “BYD-…”, “HC-…” or “Hcalory…”. Tap <strong>Add</strong>, give it a name and enter the
+          PIN.
+        </p>
+        <p style={{ margin: 0 }}>Within a minute it shows <strong>Connected</strong>.</p>
+      </>
+    ),
+    trouble: (
+      <>
+        <span>
+          <strong>Not in the list?</strong> Check the heater has 12 V, move the Pi closer, and make sure no phone is
+          connected to it (step 2).
+        </span>
+        <span>
+          <strong>“Doesn't answer (wrong PIN?)”</strong> Remove it and add it again with the right PIN.
+        </span>
+        <span>
+          <strong>“Doesn't look like a supported heater”</strong> Your model speaks a protocol Smartify doesn't know yet.
+          Please open an issue on GitHub with the heater's name and that message, so it can be added.
+        </span>
+      </>
+    ),
+  },
+  {
+    title: "Try it",
+    body: (
+      <>
+        <p style={{ margin: 0 }}>
+          On the heater's card (Climate page, or the overview after <strong>Show it on the overview</strong>), tap{" "}
+          <strong>On</strong>. It runs a self-test, then ignites: that takes <strong>1 to 3 minutes</strong>, and you hear
+          the fuel pump ticking. Then it shows <strong>Heating</strong>.
+        </p>
+        <p style={{ margin: 0 }}>
+          Choose <strong>Temperature</strong> to keep the van at, say, 20 °C, or <strong>Power level</strong> for a fixed
+          strength (1 to 10). Use <strong>− / +</strong> to change it.
+        </p>
+        <p style={{ margin: 0 }}>
+          Tap <strong>Off</strong>: it shows <strong>Cooling down</strong> and the fan keeps blowing for a few minutes until
+          the burner is cold. That's normal and protects the heater.
+        </p>
+      </>
+    ),
+  },
+  {
+    title: "Stay safe",
+    body: (
+      <ul className="guide-list">
+        <li>
+          <strong>Never switch the heater's 12 V with a relay</strong> or a switch while it runs. It must cool down first.
+          Smartify always uses the heater's own Off.
+        </li>
+        <li>
+          Fit a <strong>carbon monoxide (CO) detector</strong> in the van, and make sure the exhaust goes outside.
+        </li>
+        <li>Faults the heater reports (E-codes) are sent to your phone, if you've set up notifications.</li>
+      </ul>
+    ),
+  },
+];
+
 export function HeaterSetup() {
   const { cloud } = useMode();
   const heaters = useHeaters();
@@ -55,6 +157,7 @@ export function HeaterSetup() {
         <Card><OnlyOnVan what="Adding a heater" /></Card>
       ) : (
         <>
+          <SetupGuide id="heater" title="Connect your diesel heater" steps={HEATER_GUIDE} startOpen={list.length === 0} />
           <Card label="Your heaters">
             {list.length === 0 && <span className="small muted">None yet. Pick yours from the list below.</span>}
             <div className="list">
@@ -70,17 +173,6 @@ export function HeaterSetup() {
             )}
           </Card>
           <NearbyList onPick={setAdding} />
-          <Card label="Good to know">
-            <ul className="small muted" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6 }}>
-              <li>Works with heaters that use apps like AirHeaterBLE, Hcalory, Sunster or HeaterCC (Vevor, BYD and many others).</li>
-              <li>Close the heater's app on your phone: most heaters accept only one Bluetooth connection at a time.</li>
-              <li>The PIN is the one from the app, usually <strong>1234</strong>.</li>
-              <li>
-                Never switch a diesel heater's 12 V power with a relay. It needs to cool down after turning off; Smartify always
-                uses the heater's own off command.
-              </li>
-            </ul>
-          </Card>
           {adding && <AddDialog nearby={adding} onClose={() => setAdding(null)} onAdded={() => { setAdding(null); setAdded(true); }} />}
         </>
       )}

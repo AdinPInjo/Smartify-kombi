@@ -1,15 +1,11 @@
 import { Lock } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import {
-  useCalibrateWater,
   useMe,
   useMode,
-  useUpdateWaterSettings,
-  useWater,
-  useWaterSettings,
   useWifi,
   useWifiConnect,
   useWifiNetworks,
@@ -19,9 +15,9 @@ import { PageHeader } from "@/components/PageHeader";
 import { RemoteDashboardCard } from "@/components/RemoteDashboardCard";
 import { UpdatesCard } from "@/components/UpdatesCard";
 import { OnlyOnVan } from "@/components/RemoteBanner";
-import { Card, Dialog, ErrorNote, Field, Segmented, useErrorToast, useToast } from "@/components/ui";
-import { fmt } from "@/lib/format";
+import { Card, Dialog, ErrorNote, Field, Segmented, useToast } from "@/components/ui";
 import { SUPPORT_URL } from "@/lib/support";
+import { useLook, type Theme } from "@/lib/look";
 
 export function Settings() {
   const me = useMe();
@@ -37,19 +33,11 @@ export function Settings() {
           <RemoteDashboardCard />
         </div>
         <div className="stack" style={{ gap: "var(--gap)" }}>
+          <LookCard />
           <AccountCard />
           <UpdatesCard />
-          <WaterCalibration />
           <Card label="More">
             <div className="list">
-              <Link to="/notifications" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
-                <span>Notifications & alerts</span>
-                <span className="muted">›</span>
-              </Link>
-              <Link to="/energy/devices" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
-                <span>Victron devices</span>
-                <span className="muted">›</span>
-              </Link>
               <Link to="/?edit=1" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
                 <span>Customize the overview</span>
                 <span className="muted">›</span>
@@ -62,10 +50,6 @@ export function Settings() {
                 <span>System status & logs</span>
                 <span className="muted">›</span>
               </Link>
-              <Link to="/panel" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
-                <span>Open tablet panel</span>
-                <span className="muted">›</span>
-              </Link>
               <a href={SUPPORT_URL} target="_blank" rel="noreferrer" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
                 <span>Support the project ♥</span>
                 <span className="muted">Ko-fi ↗</span>
@@ -76,6 +60,44 @@ export function Settings() {
         </div>
       </div>
     </main>
+  );
+}
+
+// --- look ------------------------------------------------------------------------------------
+
+function LookCard() {
+  const { look, save } = useLook();
+  return (
+    <Card label="Look">
+      <div className="stack" style={{ gap: 6 }}>
+        <span className="small muted">Theme</span>
+        <Segmented<Theme>
+          label="Theme"
+          value={look.theme}
+          onChange={(theme) => save({ ...look, theme })}
+          options={[
+            { value: "dark", label: "Dark" },
+            { value: "light", label: "Daylight" },
+            { value: "auto", label: "Auto" },
+          ]}
+        />
+      </div>
+      <div className="stack" style={{ gap: 6 }}>
+        <span className="small muted">Card colors</span>
+        <Segmented<"on" | "off">
+          label="Card colors"
+          value={look.colorful ? "on" : "off"}
+          onChange={(value) => save({ ...look, colorful: value === "on" })}
+          options={[
+            { value: "on", label: "Colorful" },
+            { value: "off", label: "Calm" },
+          ]}
+        />
+      </div>
+      <span className="tiny faint">
+        Auto follows your phone's light or dark mode. Saved on this device, so the wall tablet can look different.
+      </span>
+    </Card>
   );
 }
 
@@ -289,100 +311,5 @@ function JoinDialog({ network, onClose }: { network: WifiNetwork; onClose: () =>
         </button>
       </form>
     </Dialog>
-  );
-}
-
-// --- water calibration ------------------------------------------------------------------
-
-function WaterCalibration() {
-  const { cloud } = useMode();
-  const settings = useWaterSettings();
-  const water = useWater();
-  const calibrate = useCalibrateWater();
-  const update = useUpdateWaterSettings();
-  const showError = useErrorToast();
-  const toast = useToast();
-  const s = settings.data;
-  const [divider, setDivider] = useState({ top: "", bottom: "" });
-  useEffect(() => {
-    if (s) setDivider({ top: String(s.divider_r_top), bottom: String(s.divider_r_bottom) });
-  }, [s?.revision]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const mark = (point: "empty" | "full") => {
-    if (!window.confirm(`Is the tank really ${point} right now? The current reading becomes the ${point} point.`)) return;
-    calibrate.mutate(point, { onSuccess: () => toast(`${point === "full" ? "Full" : "Empty"} point saved`), onError: showError });
-  };
-
-  return (
-    <section id="water" className="card">
-      <h2 className="label" style={{ margin: 0 }}>Water level calibration</h2>
-      <div className="row" style={{ gap: 18, flexWrap: "wrap" }}>
-        <span>
-          Now <strong>{water.data?.level_percent ?? "–"}%</strong>
-        </span>
-        <span className="small muted">
-          signal {fmt(water.data?.signal_voltage ?? null, 3)} V · battery {fmt(water.data?.battery_voltage ?? null, 2)} V · ratio{" "}
-          {fmt(water.data?.ratio ?? null, 4)}
-        </span>
-      </div>
-      <p className="small muted" style={{ margin: 0 }}>
-        Fill the tank completely and press “Tank is full”. When it is empty, press “Tank is empty”. Both points are taken from
-        the live reading.
-      </p>
-      {cloud ? (
-        <OnlyOnVan what="Calibrating from the live reading" />
-      ) : (
-      <div className="grid-2">
-        <button type="button" className="btn" onClick={() => mark("full")} disabled={calibrate.isPending}>
-          Tank is full
-        </button>
-        <button type="button" className="btn" onClick={() => mark("empty")} disabled={calibrate.isPending}>
-          Tank is empty
-        </button>
-      </div>
-      )}
-      {s && (
-        <details>
-          <summary className="small muted" style={{ cursor: "pointer", minHeight: 32 }}>Advanced</summary>
-          <div className="stack" style={{ gap: 14, marginTop: 10 }}>
-            <Field label="Method" hint="Ratio compensates the changing battery voltage. Use it unless your sensor has a regulated supply.">
-              <Segmented
-                label="Method"
-                value={s.method}
-                onChange={(method) => update.mutate({ method }, { onError: showError })}
-                options={[
-                  { value: "ratio", label: "Ratio (signal ÷ battery)" },
-                  { value: "voltage", label: "Voltage only" },
-                ]}
-              />
-            </Field>
-            <div className="small muted">
-              Full: {fmt(s.full_ratio, 4)} ({fmt(s.full_voltage, 3)} V) · Empty: {fmt(s.empty_ratio, 4)} ({fmt(s.empty_voltage, 3)} V) · ADC A
-              {s.signal_channel} signal, A{s.supply_channel} supply
-            </div>
-            <form
-              className="grid-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                update.mutate(
-                  { divider_r_top: Number(divider.top), divider_r_bottom: Number(divider.bottom) },
-                  { onSuccess: () => toast("Divider saved"), onError: showError },
-                );
-              }}
-            >
-              <Field label="Divider top (Ω)">
-                <input className="input" type="number" min={1} value={divider.top} onChange={(e) => setDivider({ ...divider, top: e.target.value })} />
-              </Field>
-              <Field label="Divider bottom (Ω)">
-                <input className="input" type="number" min={1} value={divider.bottom} onChange={(e) => setDivider({ ...divider, bottom: e.target.value })} />
-              </Field>
-              <button type="submit" className="btn small" style={{ gridColumn: "1 / -1" }}>
-                Save divider (fixes the battery voltage reading)
-              </button>
-            </form>
-          </div>
-        </details>
-      )}
-    </section>
   );
 }

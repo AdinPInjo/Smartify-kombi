@@ -29,7 +29,63 @@
   --gap: 14px;
   --nav-h: 76px;
 
+  --nav-bg: rgba(26, 29, 22, 0.94);
+  --overlay: rgba(17, 19, 14, 0.78);
+  --map-bg: #171a13;
+  --map-filter: invert(1) hue-rotate(180deg) brightness(0.78) contrast(0.9) saturate(0.35) sepia(0.2);
+  --code-bg: rgba(255, 255, 255, 0.06);
+
+  /* Card colors (Settings → Look → Card colors) */
+  --tone-climate: #f0a43a;
+  --tone-heater: #ff7a4d;
+  --tone-weather: #7cc4ef;
+  --tone-battery: #8cc07a;
+  --tone-water: #4fb4e6;
+  --tone-charging: #e8c547;
+  --tone-scenes: #b49cff;
+  --tone-switches: #5fc9a8;
+  --tone-map: #93b4d8;
+
   color-scheme: dark;
+}
+
+/* "Daylight": warm paper, for bright days and printed-looking screens. */
+:root[data-theme="light"] {
+  --ground: #f4f1e8;
+  --surface: #fffdf7;
+  --surface-2: #f1ede2;
+  --surface-3: #e7e2d4;
+  --line: #e2dccd;
+  --line-strong: #cfc8b6;
+  --text: #23261d;
+  --muted: #5d6351;
+  --faint: #878c7a;
+
+  --accent: #c97a12;
+  --accent-soft: rgba(201, 122, 18, 0.14);
+  --ok: #4c8a3b;
+  --water: #2589b5;
+  --solar: #a98410;
+  --alert: #c4511d;
+  --danger: #c3382c;
+
+  --nav-bg: rgba(255, 253, 247, 0.94);
+  --overlay: rgba(255, 253, 247, 0.85);
+  --map-bg: #e9e6dc;
+  --map-filter: saturate(0.75) sepia(0.12);
+  --code-bg: rgba(0, 0, 0, 0.06);
+
+  --tone-climate: #d9861c;
+  --tone-heater: #e8542a;
+  --tone-weather: #2f8fd0;
+  --tone-battery: #4c8a3b;
+  --tone-water: #1f8fc4;
+  --tone-charging: #b08a12;
+  --tone-scenes: #7a5be0;
+  --tone-switches: #1f9a78;
+  --tone-map: #4a78b0;
+
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -113,7 +169,7 @@ button, input, select { font: inherit; color: inherit; }
   z-index: 10;
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  background: rgba(26, 29, 22, 0.94);
+  background: var(--nav-bg);
   backdrop-filter: blur(10px);
   border: 1px solid var(--line);
   border-radius: 22px;
@@ -404,11 +460,11 @@ td { padding: 9px 10px; border-top: 1px solid var(--line); vertical-align: top; 
 .skeleton { background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)); background-size: 200% 100%; animation: shimmer 1.4s infinite; border-radius: 8px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 
-.map { width: 100%; height: 100%; min-height: 170px; background: #171a13; }
-.leaflet-container { background: #171a13; font-family: var(--font-body); }
+.map { width: 100%; height: 100%; min-height: 170px; background: var(--map-bg); }
+.leaflet-container { background: var(--map-bg); font-family: var(--font-body); }
 .leaflet-control-attribution { background: rgba(17, 19, 14, 0.75) !important; color: var(--muted) !important; }
 .leaflet-control-attribution a { color: var(--muted) !important; }
-.map-tiles { filter: invert(1) hue-rotate(180deg) brightness(0.78) contrast(0.9) saturate(0.35) sepia(0.2); }
+.map-tiles { filter: var(--map-filter); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -459,14 +515,14 @@ td { padding: 9px 10px; border-top: 1px solid var(--line); vertical-align: top; 
   margin-top: -8px;
   border-radius: 50%;
   background: var(--accent);
-  border: 3px solid #11130e;
+  border: 3px solid var(--ground);
 }
 .scrubber-range::-moz-range-thumb {
   width: 16px;
   height: 16px;
   border-radius: 50%;
   background: var(--accent);
-  border: 3px solid #11130e;
+  border: 3px solid var(--ground);
 }
 .scrubber-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 @media (max-width: 520px) {
@@ -584,7 +640,7 @@ td { padding: 9px 10px; border-top: 1px solid var(--line); vertical-align: top; 
 
 /* Settings → Updates: changelog text */
 .notes-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
-.notes-list code, .notes code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.92em; background: rgba(255, 255, 255, 0.06); padding: 1px 5px; border-radius: 6px; }
+.notes-list code, .notes code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.92em; background: var(--code-bg); padding: 1px 5px; border-radius: 6px; }
 details > summary { color: var(--muted); }
 
 /* Overview: custom dashboard grid (lib/overviewLayout.ts) */
@@ -615,7 +671,7 @@ details > summary { color: var(--muted); }
   padding: 10px;
   border: 1.5px dashed var(--accent);
   border-radius: var(--radius);
-  background: rgba(17, 19, 14, 0.78);
+  background: var(--overlay);
   backdrop-filter: blur(2px);
 }
 .dash-edit-top { display: flex; align-items: center; gap: 4px; width: 100%; max-width: 360px; }
@@ -707,3 +763,60 @@ details > summary { color: var(--muted); }
 .stepper { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .stepper .dash-icon { min-width: 52px; min-height: 52px; }
 .stepper-value { font-size: 40px; line-height: 1; }
+
+/* Card colors: each overview and panel card gets its own tone */
+.dash-item[data-card="climate"], .dash-item[data-card="cabin"] { --tone: var(--tone-climate); }
+.dash-item[data-card="heater"] { --tone: var(--tone-heater); }
+.dash-item[data-card="weather"] { --tone: var(--tone-weather); }
+.dash-item[data-card="battery"] { --tone: var(--tone-battery); }
+.dash-item[data-card="water"] { --tone: var(--tone-water); }
+.dash-item[data-card="charging"] { --tone: var(--tone-charging); }
+.dash-item[data-card="scenes"] { --tone: var(--tone-scenes); }
+.dash-item[data-card="switches"] { --tone: var(--tone-switches); }
+.dash-item[data-card="map"] { --tone: var(--tone-map); }
+:root[data-cards="color"] .dash-item > .card {
+  border-top: 3px solid var(--tone, var(--line));
+  background: linear-gradient(165deg, color-mix(in srgb, var(--tone, transparent) 11%, var(--surface)) 0%, var(--surface) 62%);
+}
+:root[data-cards="color"] .dash-item > .card > .label,
+:root[data-cards="color"] .dash-item > .card > .row-between > .label { color: var(--tone); }
+
+/* Weather card */
+.weather-icon { color: var(--tone-weather); }
+.weather-days { display: grid; grid-template-columns: repeat(auto-fit, minmax(58px, 1fr)); gap: 6px; }
+.weather-day { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.weather-day svg { color: var(--tone-weather); }
+
+/* The heater's flame */
+.heater-flame .flame-base { fill: var(--surface-3); }
+.heater-flame .flame-outer { fill: url(#flame-hot); transform-origin: 32px 58px; }
+.heater-flame .flame-inner { fill: #fff3c4; opacity: 0.9; transform-origin: 32px 58px; }
+.heater-flame .flame-face { fill: none; stroke: #5a2412; stroke-width: 1.8; stroke-linecap: round; }
+.heater-flame .flame-eye { fill: #5a2412; }
+.heater-flame .flame-zzz { fill: var(--muted); font: 600 9px var(--font-mono); }
+.heater-flame .flame-zzz.small { font-size: 7px; }
+.heater-flame.sleeping .flame-outer { fill: var(--surface-3); transform: scale(0.72); }
+.heater-flame.sleeping .flame-inner { fill: var(--line-strong); transform: scale(0.72); }
+.heater-flame.sleeping .flame-face { stroke: var(--muted); transform: translateY(4px); }
+.heater-flame.igniting .flame-outer, .heater-flame.igniting .flame-inner { transform: scale(0.8); }
+.heater-flame.cooling .flame-outer { fill: url(#flame-cool); transform: scale(0.85); }
+.heater-flame.cooling .flame-inner { fill: #f0fbff; transform: scale(0.85); }
+.heater-flame.cooling .flame-face, .heater-flame.cooling .flame-eye { stroke: #1d4f70; fill: #1d4f70; }
+.heater-flame.cooling .flame-face { fill: none; }
+.heater-flame.fault .flame-outer { fill: var(--danger); }
+@media (prefers-reduced-motion: no-preference) {
+  .heater-flame.burning .flame-outer { animation: flicker 1.6s ease-in-out infinite; }
+  .heater-flame.burning .flame-inner { animation: flicker 1.1s ease-in-out infinite reverse; }
+  .heater-flame.igniting .flame-outer { animation: ignite 0.5s steps(2) infinite; }
+  .heater-flame.cooling .flame-outer { animation: breathe 3s ease-in-out infinite; }
+  .heater-flame.sleeping .flame-zzz { animation: zzz 3s ease-in-out infinite; }
+}
+@keyframes flicker {
+  0%, 100% { transform: scale(1, 1) skewX(0deg); }
+  30% { transform: scale(0.97, 1.05) skewX(-2deg); }
+  60% { transform: scale(1.03, 0.96) skewX(2deg); }
+}
+@keyframes ignite { 0% { transform: scale(0.7); } 100% { transform: scale(0.86); } }
+@keyframes breathe { 0%, 100% { transform: scale(0.82); opacity: 0.85; } 50% { transform: scale(0.9); opacity: 1; } }
+@keyframes zzz { 0%, 100% { opacity: 0.3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
+.heater-hero { display: flex; align-items: center; gap: 14px; }

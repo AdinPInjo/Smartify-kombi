@@ -13,8 +13,8 @@ export function Switches() {
     <main className="page">
       <PageHeader
         kicker="Switches"
-        title="Relays & rules"
-        sub="Use “Rules” on a switch to make it work automatically. Tap its name for all settings."
+        title="Switches & scenes"
+        sub="Scenes switch several things with one tap. “Rules” makes a switch work by itself; tap its name for all settings."
         right={
           cloud ? undefined : (
             <button type="button" className="btn small" onClick={() => setAdding(true)}>
@@ -23,11 +23,11 @@ export function Switches() {
           )
         }
       />
+      <ScenesCard />
       {relays.isPending && <Skeleton height={160} />}
       <div className="grid">
         {relays.data?.map((relay) => <RelayControl key={relay.id} relay={relay} large />)}
       </div>
-      <ScenesCard />
       {adding && <AddRelayDialog onClose={() => setAdding(false)} />}
     </main>
   );

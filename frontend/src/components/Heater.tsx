@@ -1,11 +1,12 @@
 // Diesel heaters over Bluetooth: status and real controls (on/off, temperature
 // or power level). Off always lets the heater cool down by itself.
 
-import { AlertTriangle, Flame, Minus, Plus } from "lucide-react";
+import { AlertTriangle, Minus, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { useMode } from "@/api/hooks";
+import { HeaterFlame } from "./HeaterFlame";
 import { Num, Segmented, useErrorToast, useToast } from "./ui";
 import { ago, fmt } from "@/lib/format";
 
@@ -117,9 +118,9 @@ export function HeaterControl({ heater, large = false }: { heater: Heater; large
   return (
     <div className="stack" style={{ gap: large ? 16 : 12 }}>
       <div className="row-between">
-        <span className="row" style={{ gap: 8 }}>
-          <Flame size={large ? 22 : 18} aria-hidden="true" className={s?.running ? "c-accent" : "muted"} />
-          <strong style={{ fontSize: large ? 20 : 16 }}>{heater.name}</strong>
+        <span className="heater-hero">
+          <HeaterFlame phase={heater.connected ? (s?.phase ?? null) : null} size={large ? 72 : 52} />
+          <strong style={{ fontSize: large ? 22 : 17 }}>{heater.name}</strong>
         </span>
         <span className="chip">
           <span className={`dot ${heater.connected ? PHASE_CLASS[s?.phase ?? ""] ?? "" : "bad"}`} />

@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { useAddVictron, useMode, useRemoveVictron, useVictronDevices, useVictronNearby } from "@/api/hooks";
 import type { VictronConfigured, VictronNearby } from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
+import { SetupGuide, type GuideStep } from "@/components/SetupGuide";
 import { OnlyOnVan } from "@/components/RemoteBanner";
 import { Card, Dialog, ErrorNote, Field, Skeleton, useErrorToast, useToast } from "@/components/ui";
 import { ago } from "@/lib/format";
@@ -52,11 +53,11 @@ export function VictronSetup() {
       {data && (
         <>
           {data.error && <div className="notice error">{data.error}</div>}
+          <SetupGuide id="victron" title="Add a Victron device" steps={VICTRON_GUIDE} startOpen={data.devices.length === 0} />
           {added && <AddedNotice name={added.name} checked={added.checked} onClose={() => setAdded(null)} />}
           <div className="grid">
             <div className="stack" style={{ gap: "var(--gap)" }}>
               <YourDevices devices={data.devices} />
-              <HowTo />
             </div>
             <Nearby onPick={setAdding} enabled={data.bluetooth} />
           </div>
@@ -156,32 +157,120 @@ function YourDevices({ devices }: { devices: VictronConfigured[] }) {
   );
 }
 
-function HowTo() {
-  return (
-    <Card label="Before you start">
-      <p className="small muted" style={{ margin: 0 }}>
-        Each device has to share its data once. Do this in the <strong>VictronConnect</strong> app on your phone, near the van:
-      </p>
-      <ol className="guide-list small">
-        <li>Open the device in VictronConnect.</li>
-        <li>
-          Tap <strong>⚙</strong> (top right), then <strong>Product info</strong>.
-        </li>
-        <li>
-          Set <strong>Instant readout via Bluetooth</strong> to <strong>Enabled</strong>.
-        </li>
-        <li>
-          Tap <strong>Show</strong> next to “Instant readout details” and keep that screen open: you'll need the{" "}
-          <strong>encryption key</strong> in a moment.
-        </li>
-      </ol>
-      <span className="tiny faint">
-        MultiPlus and Quattro need the VE.Bus Smart dongle. If Instant Readout is missing, update the device's firmware in
-        VictronConnect first.
-      </span>
-    </Card>
-  );
-}
+const VICTRON_GUIDE: GuideStep[] = [
+  {
+    title: "What you need",
+    body: (
+      <>
+        <p style={{ margin: 0 }}>
+          Smartify reads your Victron devices over Bluetooth, the same way the VictronConnect app does. Nothing on them is
+          ever changed. You need:
+        </p>
+        <ul className="guide-list">
+          <li>
+            The free <strong>VictronConnect</strong> app on your phone (App Store or Google Play).
+          </li>
+          <li>Your phone and the Pi near the van, with the Victron devices switched on.</li>
+          <li>About 2 minutes per device.</li>
+        </ul>
+        <p className="small muted" style={{ margin: 0 }}>
+          Works with SmartShunt and BMV-712 (battery), SmartSolar MPPT (solar), Orion Smart / Orion XS (charging while
+          driving) and MultiPlus or Quattro with the VE.Bus Smart dongle.
+        </p>
+      </>
+    ),
+  },
+  {
+    title: "Switch on “Instant readout”",
+    body: (
+      <>
+        <p style={{ margin: 0 }}>Do this once for each device, in VictronConnect:</p>
+        <ol className="guide-list">
+          <li>Tap the device in the list to open it.</li>
+          <li>
+            Tap the <strong>⚙ gear</strong> at the top right.
+          </li>
+          <li>
+            Tap the <strong>⋮ menu</strong> (top right) and choose <strong>Product info</strong>.
+          </li>
+          <li>
+            Scroll down to <strong>Instant readout via Bluetooth</strong> and set it to <strong>Enabled</strong>.
+          </li>
+        </ol>
+      </>
+    ),
+    trouble: (
+      <>
+        <span>
+          <strong>No “Instant readout” on that screen?</strong> The device needs newer firmware. VictronConnect offers the
+          update when you open the device; let it install, then look again.
+        </span>
+        <span>
+          <strong>MultiPlus or Quattro?</strong> They need the VE.Bus Smart dongle; set it up in VictronConnect first.
+        </span>
+      </>
+    ),
+  },
+  {
+    title: "Copy the encryption key",
+    body: (
+      <>
+        <p style={{ margin: 0 }}>
+          On the same Product info screen, next to <strong>Instant readout details</strong>, tap <strong>Show</strong>.
+        </p>
+        <p style={{ margin: 0 }}>
+          You see an <strong>encryption key</strong>: 32 characters of numbers and the letters a–f, like{" "}
+          <code>0df4d0395b7d1a876c0c33ecb9e70dcd</code>. Tap it to copy it.
+        </p>
+        <p className="small muted" style={{ margin: 0 }}>
+          Using another device for Smartify? Send the key to yourself (notes, message) and copy it there. The key only
+          lets someone <em>read</em> the values; it can't change anything.
+        </p>
+      </>
+    ),
+  },
+  {
+    title: "Add it here",
+    body: (
+      <>
+        <p style={{ margin: 0 }}>
+          In <strong>Devices nearby</strong> on this page, your device shows up within a few seconds, with its name. Tap{" "}
+          <strong>Add</strong>, paste the key and save.
+        </p>
+        <p style={{ margin: 0 }}>Smartify checks the key right away and tells you if it doesn't fit.</p>
+      </>
+    ),
+    trouble: (
+      <>
+        <span>
+          <strong>Not in the list?</strong> Move closer: Bluetooth reaches about 10 metres, less through metal walls. Check
+          that Instant readout is on (step 2).
+        </span>
+        <span>
+          <strong>“Wrong key”?</strong> Copy it again from VictronConnect; one wrong character is enough.
+        </span>
+        <span>
+          <strong>“Bluetooth is off” at the top of this page?</strong> The message there says how to switch it on.
+        </span>
+      </>
+    ),
+  },
+  {
+    title: "Done: do the next one",
+    body: (
+      <>
+        <p style={{ margin: 0 }}>
+          The values appear on the <strong>Energy</strong> page and the overview within seconds: battery %, solar watts,
+          charging while driving, inverter.
+        </p>
+        <p style={{ margin: 0 }}>
+          Repeat steps 2 to 4 for each of your Victron devices. Then you can use them in rules, e.g. switch the fridge off
+          when the battery drops below 30 %.
+        </p>
+      </>
+    ),
+  },
+];
 
 function Nearby({ onPick, enabled }: { onPick: (device: VictronNearby | "manual") => void; enabled: boolean }) {
   const nearby = useVictronNearby(enabled);

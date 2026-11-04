@@ -12,6 +12,10 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { ApiError } from "./api/client";
 import { ToastProvider } from "./components/ui";
+import { applyLook, watchSystemTheme } from "./lib/look";
+
+applyLook();
+watchSystemTheme();
 
 const queryClient = new QueryClient({
   defaultOptions: {

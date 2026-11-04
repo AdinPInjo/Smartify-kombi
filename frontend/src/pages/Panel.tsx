@@ -21,13 +21,14 @@ import { DashGrid } from "@/components/DashGrid";
 import { RelayControl } from "@/components/RelayControl";
 import { HeaterCards } from "@/components/Heater";
 import { SceneButtons } from "@/components/Scenes";
+import { WeatherCard } from "@/components/WeatherCard";
 import { TrackMap } from "@/components/TrackMap";
 import { Num } from "@/components/ui";
 import { coords, duration, fmt, humanize, signed, weatherText } from "@/lib/format";
 import { useDashLayout, type DashDefinition } from "@/lib/dashLayout";
 import { useNow } from "@/lib/useNow";
 
-type PanelCardId = "battery" | "cabin" | "heater" | "switches" | "water" | "scenes" | "map";
+type PanelCardId = "battery" | "cabin" | "weather" | "heater" | "switches" | "water" | "scenes" | "map";
 
 // The tablet's own arrangement, separate from the Overview's.
 const PANEL: DashDefinition<PanelCardId> = {
@@ -36,6 +37,7 @@ const PANEL: DashDefinition<PanelCardId> = {
     { id: "battery", label: "House battery", w: 2, h: 2 },
     { id: "cabin", label: "Cabin", w: 2, h: 1 },
     { id: "heater", label: "Diesel heater", w: 2, h: 2, hidden: true },
+    { id: "weather", label: "Weather", w: 2, h: 1, hidden: true },
     { id: "switches", label: "Switches", w: 2, h: 2 },
     { id: "water", label: "Fresh water", w: 2, h: 1 },
     { id: "scenes", label: "Scenes", w: 4, h: 1 },
@@ -152,6 +154,8 @@ function PanelCard({ id }: { id: PanelCardId }) {
       return <Switches />;
     case "water":
       return <WaterBar />;
+    case "weather":
+      return <WeatherCard tall />;
     case "heater":
       return (
         <section className="card">
