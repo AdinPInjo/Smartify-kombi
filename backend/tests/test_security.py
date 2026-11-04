@@ -103,6 +103,12 @@ def test_remote_dashboard_must_use_https():
         assert check_url(local).startswith("http://")
 
 
+def _read_body(handler: BaseHTTPRequestHandler) -> None:
+    """Read the request before answering, like a real server: closing a connection
+    with unread data makes Linux reset it, which the client may see first."""
+    handler.rfile.read(int(handler.headers.get("Content-Length") or 0))
+
+
 class _Server:
     def __init__(self, handler):
         self.httpd = HTTPServer(("127.0.0.1", 0), handler)
@@ -118,6 +124,7 @@ def test_sync_refuses_redirects_and_huge_answers():
 
     class Redirect(BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
+            _read_body(self)
             seen_tokens.append(self.headers.get("Authorization"))
             self.send_response(302)
             self.send_header("Location", "http://127.0.0.1:9/steal")
@@ -128,9 +135,15 @@ def test_sync_refuses_redirects_and_huge_answers():
 
     class Huge(BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
+            _read_body(self)
+            body = b"[" + b"0," * 3_000_000 + b"0]"
             self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(b"[" + b"0," * 3_000_000 + b"0]")
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the van stops reading at its limit: expected
 
         def log_message(self, *args):
             pass
