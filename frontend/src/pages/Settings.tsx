@@ -32,12 +32,6 @@ export function Settings() {
         <div className="stack" style={{ gap: "var(--gap)" }}>
           <WifiCard />
           <RemoteDashboardCard />
-        </div>
-        <div className="stack" style={{ gap: "var(--gap)" }}>
-          <LookCard />
-          <TroubleshootingCard />
-          <AccountCard />
-          <UpdatesCard />
           <Card label="More">
             <div className="list">
               <Link to="/?edit=1" className="row-between" style={{ minHeight: 44, color: "inherit" }}>
@@ -59,6 +53,12 @@ export function Settings() {
               <LogoutRow />
             </div>
           </Card>
+        </div>
+        <div className="stack" style={{ gap: "var(--gap)" }}>
+          <LookCard />
+          <TroubleshootingCard />
+          <AccountCard />
+          <UpdatesCard />
         </div>
       </div>
     </main>

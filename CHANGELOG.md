@@ -7,6 +7,12 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.12.2 - 2026-11-04
+
+### Changed
+- Settings: the "More" card (customize the overview, what's new, system status, support,
+  log out) moved to the left column, so the two columns are balanced.
+
 ## 0.12.1 - 2026-11-04
 
 ### Changed
