@@ -26,7 +26,7 @@ if as_user git -C "$REPO" symbolic-ref -q HEAD >/dev/null; then
 else
   # Updated from the dashboard before, so on a release: go to the newest release.
   as_user git -C "$REPO" fetch --force --tags --quiet origin
-  LATEST=$(as_user git -C "$REPO" tag --list 'v*' --sort=-v:refname | head -n1)
+  LATEST=$(as_user git -C "$REPO" tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
   as_user git -C "$REPO" -c advice.detachedHead=false checkout --quiet --detach "$LATEST"
 fi
 NEW=$(as_user git -C "$REPO" rev-parse HEAD)

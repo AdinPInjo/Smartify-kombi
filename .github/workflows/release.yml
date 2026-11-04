@@ -41,7 +41,8 @@ jobs:
         # older fix after a newer version must not take that away from the newer one.
         id: newest
         run: |
-          newest=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1)
+          # Only real versions (v1.2.3) count, not other tags such as v1.0-pi-stable.
+          newest=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
           echo "latest=$([ "$newest" = "$GITHUB_REF_NAME" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
         with:
