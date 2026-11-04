@@ -12,6 +12,7 @@ import { Panel } from "./pages/Panel";
 import { Settings } from "./pages/Settings";
 import { Changelog } from "./pages/Changelog";
 import { HeaterSetup } from "./pages/HeaterSetup";
+import { Sensors } from "./pages/Sensors";
 import { Setup } from "./pages/Setup";
 import { SwitchDetail } from "./pages/SwitchDetail";
 import { Switches } from "./pages/Switches";
@@ -48,6 +49,7 @@ export function App() {
           <Route path="switches" element={<Switches />} />
           <Route path="switches/:id" element={<SwitchDetail />} />
           <Route path="map" element={<MapPage />} />
+          <Route path="sensors" element={<Sensors />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="settings" element={<Settings />} />
           <Route path="system" element={<System />} />

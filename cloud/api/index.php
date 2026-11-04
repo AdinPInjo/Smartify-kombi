@@ -325,6 +325,8 @@ function route(string $method, string $path): mixed
             queue('rule_delete', $rule['id'], [], (int)$rule['revision']);
             return array_merge($rule, ['pending' => true]);
 
+        case 'GET /inputs':
+            return $state('inputs', ['inputs' => []]);
         case 'GET /heaters':
             return $state('heaters', ['heaters' => [], 'available' => false]);
         case 'POST /heaters/*/power':
@@ -434,6 +436,13 @@ function route(string $method, string $path): mixed
 
         case 'POST /relays':
         case 'DELETE /relays/*':
+        case 'GET /sensors':
+        case 'GET /sensors/discover':
+        case 'POST /sensors':
+        case 'POST /sensors/test':
+        case 'PATCH /sensors/*':
+        case 'DELETE /sensors/*':
+        case 'POST /system/restart':
         case 'GET /heaters/*':
         case 'POST /heaters':
         case 'PATCH /heaters/*':

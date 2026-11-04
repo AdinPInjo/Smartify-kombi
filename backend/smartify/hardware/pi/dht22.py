@@ -18,7 +18,7 @@ _READ_LOCK = threading.Lock()
 
 
 class Dht22Sensor:
-    def __init__(self, name: str, gpio_pin: int) -> None:
+    def __init__(self, name: str, gpio_pin: int, model: str = "dht22") -> None:
         try:
             import adafruit_dht
             import board
@@ -33,7 +33,8 @@ class Dht22Sensor:
 
         self.name = name
         self.gpio_pin = gpio_pin
-        self._device = adafruit_dht.DHT22(pin, use_pulseio=False)
+        kind = adafruit_dht.DHT11 if model == "dht11" else adafruit_dht.DHT22
+        self._device = kind(pin, use_pulseio=False)
 
     def read(self) -> ClimateReading:
         with _READ_LOCK:

@@ -26,11 +26,13 @@ from smartify.services.conditions import (
 from smartify.services.energy import EnergyService
 from smartify.services.gps import GpsService
 from smartify.services.heaters import HeaterService
+from smartify.services.inputs import InputService
 from smartify.services.maintenance import backup, check_integrity, prune_history
 from smartify.services.notify import NotificationService
 from smartify.services.relays import RelayService
 from smartify.services.rules import RuleService
 from smartify.services.scenes import SceneService
+from smartify.services.sensors import INPUT_KINDS, RESTART_KINDS, SensorStore
 from smartify.services.snapshot import build_state
 from smartify.services.trips import TripService
 from smartify.services.updates import UpdateService
@@ -63,6 +65,10 @@ class AppContext:
     updates: UpdateService = field(init=False)
     scenes: SceneService = field(init=False)
     heaters: HeaterService = field(init=False)
+    inputs: InputService = field(init=False)
+    sensor_store: SensorStore = field(init=False)
+    boot_sensors: str = field(init=False, default="")
+    """GPS and water sender settings at start: a change needs a restart."""
     cloud: CloudSync | None = None
     cloud_store: CloudConnectionStore | None = None
     cloud_transport: Any = None
@@ -81,8 +87,13 @@ class AppContext:
         victron = VictronDevices(db, settings.victron_devices, hardware.victron)
 
         gps = GpsService(hardware.gps, db)
+        store = SensorStore(db)
+        configs = store.all()
         water = WaterService(
-            hardware.analog, db, stale_seconds=max(60, settings.water_interval_seconds * 6)
+            hardware.analog,
+            db,
+            stale_seconds=max(60, settings.water_interval_seconds * 6),
+            enabled=any(c.kind == "water_tank" for c in configs),
         )
 
         def metric(sensor: str, name: str) -> MetricValue:
@@ -128,6 +139,12 @@ class AppContext:
             victron=victron,
         )
         ctx.alerts = AlertService(ctx, notifications, db)
+        ctx.sensor_store = store
+        store.relay_pins = lambda: {r.gpio_pin: r.name for r in ctx.relays.list()}
+        ctx.relays.sensor_pins = store.gpio_pins
+        ctx.boot_sensors = _restart_signature(configs)
+        ctx.inputs = InputService(notifications)
+        ctx.apply_inputs(configs)
         ctx.heaters = HeaterService(db, hardware.heaters)
         ctx.scenes = SceneService(db, ctx.relays, ctx.heaters)
 
@@ -161,6 +178,7 @@ class AppContext:
             Worker("maintenance", 6 * 3600, self._maintenance),
             Worker("alerts", 10, self.alerts.check),
             Worker("notify", 10, self.notifications.deliver_due),
+            Worker("inputs", 1, self.inputs.poll),
             Worker("updates", 300, self.updates.tick),
         ]
         if self.gps.enabled:
@@ -176,6 +194,29 @@ class AppContext:
             self._start_cloud(self._new_sync(connection.url, connection.token))
         log.info("Started %d workers", len(self.workers))
         systemd.notify("READY=1")
+
+    # --- sensors (Sensors tab) ------------------------------------------------------
+
+    def apply_inputs(self, configs: list[Any]) -> None:
+        factory = self.hardware.sensors
+        inputs = []
+        for config in configs:
+            if config.kind in INPUT_KINDS and factory is not None:
+                inputs.append((factory.input(config), config.kind))
+        self.inputs.set_inputs(inputs)
+
+    def apply_sensors(self) -> None:
+        """Use the Sensors tab's list now (GPS and water sender: after a restart)."""
+        from smartify.hardware import climate_sensors
+
+        configs = self.sensor_store.all()
+        if self.hardware.sensors is not None:
+            self.climate.set_sensors(climate_sensors(self.hardware.sensors, configs))
+        self.apply_inputs(configs)
+
+    @property
+    def restart_required(self) -> bool:
+        return _restart_signature(self.sensor_store.all()) != self.boot_sensors
 
     # --- remote dashboard ---------------------------------------------------------
 
@@ -268,3 +309,13 @@ class AppContext:
         limit = max(30.0, self.settings.rule_interval_seconds * 6)
         if rules.last_run_at is not None and time.time() - rules.last_run_at < limit:
             systemd.notify("WATCHDOG=1")
+
+
+def _restart_signature(configs: list[Any]) -> str:
+    import json
+
+    return json.dumps(
+        sorted((c.kind, c.config) for c in configs if c.kind in RESTART_KINDS),
+        sort_keys=True,
+        default=str,
+    )

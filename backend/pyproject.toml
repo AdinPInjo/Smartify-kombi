@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartify-kombi"
-version = "0.8.0"
+version = "0.9.0"
 description = "Raspberry Pi controller for camper vans: relays, temperature/humidity, water level, GPS and remote sync."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,6 +24,10 @@ pi = [
     "adafruit-circuitpython-dht>=4.0",
     "gpiod>=2.2.2,<3",  # GPIO backend Adafruit Blinka needs on Raspberry Pi OS Bookworm/Trixie
     "victron-ble>=0.9",
+    # I2C climate sensors from the Sensors tab
+    "adafruit-circuitpython-bme280>=2.6",
+    "adafruit-circuitpython-sht31d>=2.3",
+    "adafruit-circuitpython-ahtx0>=1.0",
 ]
 dev = [
     "victron-ble>=0.9",  # decoding is tested with real encrypted advertisements

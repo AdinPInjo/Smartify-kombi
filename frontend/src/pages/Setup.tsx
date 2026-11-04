@@ -1,5 +1,5 @@
 // First-run setup: shown once, on a fresh install, before anything else.
-import { Bell, Eye, EyeOff, ListChecks, Lock, SunMedium, Wifi } from "lucide-react";
+import { Bell, Cpu, Eye, EyeOff, ListChecks, Lock, SunMedium, Wifi } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -190,6 +190,7 @@ function Done() {
         <p className="muted" style={{ margin: 0 }}>You're signed in. Here's what most people set up next, in any order:</p>
       </div>
       <div className="stack" style={{ gap: 8 }}>
+        <NextStep to="/sensors" icon={<Cpu size={18} />} title="Sensors" text="Temperature, GPS, water tank, doors: a wizard shows how to wire each one." />
         <NextStep to="/notifications" icon={<Bell size={18} />} title="Alerts on your phone" text="Battery, frost, theft and more, in 3 minutes." />
         <NextStep to="/energy/devices" icon={<SunMedium size={18} />} title="Victron devices" text="Battery, solar and chargers over Bluetooth." />
         <NextStep to="/switches" icon={<ListChecks size={18} />} title="Switches & rules" text="Heater, fan, pump: on a schedule or by temperature." />

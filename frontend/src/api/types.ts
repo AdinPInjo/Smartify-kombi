@@ -236,6 +236,8 @@ export interface NotificationSettings {
     };
     frost_forecast: ThresholdAlert;
     energy_forecast: ThresholdAlert & { battery_capacity_ah: number | null; solar_peak_w: number | null };
+    door_open: AlertToggle & { night_only: boolean; night_from: string; night_to: string };
+    motion: AlertToggle & { night_only: boolean; night_from: string; night_to: string };
   };
   quiet_hours: { enabled: boolean; from: string; to: string };
   repeat_hours: number;

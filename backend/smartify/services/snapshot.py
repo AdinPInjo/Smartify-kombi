@@ -33,4 +33,5 @@ def build_state(ctx: Any) -> dict[str, Any]:
         "system": system.system_status(ctx, _DEVICE),
         "scenes": scenes.list_scenes(ctx, _DEVICE),
         "heaters": heaters.list_heaters(ctx, _DEVICE),
+        "inputs": {"inputs": ctx.inputs.states()},
     }

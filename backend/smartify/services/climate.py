@@ -37,12 +37,17 @@ _HUMIDITY_RANGE = (0.0, 100.0)
 
 
 def _plausible(temperature: float | None, humidity: float | None) -> bool:
-    if temperature is None or humidity is None:
+    """Humidity may be None: temperature-only probes (DS18B20) have none."""
+    if temperature is None:
         return False
-    return (
-        _TEMPERATURE_RANGE[0] <= temperature <= _TEMPERATURE_RANGE[1]
-        and _HUMIDITY_RANGE[0] <= humidity <= _HUMIDITY_RANGE[1]
-    )
+    if not _TEMPERATURE_RANGE[0] <= temperature <= _TEMPERATURE_RANGE[1]:
+        return False
+    return humidity is None or _HUMIDITY_RANGE[0] <= humidity <= _HUMIDITY_RANGE[1]
+
+
+def _mean(values: list[float | None]) -> float | None:
+    present = [v for v in values if v is not None]
+    return round(fmean(present), 2) if present else None
 
 
 @dataclass(frozen=True)
@@ -88,15 +93,23 @@ class ClimateService:
     def sensor_names(self) -> list[str]:
         return [sensor.name for sensor in self._sensors]
 
+    def set_sensors(self, sensors: list[ClimateSensor]) -> None:
+        """Sensors added, changed or removed in the dashboard: keep the others' readings."""
+        with self._lock:
+            self._sensors = list(sensors)
+            self._state = {s.name: self._state.get(s.name) or _SensorState() for s in sensors}
+
     # --- sampling --------------------------------------------------------
 
     def sample(self) -> None:
         """Read every sensor once. Called by the climate worker."""
-        for sensor in self._sensors:
+        for sensor in list(self._sensors):
             reading = sensor.read()
             now = self._clock()
             with self._lock:
-                state = self._state[sensor.name]
+                state = self._state.get(sensor.name)
+                if state is None:  # removed while reading
+                    continue
                 if reading.ok and _plausible(reading.temperature_c, reading.humidity):
                     state.window.append((now, reading.temperature_c, reading.humidity))
                     state.minute.append((reading.temperature_c, reading.humidity))
@@ -112,8 +125,8 @@ class ClimateService:
                 # Only replace the average once the window holds enough readings;
                 # after a dropout one fresh reading must not decide on its own.
                 if len(state.window) >= self._settings.sensor_min_samples:
-                    state.temperature = round(fmean(r[1] for r in state.window), 2)
-                    state.humidity = round(fmean(r[2] for r in state.window), 2)
+                    state.temperature = _mean([r[1] for r in state.window])
+                    state.humidity = _mean([r[2] for r in state.window])
 
     def _prune(self, state: _SensorState, now: float) -> None:
         cutoff = now - self._settings.sensor_window_seconds
@@ -127,8 +140,8 @@ class ClimateService:
         with self._lock:
             for name, state in self._state.items():
                 if state.minute:
-                    temperature = round(fmean(r[0] for r in state.minute), 2)
-                    humidity = round(fmean(r[1] for r in state.minute), 2)
+                    temperature = _mean([r[0] for r in state.minute])
+                    humidity = _mean([r[1] for r in state.minute])
                     rows.append((name, temperature, humidity, 1, None, now))
                 elif state.minute_failures:
                     rows.append((name, None, None, 0, state.last_error, now))

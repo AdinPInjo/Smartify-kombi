@@ -107,7 +107,10 @@ class WaterService:
         db_path: Path,
         clock: Callable[[], float] = time.time,
         stale_seconds: float = 120,
+        enabled: bool = True,
     ) -> None:
+        self.enabled = enabled
+        """False: no water sender added in the Sensors tab."""
         self._analog = analog
         self._stale_seconds = stale_seconds
         self._db_path = db_path
@@ -165,6 +168,8 @@ class WaterService:
     # --- sampling --------------------------------------------------------
 
     def sample(self) -> None:
+        if not self.enabled:
+            return
         settings = self.settings()
         try:
             signal, supply_divided = self._analog.read_voltages(
@@ -183,6 +188,10 @@ class WaterService:
             self._updated_at = int(self._clock())
 
     def current(self) -> WaterReading:
+        if not self.enabled:
+            return WaterReading(
+                False, None, None, None, None, "no water sensor added (Sensors tab)", None
+            )
         settings = self.settings()
         with self._lock:
             if not self._recent:

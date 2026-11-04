@@ -168,13 +168,13 @@ button, input, select { font: inherit; color: inherit; }
   bottom: calc(14px + env(safe-area-inset-bottom));
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   background: var(--nav-bg);
   backdrop-filter: blur(10px);
   border: 1px solid var(--line);
   border-radius: 22px;
   padding: 6px;
-  max-width: 560px;
+  max-width: 620px;
   margin: 0 auto;
 }
 
@@ -820,3 +820,35 @@ details > summary { color: var(--muted); }
 @keyframes breathe { 0%, 100% { transform: scale(0.82); opacity: 0.85; } 50% { transform: scale(0.9); opacity: 1; } }
 @keyframes zzz { 0%, 100% { opacity: 0.3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
 .heater-hero { display: flex; align-items: center; gap: 14px; }
+
+/* Sensors: catalog and the Pi's pin header */
+.catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.catalog-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
+  padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--line);
+  background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer;
+}
+.catalog-item:hover:not(:disabled) { border-color: var(--accent); }
+.catalog-item:disabled { opacity: 0.5; cursor: default; }
+.pi-header { display: grid; grid-template-columns: 1fr; gap: 3px; max-width: 460px; }
+.pin-row { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+.pin {
+  display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 2px 8px;
+  border-radius: 7px; border: 1px solid transparent; background: var(--surface-2);
+  color: var(--muted); font: 500 11px/1.2 var(--font-mono); text-align: left; overflow: hidden;
+}
+.pin.right { flex-direction: row-reverse; text-align: right; }
+.pin .pin-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin .pin-num { color: var(--faint); }
+.pin .pin-use { color: var(--faint); }
+.pin-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--line-strong); }
+.pin-dot.v3 { background: #e8a33c; }
+.pin-dot.v5 { background: var(--danger); }
+.pin-dot.gnd { background: var(--text); }
+.pin-dot.gpio { background: var(--water); }
+.pin.taken { opacity: 0.45; }
+.pin.lit { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+.pin.chosen { border-color: var(--accent); background: var(--accent); color: #1b1407; }
+.pin.chosen .pin-num { color: #1b1407; }
+button.pin { cursor: pointer; }
+button.pin:hover { border-color: var(--line-strong); color: var(--text); }

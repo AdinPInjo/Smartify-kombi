@@ -19,6 +19,7 @@ from smartify.api import (
     notifications,
     relays,
     scenes,
+    sensor_setup,
     sensors,
     system,
     updates,
@@ -32,6 +33,7 @@ from smartify.errors import Conflict, DeviceUnavailable, InvalidInput, NotFound
 from smartify.hardware import Hardware, build_hardware
 from smartify.logbuffer import LogBuffer
 from smartify.services.accounts import AccountService
+from smartify.services.sensors import SensorStore
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +60,9 @@ def create_app(
             log.warning("No dashboard login yet: open the dashboard to finish the setup")
         elif accounts.uses_default_password:
             log.warning("Default password in use. Fine for development, never on the van.")
-        ctx = AppContext.build(settings, hardware or build_hardware(settings), logs)
+        # Sensors come from the Sensors tab (carried over from .env on the first start).
+        sensors = SensorStore(settings.db_path).effective(settings)
+        ctx = AppContext.build(settings, hardware or build_hardware(settings, sensors), logs)
         ctx.accounts = accounts
         app.state.ctx = ctx
         if start_workers:
@@ -109,6 +113,7 @@ def create_app(
         updates.router,
         scenes.router,
         heaters.router,
+        sensor_setup.router,
     ):
         app.include_router(router, prefix="/api")
     app.include_router(auth.router, prefix="/api")

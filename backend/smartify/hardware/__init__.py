@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from smartify.config import Settings
 from smartify.hardware.base import (
@@ -15,6 +16,7 @@ from smartify.hardware.base import (
     Hardware,
     HardwareError,
     RelayDriver,
+    SensorConfig,
     VictronListener,
     VictronReading,
 )
@@ -49,53 +51,91 @@ def build_relay_driver(settings: Settings) -> RelayDriver:
     return PinctrlRelayDriver()
 
 
-def build_hardware(settings: Settings) -> Hardware:
+CLIMATE_KINDS = {"dht22", "dht11", "ds18b20", "bme280", "sht31", "aht20"}
+
+
+class FailedSensor:
+    """Stands in for a sensor whose driver could not start, so the error shows up."""
+
+    def __init__(self, name: str, error: str) -> None:
+        self.name = name
+        self._error = error
+
+    def read(self) -> ClimateReading:
+        return ClimateReading(self.name, None, None, error=self._error)
+
+
+def climate_sensors(factory: Any, configs: list[SensorConfig]) -> list[ClimateSensor]:
+    sensors: list[ClimateSensor] = []
+    for config in configs:
+        if config.kind not in CLIMATE_KINDS:
+            continue
+        try:
+            sensors.append(factory.climate(config))
+        except HardwareError as exc:
+            # A broken sensor must not stop the relays from working.
+            log.error("Sensor %r unavailable: %s", config.name, exc)
+            sensors.append(FailedSensor(config.name, str(exc)))
+    return sensors
+
+
+def build_hardware(settings: Settings, sensors: list[SensorConfig] | None = None) -> Hardware:
+    """``sensors``: the dashboard's sensor list. None: the old .env setup (tests, tools)."""
+    if sensors is None:
+        sensors = [
+            SensorConfig(s.name, s.name, "dht22", {"pin": s.gpio_pin})
+            for s in settings.dht22_sensors
+        ]
+        if settings.gps_enabled:
+            sensors.append(
+                SensorConfig(
+                    "gps", "gps", "gps", {"device": settings.gps_device, "baud": settings.gps_baud}
+                )
+            )
+    gps_config = next((s.config for s in sensors if s.kind == "gps"), None)
     if settings.hardware == "mock":
-        return _build_mock(settings)
-    return _build_pi(settings)
+        return _build_mock(settings, sensors, gps_config)
+    return _build_pi(settings, sensors, gps_config)
 
 
-def _build_mock(settings: Settings) -> Hardware:
+def _build_mock(
+    settings: Settings, sensors: list[SensorConfig], gps_config: dict | None
+) -> Hardware:
     from smartify.hardware import mock
 
     relays = mock.MockRelayDriver()
     pins = {seed.name: seed.gpio_pin for seed in settings.default_relays}
     cabin = mock.MockCabin(relays, heater_pin=pins.get("heater"), fan_pin=pins.get("fan"))
-    sensors = [
-        # Every sensor after the first reads a bit colder, like an outside sensor would.
-        mock.MockClimateSensor(sensor.name, cabin, offset=-6.0 * min(i, 1))
-        for i, sensor in enumerate(settings.dht22_sensors)
-    ]
-    gps = mock.MockGpsReceiver() if settings.gps_enabled else None
-    log.info("Using simulated hardware (%d climate sensors)", len(sensors))
+    factory = mock.MockSensorFactory(cabin)
+    climate = climate_sensors(factory, sensors)
+    gps = mock.MockGpsReceiver() if gps_config is not None else None
+    log.info("Using simulated hardware (%d climate sensors)", len(climate))
     return Hardware(
         relays=relays,
-        climate_sensors=sensors,
+        climate_sensors=climate,
         analog=mock.MockAnalogReader(),
         gps=gps,
         victron=mock.MockVictronListener(),
         heaters=mock.MockHeaters(),
+        sensors=factory,
     )
 
 
-def _build_pi(settings: Settings) -> Hardware:
+def _build_pi(settings: Settings, sensors: list[SensorConfig], gps_config: dict | None) -> Hardware:
     from smartify.hardware.pi.ads1115 import Ads1115Reader
-    from smartify.hardware.pi.dht22 import Dht22Sensor
     from smartify.hardware.pi.gps import SerialGpsReceiver
     from smartify.hardware.pi.relays import PinctrlRelayDriver
+    from smartify.hardware.pi.sensors import PiSensorFactory
 
-    sensors: list[ClimateSensor] = []
-    for sensor in settings.dht22_sensors:
-        try:
-            sensors.append(Dht22Sensor(sensor.name, sensor.gpio_pin))
-        except HardwareError:
-            # A missing sensor must not stop the relays from working.
-            log.exception("DHT22 %r on GPIO %d unavailable", sensor.name, sensor.gpio_pin)
-
+    analog = Ads1115Reader(settings.ads1115_bus, settings.ads1115_address)
+    factory = PiSensorFactory(analog)
+    climate = climate_sensors(factory, sensors)
     gps = None
-    if settings.gps_enabled:
+    if gps_config is not None:
         gps = SerialGpsReceiver(
-            settings.gps_device, settings.gps_baud, ublox_tuning=settings.gps_ublox_tuning
+            gps_config.get("device", settings.gps_device),
+            int(gps_config.get("baud", settings.gps_baud)),
+            ublox_tuning=settings.gps_ublox_tuning,
         )
     # Always listen, so Victron devices can be found and added from the dashboard.
     victron = None
@@ -112,12 +152,13 @@ def _build_pi(settings: Settings) -> Hardware:
         heaters = BleHeaters()
     except HardwareError:
         log.exception("Bluetooth support for diesel heaters is missing")
-    log.info("Using Raspberry Pi hardware (%d climate sensors)", len(sensors))
+    log.info("Using Raspberry Pi hardware (%d climate sensors)", len(climate))
     return Hardware(
         relays=PinctrlRelayDriver(),
-        climate_sensors=sensors,
-        analog=Ads1115Reader(settings.ads1115_bus, settings.ads1115_address),
+        climate_sensors=climate,
+        analog=analog,
         gps=gps,
         victron=victron,
         heaters=heaters,
+        sensors=factory,
     )

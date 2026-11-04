@@ -159,6 +159,10 @@ class RelayService:
         self._settings = settings
         self._driver = driver
         self._rules = rules
+        self.sensor_pins: Callable[[], dict[int, str]] = lambda: {
+            s.gpio_pin: s.name for s in settings.dht22_sensors
+        }
+        """GPIO pins used by sensors; the app points this at the Sensors tab's list."""
         self._db_path = db_path
         self._clock = clock
         # One relay switches at a time; keeps decide-and-apply atomic.
@@ -363,7 +367,7 @@ class RelayService:
     def _check_pin(self, gpio_pin: int, ignore_relay: str | None = None) -> None:
         if gpio_pin in RESERVED_PINS:
             raise Conflict(f"GPIO {gpio_pin} is reserved for {RESERVED_PINS[gpio_pin]}")
-        sensors = {s.gpio_pin: s.name for s in self._settings.dht22_sensors}
+        sensors = self.sensor_pins()
         if gpio_pin in sensors:
             raise Conflict(f"GPIO {gpio_pin} is used by sensor '{sensors[gpio_pin]}'")
         with transaction(self._db_path) as conn:

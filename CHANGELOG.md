@@ -7,6 +7,22 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.9.0 - 2026-11-04
+
+### Added
+- A Sensors tab: add sensors from a catalog with a wizard that shows where each wire goes
+  on the Pi (with a picture of the pin header), tests the sensor live and saves it. No more
+  editing `.env`.
+- New sensor types: DS18B20 temperature probes (fridge, tank, outside; several on one pin),
+  BME280 / SHT31 / AHT20 over I2C, DHT11, door contacts and motion sensors.
+- Alerts when a door opens or motion is seen (off by default, optionally only at night).
+- A van without any sensors works too: only Victron and a diesel heater is fine.
+
+### Note
+- Your existing sensors (DHT22s, GPS, water tank) are carried over from `.env`
+  automatically. After the update, Smartify installs the drivers for the new I2C sensors
+  by itself.
+
 ## 0.8.0 - 2026-11-04
 
 ### Added

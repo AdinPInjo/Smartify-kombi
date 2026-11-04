@@ -264,6 +264,28 @@ export function AlertGroups({ settings, includeTheft = true }: { settings: Notif
             onToggle={toggle("departure")}
             always
           />
+          <AlertRow
+            label="A door opens"
+            description="A door contact from the Sensors tab opens. Off by default: doors open all day while you're in the van."
+            enabled={a.door_open.enabled}
+            onToggle={toggle("door_open")}
+          >
+            <label className="row small" style={{ gap: 6 }}>
+              <input type="checkbox" checked={a.door_open.night_only} onChange={(e) => set("door_open", { night_only: e.target.checked })} />
+              only at night ({a.door_open.night_from}–{a.door_open.night_to})
+            </label>
+          </AlertRow>
+          <AlertRow
+            label="Motion inside"
+            description="A motion sensor from the Sensors tab sees someone."
+            enabled={a.motion.enabled}
+            onToggle={toggle("motion")}
+          >
+            <label className="row small" style={{ gap: 6 }}>
+              <input type="checkbox" checked={a.motion.night_only} onChange={(e) => set("motion", { night_only: e.target.checked })} />
+              only at night ({a.motion.night_from}–{a.motion.night_to})
+            </label>
+          </AlertRow>
         </Group>
       )}
 

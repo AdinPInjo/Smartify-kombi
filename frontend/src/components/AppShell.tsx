@@ -1,4 +1,4 @@
-import { Bell, Gauge, Map, Settings, SunMedium, Thermometer, ToggleRight } from "lucide-react";
+import { Bell, Cpu, Gauge, Map, Settings, SunMedium, Thermometer, ToggleRight } from "lucide-react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useHealth, useMode, useNotificationSettings } from "@/api/hooks";
 import { Topo } from "./instruments";
@@ -9,6 +9,7 @@ const NAV = [
   { to: "/climate", label: "Climate", Icon: Thermometer },
   { to: "/switches", label: "Switches", Icon: ToggleRight },
   { to: "/map", label: "Map", Icon: Map },
+  { to: "/sensors", label: "Sensors", Icon: Cpu },
   { to: "/notifications", label: "Alerts", Icon: Bell },
 ];
 

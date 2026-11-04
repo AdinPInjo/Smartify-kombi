@@ -106,6 +106,16 @@ class DepartureAlert(_Model):
     """Set by "I'm driving": no departure alerts until then."""
 
 
+class InputAlert(_Model):
+    """A door opened or motion seen (door contacts, motion sensors in the Sensors tab)."""
+
+    enabled: bool = False
+    """Off by default: doors open all day when you're in the van."""
+    night_only: bool = True
+    night_from: str = Field(default="22:00", pattern=_CLOCK_PATTERN)
+    night_to: str = Field(default="07:00", pattern=_CLOCK_PATTERN)
+
+
 class EnergyForecastAlert(ThresholdAlert):
     battery_capacity_ah: float | None = Field(default=None, gt=0, le=5000)
     """Empty = estimated from the SmartShunt (consumed Ah and state of charge)."""
@@ -136,6 +146,8 @@ class Alerts(_Model):
     energy_forecast: EnergyForecastAlert = Field(
         default_factory=lambda: EnergyForecastAlert(threshold=20)
     )
+    door_open: InputAlert = Field(default_factory=InputAlert)
+    motion: InputAlert = Field(default_factory=InputAlert)
 
 
 class NotificationSettings(_Model):

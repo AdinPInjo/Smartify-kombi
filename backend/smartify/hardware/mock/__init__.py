@@ -20,6 +20,7 @@ from smartify.hardware.base import (
     HardwareError,
     HeaterLink,
     HeaterStatus,
+    InputState,
 )
 
 
@@ -368,3 +369,78 @@ class MockHeaters:
             s["target"] = argument
         elif command == hp.CMD_LEVEL:
             s["level"] = argument
+
+
+class _NoHumidity:
+    """A temperature-only probe (DS18B20) built on a simulated sensor."""
+
+    def __init__(self, sensor: MockClimateSensor) -> None:
+        self.name = sensor.name
+        self._sensor = sensor
+
+    def read(self) -> ClimateReading:
+        reading = self._sensor.read()
+        return ClimateReading(reading.sensor, reading.temperature_c, None, reading.error)
+
+
+class MockInput:
+    """A door that is opened now and then, or a motion sensor that sees someone."""
+
+    def __init__(self, name: str, kind: str, clock: Callable[[], float] = time.time) -> None:
+        self.name = name
+        self._kind = kind
+        self._clock = clock
+
+    def read(self) -> InputState:
+        # Active for 20 s every 5 minutes, so the dashboard shows both states.
+        return InputState(active=self._clock() % 300 < 20)
+
+
+class MockSensorFactory:
+    """Sensor drivers for the simulated van."""
+
+    PROBES = ("28-0316a2797a1f", "28-04179cd3e2ff")
+
+    def __init__(self, cabin: MockCabin) -> None:
+        self._cabin = cabin
+
+    def climate(self, config: Any) -> Any:
+        offsets = {"dht22": 0.0, "dht11": 0.3, "bme280": -0.2, "sht31": 0.1, "aht20": 0.2}
+        if config.kind == "ds18b20":
+            # Probes sit in colder places: the fridge, the water tank, outside.
+            offset = -14.0 if config.config.get("rom") == self.PROBES[0] else -6.0
+            return _NoHumidity(MockClimateSensor(config.name, self._cabin, offset, fail_rate=0.0))
+        offset = offsets.get(config.kind, 0.0) - (6.0 if config.config.get("pin") == 17 else 0.0)
+        return MockClimateSensor(config.name, self._cabin, offset)
+
+    def input(self, config: Any) -> MockInput:
+        return MockInput(config.name, config.kind)
+
+    def discover(self) -> dict[str, Any]:
+        return {
+            "onewire": {"enabled": True, "probes": list(self.PROBES)},
+            "i2c": {"enabled": True, "addresses": [0x48, 0x76]},
+        }
+
+    def test(self, kind: str, config: dict[str, Any]) -> dict[str, Any]:
+        from smartify.hardware.base import SensorConfig
+
+        probe = SensorConfig("test", "test", kind, config)
+        if kind in ("door", "motion"):
+            state = self.input(probe).read()
+            return {
+                "ok": True,
+                "text": ("open" if kind == "door" else "motion")
+                if state.active
+                else ("closed" if kind == "door" else "quiet"),
+            }
+        if kind in ("gps", "water_tank"):
+            return {"ok": True, "text": "simulated: saved, it works after the restart"}
+        reading = self.climate(probe).read()
+        if not reading.ok:
+            reading = self.climate(probe).read()
+        humidity = f", {reading.humidity:.0f} %" if reading.humidity is not None else ""
+        return {
+            "ok": reading.ok,
+            "text": f"{reading.temperature_c:.1f} °C{humidity}" if reading.ok else reading.error,
+        }

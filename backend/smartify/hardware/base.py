@@ -111,6 +111,31 @@ class VictronListener(Protocol):
 
 
 @dataclass(frozen=True)
+class SensorConfig:
+    """A sensor added in the dashboard (see services/sensors.py for the catalog)."""
+
+    id: str
+    name: str
+    kind: str
+    config: dict[str, Any]
+
+
+@dataclass
+class InputState:
+    """A door contact or motion sensor right now."""
+
+    active: bool | None
+    """Door open / motion seen. None: could not be read."""
+    error: str | None = None
+
+
+class InputSensor(Protocol):
+    name: str
+
+    def read(self) -> InputState: ...
+
+
+@dataclass(frozen=True)
 class DiscoveredHeater:
     """A diesel heater controller heard over Bluetooth."""
 
@@ -196,3 +221,5 @@ class Hardware:
     gps: GpsReceiver | None
     victron: VictronListener | None = None
     heaters: HeaterBackend | None = None
+    sensors: Any = None
+    """Builds sensor drivers from the dashboard's sensor list (``SensorFactory``)."""

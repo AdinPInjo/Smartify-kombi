@@ -122,9 +122,7 @@ if [[ -f $ENV_FILE ]]; then
   ok "keeping your existing backend/.env"
 else
   if [[ -n $PASSWORD && ${#PASSWORD} -lt 8 ]]; then die "--password needs at least 8 characters"; fi
-  SENSORS=$(ask "DHT22 sensors as name:GPIO (comma separated)" "inside:4,outside:17")
   RELAYS=$(ask "Relays as name:GPIO (comma separated)" "heater:25,fan:26")
-  GPS=$(ask "GPS module connected? (true/false)" "true")
   umask 077
   cat >"$ENV_FILE" <<EOF
 # Smartify Kombi settings. All options: .env.example in the project folder.
@@ -138,9 +136,9 @@ SMARTIFY_FRONTEND_DIR=$REPO/frontend/dist
 SMARTIFY_USERNAME=admin
 SMARTIFY_PASSWORD=$PASSWORD
 
-SMARTIFY_DHT22_SENSORS=$SENSORS
 SMARTIFY_DEFAULT_RELAYS=$RELAYS
-SMARTIFY_GPS_ENABLED=$GPS
+# Sensors (temperature, GPS, water tank, doors, ...) are added in the dashboard:
+# Sensors tab. Nothing to set here.
 
 # Victron over Bluetooth: name|MAC|key, see docs/victron.md
 # SMARTIFY_VICTRON_DEVICES=
