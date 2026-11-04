@@ -7,6 +7,13 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.11.1 - 2026-11-04
+
+### Fixed
+- Updates no longer depend on how the Smartify folder was cloned: the updater fetches
+  releases from the project's public address, so an expired or removed SSH key on the Pi
+  can't block them ("Not updated: git … failed").
+
 ## 0.11.0 - 2026-11-04
 
 A security release, after an independent review of the whole project.

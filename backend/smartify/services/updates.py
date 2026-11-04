@@ -291,6 +291,8 @@ class UpdateService:
             "frontend_dir": str(frontend.resolve()) if frontend else None,
             "health_url": f"http://127.0.0.1:{self._settings.port}/api/health",
             "download_base": f"https://github.com/{self._settings.update_repo}/releases/download",
+            # Public https, no key: works whatever "origin" is (an SSH deploy key may expire).
+            "repo_url": f"https://github.com/{self._settings.update_repo}.git",
         }
         self.folder.mkdir(parents=True, exist_ok=True)
         status = {

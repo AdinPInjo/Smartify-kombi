@@ -359,7 +359,7 @@ def van(tmp_path: Path):
         "    conn.commit()\n"
     )
 
-    def update(version: str) -> dict:
+    def update(version: str, **extra) -> dict:
         request = {
             "version": version,
             "by": "dashboard",
@@ -367,6 +367,7 @@ def van(tmp_path: Path):
             "frontend_dir": str(dist),
             "health_url": f"http://127.0.0.1:{server.server_port}/api/health",
             "download_base": files.as_uri(),
+            **extra,
         }
         (data / "update/request.json").write_text(json.dumps(request))
         load_updater().main(
@@ -390,6 +391,7 @@ def van(tmp_path: Path):
 
     yield {
         "update": update,
+        "origin": origin,
         "repo": repo,
         "dist": dist,
         "notes": notes,
@@ -442,3 +444,11 @@ def test_updater_refuses_local_changes(van):
     (van["repo"] / "backend/pyproject.toml").write_text("changed")
     status = van["update"]("0.4.1")
     assert status["state"] == "failed" and "local code changes" in status["message"]
+
+
+def test_updater_fetches_from_the_public_address_not_origin(van):
+    # Like a Pi whose SSH deploy key was removed on GitHub: "origin" can't be reached.
+    git(van["repo"], "remote", "set-url", "origin", "git@github.invalid:nobody/nothing.git")
+    status = van["update"]("0.4.1", repo_url=str(van["origin"]))
+    assert status["state"] == "done", status
+    assert git(van["repo"], "describe", "--tags").strip() == "v0.4.1"

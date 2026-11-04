@@ -172,7 +172,9 @@ class Updater:
 
         self.step(f"Getting version {self.target}")
         tag = f"v{self.target}"
-        self.git("fetch", "--force", "--tags", "--quiet", "origin", timeout=300)
+        # The project's public address when known (no key needed); else "origin".
+        source = self.request.get("repo_url") or "origin"
+        self.git("fetch", "--force", "--tags", "--quiet", source, timeout=300)
         if self.git("rev-parse", "--verify", "--quiet", f"{tag}^{{commit}}", check=False).returncode:
             raise Failed(f"version {self.target} was not found in the project")
         tagged = self.git("show", f"{tag}:backend/smartify/__init__.py").stdout
