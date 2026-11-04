@@ -5,6 +5,7 @@ import { useEnergy, useEnergyForecast, useEnergyHistory, useWater } from "@/api/
 import type { EnergyDevice, EnergyForecast } from "@/api/types";
 import { batteryColor, LineChart, RingGauge } from "@/components/instruments";
 import { PageHeader } from "@/components/PageHeader";
+import { WaterTankCard } from "@/components/WaterTankCard";
 import { Card, Num, Segmented, Skeleton } from "@/components/ui";
 import { ago, clock, duration, fmt, humanize, signed } from "@/lib/format";
 
@@ -28,8 +29,8 @@ export function Energy() {
   return (
     <main className="page">
       <PageHeader
-        kicker="Energy"
-        title="Battery & charging"
+        kicker="Energy & water"
+        title="Energy & water"
         sub={e?.available ? `${e.devices.length} Victron devices` : undefined}
         right={
           e?.available && (
@@ -60,6 +61,8 @@ export function Energy() {
           )}
         </Card>
       )}
+
+      {e && !e.available && <WaterTankCard />}
 
       {e?.available && battery && (
         <>
@@ -136,6 +139,8 @@ export function Energy() {
               )}
             </div>
           </div>
+
+          <WaterTankCard />
 
           <Card label="History" action={<div style={{ width: 230 }}><Segmented label="Time range" options={RANGES} value={hours} onChange={setHours} /></div>}>
             <div className="stack" style={{ gap: 4 }}>

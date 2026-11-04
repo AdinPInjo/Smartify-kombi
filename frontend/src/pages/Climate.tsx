@@ -1,13 +1,20 @@
+// Climate: is the van comfortable, and is the heater doing its job?
+// Inside now (with a condensation hint), the heater, all temperatures in one
+// chart, the sensors at a glance, and the weather where the van is.
+
+import { Droplets, Wind } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useClimate, useClimateHistory, useWater, useWaterHistory, useWeather } from "@/api/hooks";
-import type { ClimateSnapshot } from "@/api/types";
-import { HeaterCards } from "@/components/Heater";
-import { WaterCalibration } from "@/components/WaterCalibration";
-import { LineChart, Tank } from "@/components/instruments";
+import { useQueries } from "@tanstack/react-query";
+import { api } from "@/api/client";
+import { useClimate, useWeather } from "@/api/hooks";
+import type { ClimatePoint, ClimateSnapshot } from "@/api/types";
+import { HeaterCards, useHeaters } from "@/components/Heater";
+import { LineChart } from "@/components/instruments";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, Num, Segmented, Skeleton } from "@/components/ui";
-import { ago, fmt, weatherText } from "@/lib/format";
+import { WeatherCard } from "@/components/WeatherCard";
+import { ago, fmt } from "@/lib/format";
 
 const RANGES = [
   { value: "6", label: "6 h" },
@@ -15,131 +22,209 @@ const RANGES = [
   { value: "168", label: "7 days" },
 ];
 
+// One color per sensor line, in order.
+const COLORS = ["var(--accent)", "var(--tone-weather)", "var(--tone-scenes)", "var(--tone-switches)", "var(--tone-charging)", "var(--tone-heater)"];
+
+const isOutside = (name: string) => /out|ext|aussen|vani/i.test(name);
+
+/** Dew point (°C) with the Magnus formula: below it, moisture condenses on surfaces. */
+function dewPoint(temperature: number, humidity: number): number {
+  const a = 17.62;
+  const b = 243.12;
+  const gamma = Math.log(humidity / 100) + (a * temperature) / (b + temperature);
+  return (b * gamma) / (a - gamma);
+}
+
+function condensationHint(inside: ClimateSnapshot | undefined, outsideC: number | null): string | null {
+  if (!inside || inside.temperature_c == null || inside.humidity == null) return null;
+  const dew = dewPoint(inside.temperature_c, inside.humidity);
+  if (outsideC != null && outsideC <= dew + 2) {
+    return `Condensation likely: the air inside turns to water on surfaces below ${fmt(dew, 0)} °C, and it's ${fmt(outsideC, 0)} °C outside. Open a roof vent a little.`;
+  }
+  if (inside.humidity >= 70) {
+    return "Humid inside: airing out for a few minutes helps against damp and mould.";
+  }
+  return null;
+}
+
 export function Climate() {
   const climate = useClimate();
   const weather = useWeather();
-  const [hours, setHours] = useState("24");
+  const sensors = climate.data ?? [];
+  const inside = sensors.find((s) => !isOutside(s.sensor)) ?? sensors[0];
+  const outsideSensor = sensors.find((s) => s !== inside && isOutside(s.sensor));
+  const outsideC = outsideSensor?.temperature_c ?? (weather.data?.available ? (weather.data.temperature_c ?? null) : null);
+  const hint = condensationHint(inside, outsideC);
 
   return (
     <main className="page">
-      <PageHeader kicker="Climate" title="Temperature & water" />
-      {climate.isPending && <Skeleton height={200} />}
-      <div className="grid">
-        {climate.data?.map((sensor) => <SensorCard key={sensor.sensor} sensor={sensor} hours={Number(hours)} />)}
-      </div>
-      <div style={{ maxWidth: 260 }}>
-        <Segmented label="Time range" options={RANGES} value={hours} onChange={setHours} />
-      </div>
-
+      <PageHeader kicker="Climate" title="Climate" sub="How comfortable the van is, and the heater that keeps it so." />
+      {climate.isPending && <Skeleton height={180} />}
+      {climate.data && (
+        <InsideNow inside={inside} outsideC={outsideC} outsideFrom={outsideSensor ? outsideSensor.sensor : "forecast"} hint={hint} />
+      )}
       <Card label="Diesel heater" action={<Link to="/climate/heaters" className="small">Setup ›</Link>}>
         <HeaterCards />
       </Card>
-
-      <WaterSection hours={Number(hours)} />
-      <WaterCalibration />
-
-      <Card label="Outside weather">
-        {!weather.data?.available ? (
-          <p className="muted small" style={{ margin: 0 }}>{weather.data?.error ?? "Needs a GPS position and internet."}</p>
-        ) : (
-          <>
-            <div className="row" style={{ gap: 18, flexWrap: "wrap" }}>
-              <Num value={`${fmt(weather.data.temperature_c, 0)}°`} size="xl" />
-              <div className="stack" style={{ gap: 2 }}>
-                <span>{weatherText(weather.data.weather_code)}</span>
-                <span className="small muted">
-                  {fmt(weather.data.humidity, 0)}% · wind {fmt(weather.data.wind_kmh, 0)} km/h · updated {ago(weather.data.updated_at)}
-                </span>
-              </div>
-            </div>
-            <div className="grid-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))" }}>
-              {weather.data.forecast?.map((day) => (
-                <div className="tile" key={day.date}>
-                  <span className="tiny muted">
-                    {new Date(`${day.date}T12:00:00`).toLocaleDateString([], { weekday: "short" })}
-                  </span>
-                  <Num value={`${Math.round(day.temperature_max)}° / ${Math.round(day.temperature_min)}°`} size="s" />
-                  <span className="tiny muted">
-                    {weatherText(day.weather_code)}
-                    {day.precipitation_mm > 0 ? ` · ${fmt(day.precipitation_mm, 1)} mm` : ""}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </Card>
+      {sensors.length > 0 && <Temperatures sensors={sensors} />}
+      <div className="grid">
+        <WeatherCard tall />
+        <SensorList sensors={sensors} />
+      </div>
     </main>
   );
 }
 
-function SensorCard({ sensor, hours }: { sensor: ClimateSnapshot; hours: number }) {
-  const history = useClimateHistory(sensor.sensor, hours);
-  const points = history.data ?? [];
-  const times = points.map((p) => p.created_at);
+function InsideNow({
+  inside,
+  outsideC,
+  outsideFrom,
+  hint,
+}: {
+  inside: ClimateSnapshot | undefined;
+  outsideC: number | null;
+  outsideFrom: string;
+  hint: string | null;
+}) {
+  const heaters = useHeaters();
+  const heater = heaters.data?.heaters[0];
+  const s = heater?.status;
+  const heaterLine = !heater
+    ? null
+    : !heater.connected
+      ? `${heater.name}: not connected`
+      : s?.running
+        ? `${heater.name}: ${s.phase_name.toLowerCase()}${s.mode === "temperature" && s.target_temperature != null ? ` to ${fmt(s.target_temperature, 0)} °C` : s?.level ? ` at level ${s.level}` : ""}`
+        : `${heater.name}: off`;
+
+  if (!inside) {
+    return (
+      <Card label="Inside now">
+        <p className="small muted" style={{ margin: 0 }}>
+          No temperature sensor yet. <Link to="/sensors">Add one in the Sensors tab ›</Link>
+        </p>
+      </Card>
+    );
+  }
   return (
-    <Card label={sensor.sensor}>
-      <div className="row-between" style={{ alignItems: "flex-end" }}>
-        <Num value={fmt(sensor.temperature_c)} unit="°C" size="xl" />
-        <div className="stack" style={{ alignItems: "flex-end", gap: 2 }}>
-          <Num value={fmt(sensor.humidity, 0)} unit="%" size="m" />
-          <span className="tiny muted">humidity</span>
+    <section className="card climate-hero">
+      <div className="row-between" style={{ alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+        <div className="stack" style={{ gap: 4 }}>
+          <span className="label">Inside now{/^(inside|cabin|innen|unutra)$/i.test(inside.sensor) ? "" : ` · ${inside.sensor}`}</span>
+          <div className="row" style={{ alignItems: "flex-start", gap: 2 }}>
+            <span className="num num-xxl">{fmt(inside.temperature_c)}</span>
+            <span className="num c-accent" style={{ fontSize: 34, fontWeight: 500 }}>°C</span>
+          </div>
+          {heaterLine && <span className="small">{heaterLine}</span>}
+        </div>
+        <div className="climate-facts">
+          {inside.humidity != null && (
+            <div className="stack" style={{ gap: 0 }}>
+              <span className="tiny muted row" style={{ gap: 4 }}><Droplets size={12} aria-hidden="true" /> humidity</span>
+              <Num value={fmt(inside.humidity, 0)} unit="%" size="l" />
+            </div>
+          )}
+          <div className="stack" style={{ gap: 0 }}>
+            <span className="tiny muted row" style={{ gap: 4 }}>
+              <Wind size={12} aria-hidden="true" /> {isOutside(outsideFrom) ? outsideFrom : `outside (${outsideFrom})`}
+            </span>
+            <Num value={fmt(outsideC, 0)} unit="°C" size="l" />
+          </div>
         </div>
       </div>
-      <span className={`small ${sensor.status === "ready" ? "muted" : "c-accent"}`}>
-        {sensor.status === "ready"
-          ? `Average of ${sensor.sample_count} readings · ${ago(sensor.last_good_at)}`
-          : sensor.status === "warming_up"
-            ? "Warming up, collecting first readings…"
-            : `Not responding since ${ago(sensor.last_good_at)}${sensor.last_error ? ` (${sensor.last_error})` : ""}`}
-      </span>
-      <LineChart
-        label={`${sensor.sensor} temperature`}
-        unit="°C"
-        times={times}
-        series={[{ label: "Temperature", values: points.map((p) => p.temperature_c), color: "var(--accent)", fill: true }]}
-      />
-      <LineChart
-        label={`${sensor.sensor} humidity`}
-        unit="%"
-        height={60}
-        times={times}
-        min={0}
-        max={100}
-        series={[{ label: "Humidity", values: points.map((p) => p.humidity), color: "var(--water)", dashed: true }]}
-      />
+      {inside.status !== "ready" && (
+        <span className="small c-accent">
+          {inside.status === "warming_up" ? "The sensor is starting, first readings come in…" : `No reading since ${ago(inside.last_good_at)}.`}{" "}
+          <Link to="/sensors">Diagnose ›</Link>
+        </span>
+      )}
+      {hint && <div className="notice small">{hint}</div>}
+    </section>
+  );
+}
+
+function Temperatures({ sensors }: { sensors: ClimateSnapshot[] }) {
+  const [hours, setHours] = useState("24");
+  const histories = useQueries({
+    queries: sensors.map((s) => ({
+      queryKey: ["climate", s.sensor, Number(hours)],
+      queryFn: () => api.get<{ points: ClimatePoint[] }>(`/climate/${s.sensor}/history?hours=${hours}`).then((r) => r.points),
+      refetchInterval: 60_000,
+    })),
+  });
+  // All sensors are stored together once a minute, so their timestamps line up.
+  const times = [...new Set(histories.flatMap((h) => (h.data ?? []).map((p) => p.created_at)))].sort((a, b) => a - b);
+  const byTime = histories.map((h) => new Map((h.data ?? []).map((p) => [p.created_at, p])));
+  const temperature = sensors.map((s, i) => ({
+    label: s.sensor,
+    values: times.map((t) => byTime[i].get(t)?.temperature_c ?? null),
+    color: COLORS[i % COLORS.length],
+    fill: i === 0,
+  }));
+  const humid = sensors
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => s.humidity != null)
+    .map(({ s, i }) => ({
+      label: s.sensor,
+      values: times.map((t) => byTime[i].get(t)?.humidity ?? null),
+      color: COLORS[i % COLORS.length],
+      dashed: true,
+    }));
+
+  return (
+    <Card
+      label="Temperatures"
+      action={
+        <div style={{ width: 230 }}>
+          <Segmented label="Time range" options={RANGES} value={hours} onChange={setHours} />
+        </div>
+      }
+    >
+      <div className="row wrap" style={{ gap: 12 }}>
+        {temperature.map((series) => (
+          <span key={series.label} className="legend-item small">
+            <i style={{ background: series.color }} /> {series.label}
+          </span>
+        ))}
+      </div>
+      <LineChart label="Temperatures" unit="°C" height={180} times={times} series={temperature} />
+      {humid.length > 0 && (
+        <>
+          <span className="tiny muted">Humidity</span>
+          <LineChart label="Humidity" unit="%" height={70} min={0} max={100} times={times} series={humid} />
+        </>
+      )}
     </Card>
   );
 }
 
-function WaterSection({ hours }: { hours: number }) {
-  const water = useWater();
-  const history = useWaterHistory(hours);
-  const points = history.data ?? [];
-  const level = water.data?.level_percent ?? null;
+function SensorList({ sensors }: { sensors: ClimateSnapshot[] }) {
   return (
-    <section id="water" className="card">
-      <div className="row-between">
-        <h2 className="label" style={{ margin: 0 }}>Fresh water</h2>
-        <Link to="#water-calibration" className="small">Calibrate ›</Link>
-      </div>
-      <div className="row" style={{ gap: 18, alignItems: "flex-end" }}>
-        <Tank percent={level} height={140} width={56} />
-        <div className="stack" style={{ gap: 4 }}>
-          <Num value={level ?? "–"} unit="%" size="xl" />
-          <span className={`small ${water.data?.ok ? "muted" : "c-accent"}`}>
-            {water.data?.ok ? `Updated ${ago(water.data.updated_at)}` : (water.data?.error ?? "No reading yet")}
-          </span>
+    <Card label="Sensors" action={<Link to="/sensors" className="small">Manage ›</Link>}>
+      {sensors.length === 0 ? (
+        <p className="small muted" style={{ margin: 0 }}>None yet.</p>
+      ) : (
+        <div className="list">
+          {sensors.map((s, i) => (
+            <div key={s.sensor} className="row-between" style={{ gap: 10 }}>
+              <span className="row" style={{ gap: 10 }}>
+                <span className="legend-swatch" style={{ background: COLORS[i % COLORS.length] }} />
+                <span className="stack" style={{ gap: 0 }}>
+                  <strong>{s.sensor}</strong>
+                  <span className="tiny muted">
+                    {s.status === "ready" ? `updated ${ago(s.last_good_at)}` : s.status === "warming_up" ? "starting…" : "not responding"}
+                  </span>
+                </span>
+              </span>
+              <span className="row" style={{ gap: 12 }}>
+                <Num value={fmt(s.temperature_c)} unit="°C" size="s" />
+                {s.humidity != null && <Num value={fmt(s.humidity, 0)} unit="%" size="s" />}
+                <span className={`dot ${s.status === "ready" ? "ok" : s.status === "warming_up" ? "warn" : "bad"}`} />
+              </span>
+            </div>
+          ))}
         </div>
-      </div>
-      <LineChart
-        label="Water level"
-        unit="%"
-        times={points.map((p) => p.created_at)}
-        min={0}
-        max={100}
-        series={[{ label: "Level", values: points.map((p) => p.level_percent), color: "var(--water)", fill: true }]}
-      />
-    </section>
+      )}
+    </Card>
   );
 }

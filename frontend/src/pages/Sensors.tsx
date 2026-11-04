@@ -1,7 +1,7 @@
 // Sensors tab: what's connected to the Pi, and a wizard to add more.
 // No sensors at all is fine too: then Smartify is for Victron and the heater.
 
-import { ChevronLeft, ChevronRight, DoorOpen, Droplets, Loader2, MapPin, Pencil, Plus, RotateCw, ScrollText, Stethoscope, Thermometer, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, DoorOpen, Droplets, Loader2, MapPin, Pencil, Plus, RotateCw, Ruler, ScrollText, Stethoscope, Thermometer, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +11,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PiHeader, type PinUse } from "@/components/PiHeader";
 import { OnlyOnVan } from "@/components/RemoteBanner";
 import { Card, Dialog, ErrorNote, Field, Skeleton, useErrorToast, useToast } from "@/components/ui";
+import { WaterCalibration } from "@/components/WaterCalibration";
 import { CATALOG, CATEGORY_NAMES, catalogEntry, GPIO_TO_PIN, type Category, type CatalogEntry } from "@/lib/sensorCatalog";
 import { useDebugMode, useSetDebugMode } from "@/lib/debug";
 
@@ -60,6 +61,7 @@ export function Sensors() {
   const [wizard, setWizard] = useState<CatalogEntry | "choose" | null>(null);
   const [editing, setEditing] = useState<Sensor | null>(null);
   const [diagnosing, setDiagnosing] = useState<Sensor | null>(null);
+  const [calibrating, setCalibrating] = useState(false);
   const data = sensors.data;
 
   return (
@@ -104,7 +106,7 @@ export function Sensors() {
               <Card key={category} label={<span className="row" style={{ gap: 8 }}>{CATEGORY_ICON[category]} {CATEGORY_NAMES[category]}</span>}>
                 <div className="list">
                   {list.map((sensor) => (
-                    <SensorRow key={sensor.id} sensor={sensor} onEdit={() => setEditing(sensor)} onDiagnose={() => setDiagnosing(sensor)} />
+                    <SensorRow key={sensor.id} sensor={sensor} onEdit={() => setEditing(sensor)} onDiagnose={() => setDiagnosing(sensor)} onCalibrate={sensor.kind === "water_tank" ? () => setCalibrating(true) : undefined} />
                   ))}
                 </div>
               </Card>
@@ -127,11 +129,26 @@ export function Sensors() {
       )}
       {editing && data && <EditDialog sensor={editing} view={data} onClose={() => setEditing(null)} />}
       {diagnosing && <DiagnoseDialog sensor={diagnosing} onClose={() => setDiagnosing(null)} />}
+      {calibrating && (
+        <Dialog title="Calibrate the water tank" onClose={() => setCalibrating(false)}>
+          <WaterCalibration />
+        </Dialog>
+      )}
     </main>
   );
 }
 
-function SensorRow({ sensor, onEdit, onDiagnose }: { sensor: Sensor; onEdit: () => void; onDiagnose: () => void }) {
+function SensorRow({
+  sensor,
+  onEdit,
+  onDiagnose,
+  onCalibrate,
+}: {
+  sensor: Sensor;
+  onEdit: () => void;
+  onDiagnose: () => void;
+  onCalibrate?: () => void;
+}) {
   const entry = catalogEntry(sensor.kind);
   const where =
     typeof sensor.config.pin === "number"
@@ -158,6 +175,11 @@ function SensorRow({ sensor, onEdit, onDiagnose }: { sensor: Sensor; onEdit: () 
         </span>
       </span>
       <span className="row" style={{ gap: 2 }}>
+        {onCalibrate && (
+          <button type="button" className="btn small ghost" aria-label="Calibrate the water tank" title="Calibrate" onClick={onCalibrate}>
+            <Ruler size={16} aria-hidden="true" />
+          </button>
+        )}
         <button type="button" className="btn small ghost" aria-label={`Diagnose ${sensor.name}`} title="Diagnose" onClick={onDiagnose}>
           <Stethoscope size={16} aria-hidden="true" />
         </button>
@@ -520,7 +542,7 @@ function SettingsStep({
         </Field>
       )}
       {entry.kind === "water_tank" && (
-        <span className="small muted">Nothing to set here. After saving and restarting, calibrate it on the Climate page.</span>
+        <span className="small muted">Nothing to set here. After saving and restarting, calibrate it here in the Sensors tab (the ruler icon).</span>
       )}
     </div>
   );

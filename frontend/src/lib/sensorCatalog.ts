@@ -149,7 +149,7 @@ export const CATALOG: CatalogEntry[] = [
       "Sender signal → ADS1115 A0; battery through the 47k/10k divider → A1",
       "Full wiring with the divider: docs/wiring.md in the project",
     ],
-    note: "After adding it: Climate page → Water level calibration (tank empty, tank full).",
+    note: "After adding it: Sensors tab → the ruler icon next to the tank → mark it empty and full.",
     restart: true,
     single: true,
   },

@@ -106,7 +106,7 @@ const HEATER_GUIDE: GuideStep[] = [
     body: (
       <>
         <p style={{ margin: 0 }}>
-          On the heater's card (Climate page, or the overview after <strong>Show it on the overview</strong>), tap{" "}
+          On the heater's card (Climate tab, or the overview after <strong>Show it on the overview</strong>), tap{" "}
           <strong>On</strong>. It runs a self-test, then ignites: that takes <strong>1 to 3 minutes</strong>, and you hear
           the fuel pump ticking. Then it shows <strong>Heating</strong>.
         </p>

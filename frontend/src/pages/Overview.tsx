@@ -221,7 +221,7 @@ function WaterCard() {
   const water = useWater();
   const level = water.data?.level_percent ?? null;
   return (
-    <Card label="Fresh water" action={<Link to="/climate#water" className="small" aria-label="Water details">›</Link>}>
+    <Card label="Fresh water" action={<Link to="/energy#water" className="small" aria-label="Water details">›</Link>}>
       <div className="row" style={{ alignItems: "flex-end", height: 120, gap: 14 }}>
         <Tank percent={level} />
         <div className="stack" style={{ gap: 2 }}>

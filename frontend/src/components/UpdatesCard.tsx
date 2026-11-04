@@ -215,8 +215,20 @@ export function UpdatesCard() {
         <div className={`notice ${status.state === "done" ? "ok" : "error"} stack`} style={{ gap: 8 }}>
           <span className="row" style={{ gap: 8 }}>
             {status.state === "done" ? <CheckCircle2 size={18} aria-hidden="true" /> : <RotateCcw size={18} aria-hidden="true" />}
-            {status.message}
+            <span>
+              {status.finished_at && (
+                <span className="tiny faint" style={{ display: "block" }}>
+                  {new Date(status.finished_at * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}
+                </span>
+              )}
+              {status.message}
+            </span>
           </span>
+          {status.state !== "done" && v.can_install && newer(status.target, v.current) && !busy && (
+            <button type="button" className="btn small" style={{ alignSelf: "flex-start" }} onClick={() => start(status.target)}>
+              <RotateCcw size={16} aria-hidden="true" /> Try again
+            </button>
+          )}
           {status.state === "done" && reloadNeeded && (
             <button type="button" className="btn small" style={{ alignSelf: "flex-start" }} onClick={() => window.location.reload()}>
               Reload the dashboard

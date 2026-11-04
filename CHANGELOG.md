@@ -7,6 +7,18 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.12.0 - 2026-11-04
+
+### Changed
+- A new Climate page that answers "is the van comfortable?": the temperature inside now
+  with humidity and outside, what the heater is doing, all temperatures in one chart, the
+  sensors at a glance, and the weather where the van is.
+- A condensation hint: when it's humid inside and cold outside, the Climate page says so and
+  suggests airing a little (the most common winter problem in vans).
+- The fresh water tank moved to Energy, now "Energy & water": your van's supplies on one page.
+  Calibrating the tank moved to the Sensors tab (the ruler icon), with the other setup.
+- A failed update shows when it happened and a "Try again" button.
+
 ## 0.11.1 - 2026-11-04
 
 ### Fixed
