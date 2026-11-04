@@ -7,6 +7,32 @@ Each section is shown in the dashboard under Settings → Updates, so write it f
 the people using the van. A release needs a `## X.Y.Z - YYYY-MM-DD` section here
 (see docs/releasing.md).
 
+## 0.11.0 - 2026-11-04
+
+A security release, after an independent review of the whole project.
+
+### Security
+- The first login needs the **setup code** the installer prints: someone else on the same
+  WiFi can no longer create it before you.
+- The remote dashboard's installer belongs to the first browser that opens it.
+- After 5 wrong passwords (or setup codes), a 15-minute pause; passwords are checked one
+  at a time, so a flood of attempts can't run the Pi out of memory.
+- Remote changes get the same checks as changes on the van, and a relay's wiring (GPIO pin,
+  active-low) can only be changed at the van.
+- The van only sends its data to an https remote dashboard (plain http only on the local
+  network), never follows redirects with its token, and refuses oversized answers.
+- Changes sent from other websites open in the same browser are refused.
+- The connection code no longer travels in the address's query (it stays out of server logs).
+- The sensor test can't use a relay's pin, and relays are set again after every test.
+
+### Safety
+- A relay's temperature cut-off switches it off when its sensor stops reporting, also in
+  manual mode.
+
+### Note
+- Optional: run `cd ~/smartify-kombi && sudo ./deploy/install.sh` once to narrow the WiFi
+  permission to what the dashboard needs.
+
 ## 0.10.0 - 2026-11-04
 
 ### Added

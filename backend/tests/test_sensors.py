@@ -109,13 +109,13 @@ def test_rename_and_remove(client, ctx):
 
 
 def test_door_and_motion(client, ctx):
+    # The wizard tests first (on a free pin), then saves.
+    tried = client.post("/api/sensors/test", json={"kind": "door", "config": {"pin": 22}})
+    assert tried.json()["ok"]
     door = client.post(
         "/api/sensors", json={"name": "side_door", "kind": "door", "config": {"pin": 22}}
     )
     assert door.status_code == 201
-    assert client.post("/api/sensors/test", json={"kind": "door", "config": {"pin": 22}}).json()[
-        "ok"
-    ]
     ctx.inputs.poll()
     state = ctx.inputs.states()[0]
     assert state["name"] == "side_door" and state["active"] is not None

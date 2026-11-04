@@ -7,6 +7,8 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from smartify.api.deps import Accounts, User
+from smartify.errors import InvalidInput
+from smartify.services.accounts import TooManyAttempts
 
 router = APIRouter(tags=["auth"])
 
@@ -14,6 +16,24 @@ router = APIRouter(tags=["auth"])
 class LoginRequest(BaseModel):
     username: str = Field(max_length=64)
     password: str = Field(max_length=256)
+
+
+def _address(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _guarded(request: Request, accounts: Accounts) -> str:
+    """Refuse while this address (or everyone) guessed wrong too often."""
+    address = _address(request)
+    try:
+        accounts.guard.check(address)
+    except TooManyAttempts as exc:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            str(exc),
+            headers={"Retry-After": str(exc.wait_seconds)},
+        ) from None
+    return address
 
 
 def _sign_in(request: Request, accounts: Accounts, username: str) -> None:
@@ -26,9 +46,12 @@ def _sign_in(request: Request, accounts: Accounts, username: str) -> None:
 async def login(body: LoginRequest, request: Request, accounts: Accounts) -> dict:
     if accounts.setup_required:
         raise HTTPException(status.HTTP_409_CONFLICT, "setup required: create the login first")
+    address = _guarded(request, accounts)
     if not await run_in_threadpool(accounts.verify, body.username, body.password):
+        accounts.guard.failed(address)
         await asyncio.sleep(1)  # slows down password guessing
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "wrong username or password")
+    accounts.guard.succeeded(address)
     _sign_in(request, accounts, body.username)
     return {"user": body.username}
 
@@ -60,12 +83,23 @@ def setup_status(accounts: Accounts) -> dict:
 class SetupRequest(BaseModel):
     username: str = Field(default="admin", max_length=64)
     password: str = Field(max_length=256)
+    setup_code: str = Field(default="", max_length=32)
+    """Printed by the installer; proves the person is at the Pi."""
 
 
 @router.post("/setup", status_code=status.HTTP_201_CREATED)
 async def setup(body: SetupRequest, request: Request, accounts: Accounts) -> dict:
     """Create the login. Only works once, while no login exists; signs you in."""
-    username = await run_in_threadpool(accounts.create, body.username, body.password)
+    address = _guarded(request, accounts)
+    try:
+        username = await run_in_threadpool(
+            accounts.create, body.username, body.password, body.setup_code
+        )
+    except InvalidInput as exc:
+        if "setup code" in str(exc):
+            accounts.guard.failed(address)
+        raise
+    accounts.guard.succeeded(address)
     _sign_in(request, accounts, username)
     return {"user": username}
 
@@ -81,8 +115,14 @@ async def change_password(
     body: PasswordChange, request: Request, accounts: Accounts, _: User
 ) -> dict:
     """New password (and optionally username). Other devices are signed out; this one stays in."""
-    username = await run_in_threadpool(
-        accounts.change, body.current_password, body.new_password, body.username
-    )
+    address = _guarded(request, accounts)
+    try:
+        username = await run_in_threadpool(
+            accounts.change, body.current_password, body.new_password, body.username
+        )
+    except InvalidInput as exc:
+        if "current password" in str(exc):
+            accounts.guard.failed(address)
+        raise
     _sign_in(request, accounts, username)
     return {"user": username}

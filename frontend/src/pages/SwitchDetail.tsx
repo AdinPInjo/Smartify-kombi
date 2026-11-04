@@ -147,8 +147,8 @@ function RelaySettings({ relay }: { relay: Relay }) {
         id: relay.id,
         changes: {
           label: form.label.trim() || null,
-          gpio_pin: Number(form.pin),
-          active_low: form.activeLow,
+          // Wiring only at the van: the remote dashboard doesn't send it.
+          ...(cloud ? {} : { gpio_pin: Number(form.pin), active_low: form.activeLow }),
           enabled: form.enabled,
           min_on_seconds: Math.round(Number(form.minOn) * 60),
           min_off_seconds: Math.round(Number(form.minOff) * 60),
@@ -166,6 +166,13 @@ function RelaySettings({ relay }: { relay: Relay }) {
         <Field label="Label">
           <input className="input" value={form.label} onChange={(e) => set({ label: e.target.value })} maxLength={60} placeholder={relay.name} />
         </Field>
+        {cloud ? (
+          <p className="tiny muted" style={{ margin: 0 }}>
+            GPIO {relay.gpio_pin}
+            {relay.active_low ? ", active-low" : ""}. The wiring can only be changed on the van's own dashboard.
+          </p>
+        ) : (
+        <>
         <div className="grid-2">
           <Field label="GPIO pin (BCM)">
             <input className="input" type="number" min={0} max={27} value={form.pin} onChange={(e) => set({ pin: e.target.value })} required />
@@ -178,6 +185,8 @@ function RelaySettings({ relay }: { relay: Relay }) {
         <p className="tiny muted" style={{ margin: 0 }}>
           If the relay clicks on while the dashboard says OFF, your board is active-low: tick the box.
         </p>
+        </>
+        )}
         <div className="grid-2">
           <Field label="Minimum on time (min)">
             <input className="input" type="number" min={0} step="any" value={form.minOn} onChange={(e) => set({ minOn: e.target.value })} />

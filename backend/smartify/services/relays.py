@@ -359,7 +359,11 @@ class RelayService:
                 self._tripped.add(relay.id)
             elif reading.value <= limit - CUTOFF_HYSTERESIS_C:
                 self._tripped.discard(relay.id)
-        # No reading: keep the last verdict (the rules handle dead sensors in auto).
+        elif reading.issue is not None and reading.issue.name in ("STALE", "MISSING"):
+            # The sensor that protects this relay is dead or gone: off, even in manual
+            # mode, until it reports again. (Warming up at start keeps the last verdict.)
+            self._tripped.discard(relay.id)
+            return f"safety cutoff: no reading from {relay.cutoff_sensor}"
         if relay.id in self._tripped:
             return f"safety cutoff: {relay.cutoff_sensor} above {limit:g} °C"
         return None
@@ -404,6 +408,16 @@ class RelayService:
                         self._record(relay, "off", source, reason, None)
                     except sqlite3.Error:
                         log.exception("Could not record %s as off", relay.name)
+
+    def redrive_all(self) -> None:
+        """Drive every relay pin to its recorded state again (after a pin was touched,
+        e.g. by a sensor test), without deciding anything new."""
+        for relay in self.list():
+            with self._lock:
+                try:
+                    self._drive(relay.id, relay.gpio_pin, relay.active_low, relay.state == "on")
+                except Exception:
+                    log.exception("Driving relay %s again failed", relay.name)
 
     def reconcile_all(self, force: bool = False) -> None:
         for relay in self.list():

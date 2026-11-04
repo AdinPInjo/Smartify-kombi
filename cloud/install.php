@@ -77,6 +77,47 @@ function checks(): array
     return $list;
 }
 
+/**
+ * The first browser that opens the installer owns it (for 6 hours, or until the
+ * installation is done): someone who finds the address can't finish it first.
+ * Returns false when another browser owns it.
+ */
+function claim_installer(string $privateDir): bool
+{
+    $lock = $privateDir . '/install-lock.txt';
+    if (!is_dir($privateDir)) @mkdir($privateDir, 0755, true);
+    $mine = (string)($_SESSION['install_owner'] ?? '');
+    $current = @file_get_contents($lock);
+    if ($current !== false && time() - (int)@filemtime($lock) >= 6 * 3600) {
+        @unlink($lock); // abandoned: start over
+        $current = false;
+    }
+    if ($current === false) {
+        $token = bin2hex(random_bytes(16));
+        $handle = @fopen($lock, 'x'); // atomic: only one browser can create it
+        if ($handle === false) {
+            $current = (string)@file_get_contents($lock);
+            return $mine !== '' && hash_equals(trim($current), $mine);
+        }
+        fwrite($handle, $token);
+        fclose($handle);
+        $_SESSION['install_owner'] = $token;
+        return true;
+    }
+    return $mine !== '' && hash_equals(trim($current), $mine);
+}
+
+function locked_out_page(): void
+{
+    http_response_code(423);
+    echo '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">'
+        . '<title>Installation in progress</title><body style="font:16px/1.5 system-ui,sans-serif;background:#11130e;color:#ecebdd;max-width:520px;margin:40px auto;padding:0 16px">'
+        . '<h1 style="font-size:26px">Installation in progress</h1>'
+        . '<p>The remote dashboard is being installed in another browser. If that was you, continue there.</p>'
+        . '<p style="color:#a3a893">To start over from this browser: in your hosting\'s file manager, delete <code>private/install-lock.txt</code> in this folder, then reload this page.</p>';
+    exit;
+}
+
 function blocking(array $checks): bool
 {
     foreach ($checks as [, $state]) {
@@ -90,6 +131,9 @@ session_set_cookie_params(['path' => base_path(), 'secure' => is_https(), 'httpo
 session_start();
 
 $installed = is_file(CONFIG_FILE);
+if (!$installed && !claim_installer(PRIVATE_DIR)) {
+    locked_out_page();
+}
 $step = $_GET['step'] ?? 'check';
 $error = null;
 $code = $_SESSION['code'] ?? null;
@@ -160,6 +204,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$installed) {
             create_schema(db());
             unset($_SESSION['db']);
             $_SESSION['code'] = connection_code($token);
+            @unlink(PRIVATE_DIR . '/install-lock.txt'); // installed: the lock has done its job
             header('Location: install.php?step=connect');
             exit;
         }
@@ -331,7 +376,7 @@ $dbPost = $_POST + ['driver' => extension_loaded('pdo_mysql') ? 'mysql' : 'sqlit
     var code = <?= json_encode($code) ?>;
     function link() {
       var host = document.getElementById('van').value.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '') || 'smartify.local';
-      document.getElementById('open').href = 'http://' + host + '/settings?connect=' + encodeURIComponent(code) + '#remote';
+      document.getElementById('open').href = 'http://' + host + '/settings#connect=' + encodeURIComponent(code);
     }
     document.getElementById('van').addEventListener('input', link);
     link();

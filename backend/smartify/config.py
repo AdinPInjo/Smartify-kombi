@@ -99,7 +99,8 @@ class Settings(BaseSettings):
     # --- Authentication ----------------------------------------------------
     username: str = "admin"
     password: str = "changeme"
-    """Must be changed before Smartify runs with real hardware (it refuses to start)."""
+    """Old .env login. The default only works with simulated hardware; a real van
+    creates its login in the dashboard (first-run setup, with the setup code)."""
     secret_key: str = ""
     """Signs login cookies. Leave empty to generate one and keep it in the data directory."""
 

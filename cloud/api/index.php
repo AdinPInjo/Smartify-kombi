@@ -306,7 +306,7 @@ function route(string $method, string $path): mixed
             return find_relay($seg[1]);
         case 'PATCH /relays/*':
             $relay = find_relay($seg[1]);
-            $allowed = ['label', 'gpio_pin', 'active_low', 'enabled', 'min_on_seconds', 'min_off_seconds', 'cutoff_sensor', 'cutoff_max_c'];
+            $allowed = ['label', 'enabled', 'min_on_seconds', 'min_off_seconds', 'cutoff_sensor', 'cutoff_max_c'];
             $changes = array_intersect_key(json_in(), array_flip($allowed));
             queue('relay_update', $relay['id'], $changes, (int)$relay['revision']);
             return find_relay($seg[1]);
@@ -486,6 +486,14 @@ try {
         ensure_schema();
     }
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    if ($method !== 'GET' && rtrim($path, '/') !== '/device/sync') {
+        // A second layer next to SameSite cookies: no changes from other websites.
+        $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+        $crossSite = ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '') === 'cross-site';
+        if ($crossSite || ($origin !== '' && $origin !== 'null' && parse_url($origin, PHP_URL_HOST) . (parse_url($origin, PHP_URL_PORT) ? ':' . parse_url($origin, PHP_URL_PORT) : '') !== ($_SERVER['HTTP_HOST'] ?? ''))) {
+            throw new HttpError(403, 'request from another website refused');
+        }
+    }
     $result = route($method, $path);
     json_out($result);
     if ($method === 'POST' && rtrim($path, '/') === '/device/sync') {

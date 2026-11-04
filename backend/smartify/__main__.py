@@ -26,7 +26,11 @@ def reset_login() -> None:
     elif settings.password:
         print("Login deleted. SMARTIFY_PASSWORD in .env is used again; remove it to get the setup.")
     else:
+        from smartify.services.accounts import AccountService
+
+        code = AccountService(settings, settings.db_path, "unused").setup_code()
         print("Login deleted. Open the dashboard to create a new one.")
+        print(f"It asks for this setup code: {code}")
 
 
 def main() -> None:

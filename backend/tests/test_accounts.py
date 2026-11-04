@@ -27,6 +27,11 @@ def fresh(tmp_path):
         yield client
 
 
+def code_of(client) -> str:
+    """The setup code, as install.sh prints it (only someone at the Pi can read it)."""
+    return client.app.state.accounts.setup_code()
+
+
 def test_password_hashing():
     stored = hash_password("correct horse")
     assert stored.startswith("scrypt$") and "correct horse" not in stored
@@ -51,8 +56,15 @@ def test_first_run_setup(fresh):
     common = fresh.post("/api/setup", json={"username": "admin", "password": "changeme"})
     assert common.status_code == 422
 
-    created = fresh.post("/api/setup", json={"username": "van", "password": "kombi-on-tour"})
+    # Without the setup code, nobody else on the WiFi can create the login.
+    stolen = fresh.post("/api/setup", json={"username": "evil", "password": "kombi-on-tour"})
+    assert stolen.status_code == 422 and "setup code" in stolen.json()["detail"]
+    created = fresh.post(
+        "/api/setup",
+        json={"username": "van", "password": "kombi-on-tour", "setup_code": code_of(fresh).lower()},
+    )
     assert created.status_code == 201
+    assert code_of(fresh) is None  # used up
     assert fresh.get("/api/relays").status_code == 200  # signed in right away
     assert fresh.get("/api/auth/me").json()["login_source"] == "dashboard"
     assert fresh.get("/api/health").json()["setup_required"] is False
@@ -69,7 +81,10 @@ def test_first_run_setup(fresh):
 
 
 def test_changing_the_password_signs_out_other_devices(fresh):
-    fresh.post("/api/setup", json={"username": "admin", "password": "kombi-on-tour"})
+    fresh.post(
+        "/api/setup",
+        json={"username": "admin", "password": "kombi-on-tour", "setup_code": code_of(fresh)},
+    )
     other = TestClient(fresh.app)
     assert (
         other.post(
@@ -123,3 +138,52 @@ def test_default_password_never_protects_real_hardware(tmp_path):
 
     migrate(tmp_path / "x.db")
     assert AccountService(settings, tmp_path / "x.db", "s").source == "setup"
+
+
+def test_setup_code_is_kept_private_and_reused(fresh, tmp_path):
+    code = code_of(fresh)
+    assert code and len(code) == 9 and code[4] == "-"
+    stored = tmp_path / "setup-code.txt"
+    assert stored.read_text().strip() == code
+    assert stored.stat().st_mode & 0o777 == 0o600
+    assert code_of(fresh) == code  # the same until it's used
+
+
+def test_guessing_is_stopped(fresh):
+    for _ in range(5):
+        wrong = fresh.post(
+            "/api/setup",
+            json={"username": "x", "password": "kombi-on-tour", "setup_code": "AAAA-AAAA"},
+        )
+        assert wrong.status_code == 422
+    blocked = fresh.post(
+        "/api/setup",
+        json={"username": "x", "password": "kombi-on-tour", "setup_code": code_of(fresh)},
+    )
+    assert blocked.status_code == 429 and "try again" in blocked.json()["detail"]
+
+
+def test_login_lockout_after_five_wrong_passwords(client):
+    client.post("/api/auth/logout")
+    for _ in range(5):
+        assert (
+            client.post(
+                "/api/auth/login", json={"username": "admin", "password": "nope"}
+            ).status_code
+            == 401
+        )
+    locked = client.post("/api/auth/login", json={"username": "admin", "password": PASSWORD})
+    assert locked.status_code == 429 and locked.headers["retry-after"]
+
+
+def test_guard_window_and_overall_limit():
+    from smartify.services.accounts import LoginGuard, TooManyAttempts
+
+    now = [1000.0]
+    guard = LoginGuard(clock=lambda: now[0])
+    for i in range(30):
+        guard.failed(f"10.0.0.{i}")
+    with pytest.raises(TooManyAttempts):
+        guard.check("10.0.0.99")  # many addresses together: everyone waits
+    now[0] += 16 * 60
+    guard.check("10.0.0.99")  # the window has passed

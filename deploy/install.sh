@@ -96,9 +96,17 @@ done
 # NetworkManager: let the netdev group switch WiFi networks from the dashboard.
 install -d /etc/polkit-1/rules.d
 cat >/etc/polkit-1/rules.d/50-smartify-networkmanager.rules <<'EOF'
-// Smartify Kombi: allow members of "netdev" to manage WiFi via NetworkManager.
+// Smartify Kombi: let members of "netdev" scan for and join WiFi networks
+// (only the NetworkManager actions the dashboard's WiFi page needs).
+var SMARTIFY_WIFI = [
+  "org.freedesktop.NetworkManager.network-control",
+  "org.freedesktop.NetworkManager.wifi.scan",
+  "org.freedesktop.NetworkManager.enable-disable-wifi",
+  "org.freedesktop.NetworkManager.settings.modify.own",
+  "org.freedesktop.NetworkManager.settings.modify.system"
+];
 polkit.addRule(function (action, subject) {
-  if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 && subject.isInGroup("netdev")) {
+  if (SMARTIFY_WIFI.indexOf(action.id) >= 0 && subject.isInGroup("netdev")) {
     return polkit.Result.YES;
   }
 });
@@ -213,6 +221,22 @@ systemctl daemon-reload
 systemctl enable --now smartify-update.path >/dev/null 2>&1
 ok "updates can be installed and rolled back from the dashboard"
 
+# The first login is created in the browser, and only with this code: someone
+# else on the same WiFi can't create it before you.
+SETUP_CODE=""
+HAS_LOGIN=$(sqlite3 "$DATA_DIR/smartify.db" "SELECT 1 FROM account LIMIT 1" 2>/dev/null || true)
+ENV_PASSWORD=$(grep -E '^SMARTIFY_PASSWORD=.+' "$ENV_FILE" 2>/dev/null || true)
+if [[ -z $HAS_LOGIN && -z $ENV_PASSWORD ]]; then
+  CODE_FILE="$DATA_DIR/setup-code.txt"
+  if [[ ! -s $CODE_FILE ]]; then
+    RAW=$(LC_ALL=C tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' </dev/urandom | head -c8 || true)
+    printf '%s-%s\n' "${RAW:0:4}" "${RAW:4:4}" >"$CODE_FILE"
+    chown "$SERVICE_USER": "$CODE_FILE"
+    chmod 600 "$CODE_FILE"
+  fi
+  SETUP_CODE=$(cat "$CODE_FILE")
+fi
+
 # --- done ---------------------------------------------------------------------------------------------
 
 HOST=$(hostname)
@@ -223,7 +247,15 @@ echo
 echo "  1. Reboot so I2C, the serial port and the group changes take effect:"
 echo "       ${BOLD}sudo reboot${RESET}"
 echo "  2. Then open the dashboard: ${BOLD}$URL${RESET}"
-echo "     The first time, it asks you to create your login."
+if [[ -n $SETUP_CODE ]]; then
+  echo "     The first time, it asks you to create your login with this setup code:"
+  echo
+  echo "         ${BOLD}${AMBER}$SETUP_CODE${RESET}"
+  echo
+  echo "     (Lost it? On the Pi: cat $DATA_DIR/setup-code.txt)"
+else
+  echo "     Sign in with your login."
+fi
 echo "  3. First checks: docs/install.md, section \"After the first boot\"."
 echo
 echo "  Logs:     journalctl -u smartify -f"

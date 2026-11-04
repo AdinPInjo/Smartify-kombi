@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -58,6 +59,7 @@ def create_app(
         log.info("Database %s at schema version %d", settings.db_path, version)
         if accounts.setup_required:
             log.warning("No dashboard login yet: open the dashboard to finish the setup")
+            accounts.setup_code()  # logs it; install.sh printed it already
         elif accounts.uses_default_password:
             log.warning("Default password in use. Fine for development, never on the van.")
         # Sensors come from the Sensors tab (carried over from .env on the first start).
@@ -93,6 +95,26 @@ def create_app(
     @app.exception_handler(Conflict)
     async def _conflict(_: Request, exc: Conflict) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=409)
+
+    @app.middleware("http")
+    async def same_site_only(request: Request, call_next):  # noqa: ANN001, ANN202
+        """A second layer next to SameSite cookies: changes only from the dashboard itself,
+        never from another website open in the same browser."""
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            if request.headers.get("sec-fetch-site") == "cross-site":
+                return JSONResponse(
+                    {"detail": "request from another website refused"}, status_code=403
+                )
+            origin = request.headers.get("origin")
+            if (
+                origin
+                and origin != "null"
+                and urlparse(origin).netloc != request.headers.get("host")
+            ):
+                return JSONResponse(
+                    {"detail": "request from another website refused"}, status_code=403
+                )
+        return await call_next(request)
 
     @app.exception_handler(InvalidInput)
     async def _invalid(_: Request, exc: InvalidInput) -> JSONResponse:

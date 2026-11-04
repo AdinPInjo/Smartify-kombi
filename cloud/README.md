@@ -60,6 +60,15 @@ Either way, the setup guide then:
    paste it on the van under **Settings → Remote dashboard**. The page shows
    "Connected" as soon as the van checks in. No `.env`, no restart.
 
+## Security
+
+- While installing, the **first browser that opens the installer owns it**: someone else
+  who finds the address sees "installation in progress". Start over from another browser
+  by deleting `private/install-lock.txt` in your file manager.
+- Use **https** (the free SSL certificate in your hosting panel): the van refuses to send
+  its data to a plain `http://` address on the internet.
+- After 5 wrong passwords, logins wait 15 minutes; changes from other websites are refused.
+
 ## Updating
 
 From 0.4.0 on: **Settings → Updates** in the remote dashboard shows new versions with

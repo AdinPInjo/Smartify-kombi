@@ -49,10 +49,29 @@ def parse_code(code: str) -> tuple[str, str]:
     return check_url(url), token
 
 
+def _local(host: str) -> bool:
+    """A test setup on the local network (plain http is fine there)."""
+    import ipaddress
+
+    if host in ("localhost",) or host.endswith((".local", ".lan", ".test")):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback
+
+
 def check_url(url: str) -> str:
+    """Only https on the internet: the van's token and data must not travel unencrypted."""
     parsed = urlparse(url.strip())
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise InvalidInput("the remote dashboard address must start with https://")
+    if parsed.scheme == "http" and not _local(parsed.hostname):
+        raise InvalidInput(
+            "the remote dashboard must use https:// (switch on the free SSL certificate in your "
+            "hosting panel, then make a new connection code)"
+        )
     return url.strip().rstrip("/")
 
 

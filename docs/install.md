@@ -65,16 +65,17 @@ sudo reboot
 
 Open **<http://kombi.local>** on your phone (same WiFi). The first time, the
 dashboard welcomes you and asks you to **create your login** (username and
-password). Do this right after installing: until then, whoever opens the
-dashboard first can create it.
+password) with the **setup code** the installer printed at the end, like
+`ABCD-2345`. Only someone with that code (someone at the Pi) can create the
+login. Lost it? On the Pi: `cat ~/smartify-kombi/backend/data/setup-code.txt`.
 
 Then the setup screen points you to the next steps: alerts on your phone,
 Victron devices, switches and rules, WiFi. All of them are done in the dashboard.
 
 **Forgot the password?** On the Pi run
 `cd ~/smartify-kombi/backend && .venv/bin/python -m smartify reset-login`,
-then open the dashboard to create a new login. You can change the login any
-time under **Settings → Account**.
+then open the dashboard to create a new login with the setup code it prints.
+You can change the login any time under **Settings → Account**.
 
 Check, in this order:
 
@@ -129,8 +130,23 @@ scp -r <user>@kombi.local:smartify-kombi/backend/data ./kombi-backup
 * A rule whose sensor stops answering switches its relay **off**.
 * Give heaters a **safety cutoff** (relay settings): off above a temperature,
   even when switched on by hand.
+* A safety cutoff whose sensor stops reporting switches its relay **off** too.
 * Smartify is a convenience, not a safety device. Heaters need their own
   thermal protection and every circuit its own fuse.
+
+## Security
+
+* **Use the van's own WiFi for the dashboard.** The dashboard on the van uses plain
+  `http://` (normal for devices like this), so on a shared campsite WiFi other guests
+  could read what you send. Best: the Pi's own hotspot, or your van's router, for your
+  phone and the Pi. When the van joins a campsite WiFi for internet, open the dashboard
+  through your own network, or use the remote dashboard (https).
+* **The remote dashboard needs https.** Switch on the free SSL certificate in your hosting
+  panel before connecting the van; the van refuses unencrypted addresses on the internet.
+* Wrong passwords: after 5 attempts the dashboard waits 15 minutes.
+* Changes from other websites open in the same browser are refused.
+* Turn on two-factor authentication on your GitHub account if you publish releases:
+  every van installs what is released there.
 
 ## Troubleshooting
 

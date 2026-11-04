@@ -31,7 +31,7 @@ function useScrollHere(id: string) {
   const ref = useRef<HTMLElement>(null);
   const { hash } = useLocation();
   useEffect(() => {
-    if (hash === `#${id}`) ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (hash === `#${id}` || hash.startsWith("#connect=")) ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [hash, id]);
   return ref;
 }
@@ -51,7 +51,12 @@ function ConnectVan() {
   const navigate = useNavigate();
   const ref = useScrollHere("remote");
   const view = useQuery({ queryKey: ["cloud"], queryFn: () => api.get<CloudView>("/cloud"), refetchInterval: 10_000 });
-  const fromLink = useMemo(() => new URLSearchParams(location.search).get("connect"), [location.search]);
+  // The code comes in the link's #fragment (never sent to a server, so it stays out of
+  // logs and proxies); ?connect= still works for links made by older versions.
+  const fromLink = useMemo(() => {
+    if (location.hash.startsWith("#connect=")) return decodeURIComponent(location.hash.slice("#connect=".length));
+    return new URLSearchParams(location.search).get("connect");
+  }, [location.hash, location.search]);
   const [code, setCode] = useState(fromLink ?? "");
   useEffect(() => {
     if (fromLink) setCode(fromLink);
@@ -227,7 +232,7 @@ function VanConnection() {
               Copy code
             </button>
             <input className="input" style={{ width: 170, minHeight: 36 }} value={van} onChange={(e) => setVan(e.target.value)} aria-label="Your van's address" />
-            <a className="btn small primary" href={`http://${host}/settings?connect=${encodeURIComponent(code)}#remote`} target="_blank" rel="noreferrer">
+            <a className="btn small primary" href={`http://${host}/settings#connect=${encodeURIComponent(code)}`} target="_blank" rel="noreferrer">
               Connect my van
             </a>
           </div>

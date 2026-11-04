@@ -79,6 +79,7 @@ function Welcome({ onNext }: { onNext: () => void }) {
 
 function Account({ onDone }: { onDone: () => void }) {
   const client = useQueryClient();
+  const [code, setCode] = useState("");
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [repeat, setRepeat] = useState("");
@@ -87,7 +88,8 @@ function Account({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const rating = strength(password);
   const matches = repeat.length > 0 && repeat === password;
-  const ready = rating.good && matches && username.trim().length > 0 && !/\s/.test(username.trim());
+  const codeOk = code.replace(/[^A-Za-z0-9]/g, "").length === 8;
+  const ready = codeOk && rating.good && matches && username.trim().length > 0 && !/\s/.test(username.trim());
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -95,7 +97,7 @@ function Account({ onDone }: { onDone: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await api.post("/setup", { username: username.trim(), password });
+      await api.post("/setup", { username: username.trim(), password, setup_code: code });
       await client.invalidateQueries();
       onDone();
     } catch (e) {
@@ -117,6 +119,22 @@ function Account({ onDone }: { onDone: () => void }) {
           in your hands.
         </p>
       </div>
+      <Field
+        label="Setup code"
+        hint="Shown at the end of the installation, like ABCD-2345. Lost it? On the Pi: cat ~/smartify-kombi/backend/data/setup-code.txt"
+      >
+        <input
+          className="input mono"
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          placeholder="XXXX-XXXX"
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          maxLength={12}
+          required
+        />
+      </Field>
       <Field label="Username">
         <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoCapitalize="off" required />
       </Field>

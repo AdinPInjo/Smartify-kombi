@@ -66,6 +66,22 @@ class CloudError(RuntimeError):
     pass
 
 
+MAX_RESPONSE = 5_000_000
+"""The biggest answer the van accepts from the remote dashboard (normal ones are a few KB)."""
+
+
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: it would carry the van's token to another address."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        raise urllib.error.HTTPError(
+            req.full_url, code, f"redirect to {newurl} refused", headers, fp
+        )
+
+
+_OPENER = urllib.request.build_opener(_NoRedirects)
+
+
 def http_transport(url: str, body: dict[str, Any], token: str) -> dict[str, Any]:
     data = gzip.compress(json.dumps(body, separators=(",", ":")).encode())
     request = urllib.request.Request(
@@ -80,13 +96,18 @@ def http_transport(url: str, body: dict[str, Any], token: str) -> dict[str, Any]
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.load(response)
+        with _OPENER.open(request, timeout=20) as response:
+            data = response.read(MAX_RESPONSE + 1)
+        if len(data) > MAX_RESPONSE:
+            raise CloudError("the remote dashboard sent far too much data")
+        return json.loads(data)
     except urllib.error.HTTPError as exc:
         detail = exc.read(300).decode(errors="replace")
         raise CloudError(f"HTTP {exc.code}: {detail}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise CloudError(f"cloud unreachable: {getattr(exc, 'reason', exc)}") from exc
+    except ValueError as exc:
+        raise CloudError("the remote dashboard sent an answer that isn't JSON") from exc
 
 
 @dataclass
@@ -266,10 +287,35 @@ class CloudSync:
 # --- applying commands -------------------------------------------------------------
 
 
+REMOTE_FORBIDDEN = {"gpio_pin", "active_low"}
+"""Wiring is changed at the van, never over the internet."""
+
+
+def _checked(model: Any, payload: Any) -> Any:
+    """Remote changes pass the same checks as the van's own API."""
+    from pydantic import ValidationError
+
+    if not isinstance(payload, dict):
+        raise InvalidInput("invalid command payload")
+    try:
+        return model.model_validate(payload)
+    except ValidationError as exc:
+        problem = exc.errors()[0]
+        where = ".".join(str(p) for p in problem.get("loc", ()))
+        raise InvalidInput(
+            f"invalid value for {where or 'the command'}: {problem.get('msg')}"
+        ) from None
+
+
 def apply_command(ctx: Any, command: dict[str, Any]) -> None:
     """Carry out one remote command through the normal services."""
+    from smartify.api.heaters import Power
+    from smartify.api.heaters import Settings as HeaterSettings
+    from smartify.api.relays import ManualRequest, RelayUpdate, RuleCreate, RuleUpdate
+    from smartify.api.sensors import WaterSettingsUpdate
+
     kind = command.get("type")
-    target = command.get("target")
+    target = str(command.get("target") or "")
     payload = command.get("payload") or {}
     base = command.get("base_revision")
 
@@ -278,38 +324,54 @@ def apply_command(ctx: Any, command: dict[str, Any]) -> None:
             raise Conflict(f"{what} was changed on the van in the meantime; the van's change wins")
 
     if kind == "relay_manual":
+        manual = _checked(ManualRequest, payload)
         ctx.relays.set_manual(
-            target,
-            payload["state"],
-            (payload.get("duration_minutes") or 0) * 60 or None,
-            source="remote",
+            target, manual.state, (manual.duration_minutes or 0) * 60 or None, source="remote"
         )
     elif kind == "relay_auto":
         ctx.relays.set_auto(target)
     elif kind == "scene_run":
-        ctx.scenes.run(int(target), source="remote")
+        try:
+            scene_id = int(target)
+        except ValueError:
+            raise InvalidInput("invalid scene") from None
+        ctx.scenes.run(scene_id, source="remote")
     elif kind == "heater_power":
-        ctx.heaters.power(target, bool(payload.get("on")), source="remote")
+        ctx.heaters.power(target, _checked(Power, payload).on, source="remote")
     elif kind == "heater_settings":
-        ctx.heaters.settings(
-            target, payload.get("mode"), payload.get("temperature"), payload.get("level")
-        )
+        settings = _checked(HeaterSettings, payload)
+        ctx.heaters.settings(target, settings.mode, settings.temperature, settings.level)
     elif kind == "relay_update":
+        if isinstance(payload, dict) and REMOTE_FORBIDDEN & payload.keys():
+            raise InvalidInput(
+                "the relay's wiring (GPIO pin, active low) can only be changed at the van"
+            )
+        update = _checked(RelayUpdate, payload)
+        nullable = {"label", "cutoff_sensor", "cutoff_max_c"}
+        changes = {
+            k: v
+            for k, v in update.model_dump(exclude_unset=True).items()
+            if v is not None or k in nullable
+        }
         check_revision(ctx.relays.get(target).revision, "This relay")
-        ctx.relays.update(target, payload)
+        ctx.relays.update(target, changes)
     elif kind == "rule_create":
-        rule = ctx.rules.create(target, **payload)
+        rule = ctx.rules.create(target, **_checked(RuleCreate, payload).model_dump())
         ctx.relays.reconcile(rule.relay_id, force=True)
     elif kind == "rule_update":
+        update = _checked(RuleUpdate, payload)
+        changes = {k: v for k, v in update.model_dump(exclude_unset=True).items() if v is not None}
         check_revision(ctx.rules.get(target).revision, "This rule")
-        rule = ctx.rules.update(target, payload)
+        rule = ctx.rules.update(target, changes)
         ctx.relays.reconcile(rule.relay_id, force=True)
     elif kind == "rule_delete":
         check_revision(ctx.rules.get(target).revision, "This rule")
         rule = ctx.rules.delete(target)
         ctx.relays.reconcile(rule.relay_id, force=True)
     elif kind == "water_settings":
+        update = _checked(WaterSettingsUpdate, payload)
+        changes = {k: v for k, v in update.model_dump(exclude_unset=True).items() if v is not None}
         check_revision(ctx.water.settings().revision, "The water calibration")
-        ctx.water.update_settings(payload)
+        ctx.water.update_settings(changes)
     else:
         raise InvalidInput(f"unknown command type {kind!r}")

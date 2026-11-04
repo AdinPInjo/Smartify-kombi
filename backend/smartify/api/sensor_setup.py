@@ -16,7 +16,7 @@ from smartify.api.deps import Ctx, User
 from smartify.errors import DeviceUnavailable
 from smartify.hardware.base import SensorConfig
 from smartify.services import diagnose
-from smartify.services.sensors import CLIMATE_KINDS, INPUT_KINDS, RESTART_KINDS
+from smartify.services.sensors import CLIMATE_KINDS, GPIO_KINDS, INPUT_KINDS, RESTART_KINDS
 
 router = APIRouter(tags=["sensors"])
 log = logging.getLogger(__name__)
@@ -140,7 +140,15 @@ async def test_sensor(body: TestBody, ctx: Ctx, _: User) -> dict:
     """Try a sensor before saving it: one live reading."""
     if ctx.hardware.sensors is None:
         raise DeviceUnavailable("sensors are not available on this Smartify")
-    return await run_in_threadpool(ctx.hardware.sensors.test, body.kind, body.config)
+    config = dict(body.config)
+    if body.kind in GPIO_KINDS:
+        # Only free pins: a test on a relay's pin could switch that relay.
+        config["pin"] = ctx.sensor_store.check_pin(config.get("pin"))
+    try:
+        return await run_in_threadpool(ctx.hardware.sensors.test, body.kind, config)
+    finally:
+        # Whatever the test touched: put every relay back where it belongs.
+        await run_in_threadpool(ctx.relays.redrive_all)
 
 
 @router.get("/sensors/{sensor_id}/diagnostics")

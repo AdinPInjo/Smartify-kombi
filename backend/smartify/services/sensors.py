@@ -155,7 +155,7 @@ class SensorStore:
             raise Conflict("a van has only one of these; edit the existing one")
         clean: dict[str, Any] = {}
         if kind in GPIO_KINDS:
-            clean["pin"] = self._check_pin(config.get("pin"), ignore)
+            clean["pin"] = self.check_pin(config.get("pin"), ignore)
         if kind == "door":
             clean["closed_when"] = "high" if config.get("closed_when") == "high" else "low"
         if kind == "ds18b20":
@@ -187,7 +187,7 @@ class SensorStore:
             clean["device"], clean["baud"] = device, baud
         return clean
 
-    def _check_pin(self, value: Any, ignore: str | None) -> int:
+    def check_pin(self, value: Any, ignore: str | None = None) -> int:
         try:
             pin = int(value)
         except (TypeError, ValueError):

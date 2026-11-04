@@ -84,8 +84,60 @@ function unpack_package(string $zipFile, string $dest, bool $update): int
     return $written;
 }
 
+/**
+ * The first browser that opens the installer owns it (for 6 hours, or until the
+ * installation is done): someone who finds the address can't finish it first.
+ * Returns false when another browser owns it.
+ */
+function claim_installer(string $privateDir): bool
+{
+    $lock = $privateDir . '/install-lock.txt';
+    if (!is_dir($privateDir)) @mkdir($privateDir, 0755, true);
+    $mine = (string)($_SESSION['install_owner'] ?? '');
+    $current = @file_get_contents($lock);
+    if ($current !== false && time() - (int)@filemtime($lock) >= 6 * 3600) {
+        @unlink($lock); // abandoned: start over
+        $current = false;
+    }
+    if ($current === false) {
+        $token = bin2hex(random_bytes(16));
+        $handle = @fopen($lock, 'x'); // atomic: only one browser can create it
+        if ($handle === false) {
+            $current = (string)@file_get_contents($lock);
+            return $mine !== '' && hash_equals(trim($current), $mine);
+        }
+        fwrite($handle, $token);
+        fclose($handle);
+        $_SESSION['install_owner'] = $token;
+        return true;
+    }
+    return $mine !== '' && hash_equals(trim($current), $mine);
+}
+
+function locked_out_page(): void
+{
+    http_response_code(423);
+    echo '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">'
+        . '<title>Installation in progress</title><body style="font:16px/1.5 system-ui,sans-serif;background:#11130e;color:#ecebdd;max-width:520px;margin:40px auto;padding:0 16px">'
+        . '<h1 style="font-size:26px">Installation in progress</h1>'
+        . '<p>The remote dashboard is being installed in another browser. If that was you, continue there.</p>'
+        . '<p style="color:#a3a893">To start over from this browser: in your hosting\'s file manager, delete <code>private/install-lock.txt</code> in this folder, then reload this page.</p>';
+    exit;
+}
+
 $dir = __DIR__;
 $installed = is_file("$dir/private/config.php");
+if (!$installed) {
+    // The same lock (and session) as install.php, which takes over after unpacking.
+    $path = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/';
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    session_name('smartify_install');
+    session_set_cookie_params(['path' => $path, 'secure' => $https, 'httponly' => true, 'samesite' => 'Lax']);
+    session_start();
+    if (!claim_installer("$dir/private")) {
+        locked_out_page();
+    }
+}
 $problems = [];
 if (version_compare(PHP_VERSION, '8.0.0', '<')) $problems[] = 'PHP 8.0 or newer is needed (this server has ' . PHP_VERSION . '). Choose it in your hosting panel.';
 if (!class_exists('ZipArchive')) $problems[] = 'The PHP zip extension is missing. Enable it in your hosting panel, or upload smartify-cloud.zip by hand.';
